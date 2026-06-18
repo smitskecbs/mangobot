@@ -41,9 +41,9 @@ bot.command("launch", (ctx) => {
 
 ManGo has not launched yet.
 
-❌ No presale
-❌ No public CA
-❌ No launch date announced
+ No presale
+ No public CA
+ No launch date announced
 
 Follow official channels for updates.`);
 });
