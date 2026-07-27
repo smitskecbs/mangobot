@@ -219,6 +219,10 @@ function buildApiResponse(data, options) {
   const {
     posted = false,
     personalBest = false,
+    personalBestImproved = personalBest,
+    score = 0,
+    personalBestScore = 0,
+    isNewGlobal = false,
     rank = 0,
     reason,
   } = options;
@@ -227,6 +231,10 @@ function buildApiResponse(data, options) {
     ok: true,
     posted,
     personalBest,
+    personalBestImproved,
+    score,
+    personalBestScore,
+    isNewGlobal,
     globalHighScore: data.globalHighScore,
     globalHighScoreName: data.globalHighScoreName,
     rank,
@@ -310,14 +318,20 @@ function submitScore(scoresFile, rawName, rawScore) {
 
   writeScoresFile(scoresFile, data);
 
+  const finalPlayerIndex = findPlayerIndex(data.leaderboard, nameKey);
+  const personalBestScore =
+    finalPlayerIndex >= 0 ? data.leaderboard[finalPlayerIndex].score : score;
+
   return {
     data,
     result: {
       personalBest,
+      personalBestImproved: personalBest,
       isNewGlobal,
       rank,
       name,
       score,
+      personalBestScore,
     },
   };
 }

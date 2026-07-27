@@ -193,14 +193,22 @@ async function handleSnakeHighscore(req, res, origin) {
 
   const { data, result } = submission;
 
+  const responseBase = {
+    score: result.score,
+    personalBestScore: result.personalBestScore,
+    rank: result.rank,
+    isNewGlobal: result.isNewGlobal,
+  };
+
   if (!result.personalBest) {
     sendJson(
       res,
       200,
       buildApiResponse(data, {
+        ...responseBase,
         posted: false,
         personalBest: false,
-        rank: result.rank,
+        personalBestImproved: false,
         reason: "not_personal_best",
       }),
       origin
@@ -213,9 +221,10 @@ async function handleSnakeHighscore(req, res, origin) {
       res,
       200,
       buildApiResponse(data, {
+        ...responseBase,
         posted: false,
         personalBest: true,
-        rank: result.rank,
+        personalBestImproved: true,
         reason: "telegram_not_configured",
       }),
       origin
@@ -234,9 +243,10 @@ async function handleSnakeHighscore(req, res, origin) {
       res,
       200,
       buildApiResponse(data, {
+        ...responseBase,
         posted,
         personalBest: true,
-        rank: result.rank,
+        personalBestImproved: true,
         reason: posted ? undefined : "telegram_send_failed",
       }),
       origin
@@ -246,9 +256,10 @@ async function handleSnakeHighscore(req, res, origin) {
       res,
       502,
       buildApiResponse(data, {
+        ...responseBase,
         posted: false,
         personalBest: true,
-        rank: result.rank,
+        personalBestImproved: true,
         reason: "telegram_send_failed",
       }),
       origin

@@ -178,5 +178,54 @@ runTest("old format migrates on next successful submission", () => {
   assert.strictEqual(saved.leaderboard.length, 2);
 });
 
+runTest("api response fields for lower score submission", () => {
+  const { buildApiResponse } = require("../services/snakeScores");
+
+  submitScore(testFile, "Kevin", 760);
+  submitScore(testFile, "Alice", 730);
+  const { data, result } = submitScore(testFile, "Alice", 520);
+
+  const response = buildApiResponse(data, {
+    posted: false,
+    personalBest: result.personalBest,
+    personalBestImproved: result.personalBest,
+    score: result.score,
+    personalBestScore: result.personalBestScore,
+    isNewGlobal: result.isNewGlobal,
+    rank: result.rank,
+    reason: "not_personal_best",
+  });
+
+  assert.strictEqual(response.score, 520);
+  assert.strictEqual(response.personalBestScore, 730);
+  assert.strictEqual(response.personalBestImproved, false);
+  assert.strictEqual(response.personalBest, false);
+  assert.strictEqual(response.rank, 2);
+  assert.strictEqual(response.globalHighScore, 760);
+  assert.strictEqual(response.globalHighScoreName, "Kevin");
+});
+
+runTest("api response fields for new global highscore", () => {
+  const { buildApiResponse } = require("../services/snakeScores");
+
+  submitScore(testFile, "Kevin", 730);
+  const { data, result } = submitScore(testFile, "Alice", 760);
+
+  const response = buildApiResponse(data, {
+    posted: true,
+    personalBest: true,
+    personalBestImproved: true,
+    score: result.score,
+    personalBestScore: result.personalBestScore,
+    isNewGlobal: result.isNewGlobal,
+    rank: result.rank,
+  });
+
+  assert.strictEqual(response.isNewGlobal, true);
+  assert.strictEqual(response.rank, 1);
+  assert.strictEqual(response.globalHighScore, 760);
+  assert.strictEqual(response.globalHighScoreName, "Alice");
+});
+
 fs.rmSync(tempDir, { recursive: true, force: true });
 console.log("\nAll snake score tests passed.");
