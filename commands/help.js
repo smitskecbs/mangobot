@@ -6,14 +6,23 @@ module.exports = (bot) => {
   bot.help((ctx) => {
     ctx.reply(`🥭 Commands
 
+🥭 Community
+/points
+/leaderboard
+/weekly
+
+🐍 Snake
+/snake
+/snakehighscore
+/snakescore
+
+📖 Information
 /about
 /community
 /launch
 /links
-/points
-/leaderboard
-/weekly
 /rules
+
 /help`);
   });
 };
