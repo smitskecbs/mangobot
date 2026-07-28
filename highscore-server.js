@@ -198,6 +198,9 @@ async function handleSnakeHighscore(req, res, origin) {
     personalBestScore: result.personalBestScore,
     rank: result.rank,
     isNewGlobal: result.isNewGlobal,
+    gamesPlayed: result.gamesPlayed,
+    lastScore: result.lastScore,
+    lastPlayedAt: result.lastPlayedAt,
   };
 
   if (!result.personalBest) {

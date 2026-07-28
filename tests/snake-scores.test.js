@@ -15,6 +15,8 @@ const {
   getDisplayLeaderboard,
   normalizeNameKey,
   syncGlobalFields,
+  buildApiResponse,
+  parseScore,
 } = require("../services/snakeScores");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-snake-test-"));
@@ -53,6 +55,8 @@ runTest("migrate old single-record format", () => {
   assert.strictEqual(migrated.leaderboard.length, 1);
   assert.strictEqual(migrated.leaderboard[0].name, "Kevin");
   assert.strictEqual(migrated.leaderboard[0].score, 730);
+  assert.strictEqual(migrated.leaderboard[0].gamesPlayed, 1);
+  assert.strictEqual(migrated.leaderboard[0].lastScore, 730);
 });
 
 runTest("add first player", () => {
@@ -179,8 +183,6 @@ runTest("old format migrates on next successful submission", () => {
 });
 
 runTest("api response fields for lower score submission", () => {
-  const { buildApiResponse } = require("../services/snakeScores");
-
   submitScore(testFile, "Kevin", 760);
   submitScore(testFile, "Alice", 730);
   const { data, result } = submitScore(testFile, "Alice", 520);
@@ -193,6 +195,9 @@ runTest("api response fields for lower score submission", () => {
     personalBestScore: result.personalBestScore,
     isNewGlobal: result.isNewGlobal,
     rank: result.rank,
+    gamesPlayed: result.gamesPlayed,
+    lastScore: result.lastScore,
+    lastPlayedAt: result.lastPlayedAt,
     reason: "not_personal_best",
   });
 
@@ -203,11 +208,11 @@ runTest("api response fields for lower score submission", () => {
   assert.strictEqual(response.rank, 2);
   assert.strictEqual(response.globalHighScore, 760);
   assert.strictEqual(response.globalHighScoreName, "Kevin");
+  assert.strictEqual(response.gamesPlayed, 2);
+  assert.strictEqual(response.lastScore, 520);
 });
 
 runTest("api response fields for new global highscore", () => {
-  const { buildApiResponse } = require("../services/snakeScores");
-
   submitScore(testFile, "Kevin", 730);
   const { data, result } = submitScore(testFile, "Alice", 760);
 
@@ -219,12 +224,135 @@ runTest("api response fields for new global highscore", () => {
     personalBestScore: result.personalBestScore,
     isNewGlobal: result.isNewGlobal,
     rank: result.rank,
+    gamesPlayed: result.gamesPlayed,
+    lastScore: result.lastScore,
+    lastPlayedAt: result.lastPlayedAt,
   });
 
   assert.strictEqual(response.isNewGlobal, true);
   assert.strictEqual(response.rank, 1);
   assert.strictEqual(response.globalHighScore, 760);
   assert.strictEqual(response.globalHighScoreName, "Alice");
+  assert.strictEqual(response.gamesPlayed, 1);
+});
+
+runTest("new player starts with gamesPlayed = 1", () => {
+  const { data, result } = submitScore(testFile, "Kevin", 500);
+
+  assert.strictEqual(result.gamesPlayed, 1);
+  assert.strictEqual(result.lastScore, 500);
+  assert.strictEqual(data.leaderboard[0].gamesPlayed, 1);
+});
+
+runTest("second valid run increments gamesPlayed", () => {
+  submitScore(testFile, "Kevin", 500);
+  const { result } = submitScore(testFile, "Kevin", 480);
+
+  assert.strictEqual(result.gamesPlayed, 2);
+});
+
+runTest("lower score updates lastScore but preserves personal best", () => {
+  submitScore(testFile, "Alice", 710);
+  const { data, result } = submitScore(testFile, "Alice", 520);
+
+  assert.strictEqual(result.lastScore, 520);
+  assert.strictEqual(result.personalBestScore, 710);
+  assert.strictEqual(data.leaderboard.find((entry) => entry.name === "Alice").score, 710);
+});
+
+runTest("equal score increments gamesPlayed", () => {
+  submitScore(testFile, "Alice", 710);
+  const { result } = submitScore(testFile, "Alice", 710);
+
+  assert.strictEqual(result.gamesPlayed, 2);
+  assert.strictEqual(result.personalBest, false);
+});
+
+runTest("new personal best updates score and updatedAt", () => {
+  submitScore(testFile, "Kevin", 500);
+  const before = readScoresFile(testFile).leaderboard[0].updatedAt;
+  const { data, result } = submitScore(testFile, "Kevin", 620);
+
+  assert.strictEqual(result.personalBest, true);
+  assert.strictEqual(data.leaderboard[0].score, 620);
+  assert.notStrictEqual(data.leaderboard[0].updatedAt, before);
+});
+
+runTest("lower score does not change updatedAt", () => {
+  submitScore(testFile, "Kevin", 620);
+  const before = readScoresFile(testFile).leaderboard[0].updatedAt;
+  submitScore(testFile, "Kevin", 400);
+  const after = readScoresFile(testFile).leaderboard[0].updatedAt;
+
+  assert.strictEqual(after, before);
+});
+
+runTest("lastPlayedAt changes on every valid run", () => {
+  submitScore(testFile, "Kevin", 500);
+  const first = readScoresFile(testFile).leaderboard[0].lastPlayedAt;
+  submitScore(testFile, "Kevin", 480);
+  const second = readScoresFile(testFile).leaderboard[0].lastPlayedAt;
+
+  assert.notStrictEqual(second, first);
+});
+
+runTest("existing leaderboard entry without stats migrates safely", () => {
+  const migrated = migrateInMemory({
+    globalHighScore: 860,
+    globalHighScoreName: "Kevin",
+    updatedAt: "2026-07-28T06:49:07.415Z",
+    leaderboard: [
+      {
+        name: "Kevin",
+        score: 860,
+        updatedAt: "2026-07-28T06:49:07.415Z",
+      },
+    ],
+  });
+
+  assert.strictEqual(migrated.leaderboard[0].gamesPlayed, 1);
+  assert.strictEqual(migrated.leaderboard[0].lastScore, 860);
+  assert.strictEqual(migrated.leaderboard[0].lastPlayedAt, "2026-07-28T06:49:07.415Z");
+});
+
+runTest("case-insensitive duplicate names share the same stats", () => {
+  submitScore(testFile, "Kevin", 730);
+  const { result } = submitScore(testFile, "KEVIN", 520);
+
+  assert.strictEqual(result.gamesPlayed, 2);
+  assert.strictEqual(result.lastScore, 520);
+  assert.strictEqual(result.personalBestScore, 730);
+});
+
+runTest("api response includes the submitting player's stats", () => {
+  submitScore(testFile, "Kevin", 860);
+  const { data, result } = submitScore(testFile, "Kevin", 520);
+
+  const response = buildApiResponse(data, {
+    posted: false,
+    personalBest: result.personalBest,
+    personalBestImproved: result.personalBest,
+    score: result.score,
+    personalBestScore: result.personalBestScore,
+    isNewGlobal: result.isNewGlobal,
+    rank: result.rank,
+    gamesPlayed: result.gamesPlayed,
+    lastScore: result.lastScore,
+    lastPlayedAt: result.lastPlayedAt,
+  });
+
+  assert.strictEqual(response.gamesPlayed, 2);
+  assert.strictEqual(response.lastScore, 520);
+  assert.ok(response.lastPlayedAt);
+});
+
+runTest("invalid score does not increment gamesPlayed", () => {
+  submitScore(testFile, "Kevin", 500);
+  const invalid = submitScore(testFile, "Kevin", 0);
+
+  assert.ok(invalid.error);
+  assert.strictEqual(readScoresFile(testFile).leaderboard[0].gamesPlayed, 1);
+  assert.strictEqual(parseScore(0), null);
 });
 
 fs.rmSync(tempDir, { recursive: true, force: true });

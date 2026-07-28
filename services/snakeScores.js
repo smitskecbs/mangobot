@@ -56,6 +56,40 @@ function parseScore(raw) {
   return score;
 }
 
+function migratePlayerEntry(entry) {
+  const score = Number.parseInt(String(entry.score ?? 0), 10);
+  const updatedAt =
+    typeof entry.updatedAt === "string" && entry.updatedAt
+      ? entry.updatedAt
+      : new Date().toISOString();
+  const gamesPlayed = Number.parseInt(String(entry.gamesPlayed ?? 1), 10);
+
+  return {
+    name: entry.name,
+    score,
+    lastScore: Number.isFinite(Number.parseInt(String(entry.lastScore ?? score), 10))
+      ? Number.parseInt(String(entry.lastScore ?? score), 10)
+      : score,
+    gamesPlayed: Number.isFinite(gamesPlayed) && gamesPlayed > 0 ? gamesPlayed : 1,
+    updatedAt,
+    lastPlayedAt:
+      typeof entry.lastPlayedAt === "string" && entry.lastPlayedAt
+        ? entry.lastPlayedAt
+        : updatedAt,
+  };
+}
+
+function createPlayerEntry(name, score, now) {
+  return {
+    name,
+    score,
+    lastScore: score,
+    gamesPlayed: 1,
+    updatedAt: now,
+    lastPlayedAt: now,
+  };
+}
+
 function sortLeaderboard(leaderboard) {
   return [...leaderboard].sort((a, b) => {
     if (b.score !== a.score) {
@@ -94,7 +128,14 @@ function normalizeLeaderboardEntries(leaderboard) {
       typeof entry.updatedAt === "string" && entry.updatedAt
         ? entry.updatedAt
         : new Date().toISOString();
-    const candidate = { name: displayName, score, updatedAt };
+    const candidate = migratePlayerEntry({
+      name: displayName,
+      score,
+      updatedAt,
+      lastScore: entry.lastScore,
+      gamesPlayed: entry.gamesPlayed,
+      lastPlayedAt: entry.lastPlayedAt,
+    });
     const existing = byKey.get(key);
 
     if (!existing) {
@@ -169,7 +210,13 @@ function migrateInMemory(data) {
     globalHighScore: score,
     globalHighScoreName: legacyName,
     updatedAt,
-    leaderboard: [{ name: legacyName, score, updatedAt }],
+    leaderboard: [
+      migratePlayerEntry({
+        name: legacyName,
+        score,
+        updatedAt,
+      }),
+    ],
   };
 
   syncGlobalFields(migrated);
@@ -224,6 +271,9 @@ function buildApiResponse(data, options) {
     personalBestScore = 0,
     isNewGlobal = false,
     rank = 0,
+    gamesPlayed = 0,
+    lastScore = 0,
+    lastPlayedAt = null,
     reason,
   } = options;
 
@@ -238,6 +288,9 @@ function buildApiResponse(data, options) {
     globalHighScore: data.globalHighScore,
     globalHighScoreName: data.globalHighScoreName,
     rank,
+    gamesPlayed,
+    lastScore,
+    lastPlayedAt,
     leaderboard: formatLeaderboardResponse(data),
   };
 
@@ -296,17 +349,26 @@ function submitScore(scoresFile, rawName, rawScore) {
   let personalBest = false;
 
   if (playerIndex === -1) {
-    data.leaderboard.push({ name, score, updatedAt: now });
+    data.leaderboard.push(createPlayerEntry(name, score, now));
     personalBest = true;
   } else {
     const existing = data.leaderboard[playerIndex];
+    const updatedPlayer = {
+      name,
+      score: existing.score,
+      lastScore: score,
+      gamesPlayed: (existing.gamesPlayed ?? 1) + 1,
+      updatedAt: existing.updatedAt,
+      lastPlayedAt: now,
+    };
 
     if (score > existing.score) {
-      data.leaderboard[playerIndex] = { name, score, updatedAt: now };
+      updatedPlayer.score = score;
+      updatedPlayer.updatedAt = now;
       personalBest = true;
-    } else {
-      data.leaderboard[playerIndex].name = name;
     }
+
+    data.leaderboard[playerIndex] = updatedPlayer;
   }
 
   data.leaderboard = sortLeaderboard(data.leaderboard).slice(0, LEADERBOARD_LIMIT);
@@ -319,8 +381,9 @@ function submitScore(scoresFile, rawName, rawScore) {
   writeScoresFile(scoresFile, data);
 
   const finalPlayerIndex = findPlayerIndex(data.leaderboard, nameKey);
-  const personalBestScore =
-    finalPlayerIndex >= 0 ? data.leaderboard[finalPlayerIndex].score : score;
+  const player =
+    finalPlayerIndex >= 0 ? data.leaderboard[finalPlayerIndex] : createPlayerEntry(name, score, now);
+  const personalBestScore = player.score;
 
   return {
     data,
@@ -332,6 +395,9 @@ function submitScore(scoresFile, rawName, rawScore) {
       name,
       score,
       personalBestScore,
+      gamesPlayed: player.gamesPlayed,
+      lastScore: player.lastScore,
+      lastPlayedAt: player.lastPlayedAt,
     },
   };
 }
@@ -356,6 +422,8 @@ module.exports = {
   parseScore,
   sortLeaderboard,
   migrateInMemory,
+  migratePlayerEntry,
+  createPlayerEntry,
   readScoresFile,
   writeScoresFile,
   submitScore,
