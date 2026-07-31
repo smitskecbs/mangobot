@@ -1,6 +1,8 @@
 node_modules/
 .env
 *.log
+*.tmp
 
 points.json
 snake-highscores.json
+bounch-highscores.json

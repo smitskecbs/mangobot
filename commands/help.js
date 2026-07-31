@@ -16,6 +16,11 @@ module.exports = (bot) => {
 /snakehighscore
 /snakescore
 
+🏀 Bounch
+/bounch
+/bounchhighscore
+/bounchscore
+
 📖 Information
 /about
 /community

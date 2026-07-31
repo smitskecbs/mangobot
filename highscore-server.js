@@ -1,6 +1,6 @@
 require("dotenv").config();
 /**
- * ManGo Snake high-score API — run on the Hetzner bot server.
+ * ManGo games high-score API — run on the Hetzner bot server.
  *
  * Copy this file to your bot server (e.g. /home/adje/mangobot/highscore-server.js)
  * and start it alongside the bot:
@@ -8,11 +8,10 @@ require("dotenv").config();
  *   cd /home/adje/mangobot
  *   BOT_TOKEN=your_token TELEGRAM_CHAT_ID=your_chat_id PORT=8787 node highscore-server.js
  *
- * From this repo (local test):
- *   BOT_TOKEN=... TELEGRAM_CHAT_ID=... node server/highscore-server.js
- *
- * Website env (Vercel / .env):
- *   VITE_MANGO_HIGHSCORE_API_URL=https://your-hetzner-host/snake-highscore
+ * Endpoints:
+ *   POST /snake-highscore
+ *   POST /bounch-highscore
+ *   GET  /health
  */
 
 const http = require("node:http");
@@ -25,11 +24,13 @@ const {
   buildGlobalHighscoreMessage,
   buildPersonalBestMessage,
 } = require("./services/snakeScores");
+const bounchScores = require("./services/bounchScores");
 
 const PORT = Number.parseInt(process.env.PORT || "8787", 10);
 const BOT_TOKEN = process.env.BOT_TOKEN?.trim();
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID?.trim();
 const SCORES_FILE = getScoresFilePath();
+const BOUNCH_SCORES_FILE = bounchScores.getScoresFilePath();
 
 const RATE_LIMIT_MS = 30_000;
 
@@ -270,12 +271,135 @@ async function handleSnakeHighscore(req, res, origin) {
   }
 }
 
+async function handleBounchHighscore(req, res, origin) {
+  if (isRateLimited(clientIp(req))) {
+    sendJson(res, 429, { ok: false, error: "Too many submissions. Try again later." }, origin);
+    return;
+  }
+
+  let body;
+
+  try {
+    body = await readJsonBody(req);
+  } catch {
+    sendJson(res, 400, { ok: false, error: "Invalid JSON body." }, origin);
+    return;
+  }
+
+  const level = bounchScores.parseLevel(body.level);
+
+  if (level === null) {
+    sendJson(res, 400, { ok: false, error: "Invalid level." }, origin);
+    return;
+  }
+
+  const name = bounchScores.sanitizeName(body.name);
+
+  if (!name) {
+    sendJson(res, 400, { ok: false, error: "Invalid name." }, origin);
+    return;
+  }
+
+  let submission;
+
+  try {
+    submission = bounchScores.submitLevel(BOUNCH_SCORES_FILE, name, level);
+  } catch {
+    sendJson(res, 500, { ok: false, error: "Failed to save level." }, origin);
+    return;
+  }
+
+  if (submission.error) {
+    sendJson(res, 400, { ok: false, error: submission.error }, origin);
+    return;
+  }
+
+  const { data, result } = submission;
+
+  const responseBase = {
+    name: result.name,
+    level: result.level,
+    bestLevel: result.bestLevel,
+    rank: result.rank,
+    isNewGlobal: result.isNewGlobal,
+    gamesPlayed: result.gamesPlayed,
+    lastLevel: result.lastLevel,
+    lastPlayedAt: result.lastPlayedAt,
+  };
+
+  if (!result.personalBest) {
+    sendJson(
+      res,
+      200,
+      bounchScores.buildApiResponse(data, {
+        ...responseBase,
+        posted: false,
+        personalBest: false,
+        personalBestImproved: false,
+        reason: "not_personal_best",
+      }),
+      origin
+    );
+    return;
+  }
+
+  if (!BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+    sendJson(
+      res,
+      200,
+      bounchScores.buildApiResponse(data, {
+        ...responseBase,
+        posted: false,
+        personalBest: true,
+        personalBestImproved: true,
+        reason: "telegram_not_configured",
+      }),
+      origin
+    );
+    return;
+  }
+
+  const telegramText = result.isNewGlobal
+    ? bounchScores.buildGlobalBestMessage(result.name, result.level)
+    : bounchScores.buildPersonalBestMessage(result.name, result.level, result.rank);
+
+  try {
+    const posted = await sendTelegramMessage(telegramText);
+
+    sendJson(
+      res,
+      200,
+      bounchScores.buildApiResponse(data, {
+        ...responseBase,
+        posted,
+        personalBest: true,
+        personalBestImproved: true,
+        reason: posted ? undefined : "telegram_send_failed",
+      }),
+      origin
+    );
+  } catch {
+    sendJson(
+      res,
+      502,
+      bounchScores.buildApiResponse(data, {
+        ...responseBase,
+        posted: false,
+        personalBest: true,
+        personalBestImproved: true,
+        reason: "telegram_send_failed",
+      }),
+      origin
+    );
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   const url = req.url?.split("?")[0] || "/";
   const origin = corsOrigin(req);
   const requestOrigin = typeof req.headers.origin === "string" ? req.headers.origin : "(none)";
 
-  console.log(`[ManGo Snake API] ${req.method} ${url} Origin: ${requestOrigin}`);
+  console.log(`[ManGo Highscore API] ${req.method} ${url} Origin: ${requestOrigin}`);
 
   if (req.method === "OPTIONS") {
     res.statusCode = 204;
@@ -289,6 +413,11 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (url === "/bounch-highscore" && req.method === "POST") {
+    await handleBounchHighscore(req, res, origin);
+    return;
+  }
+
   if (url === "/health" && req.method === "GET") {
     sendJson(res, 200, { ok: true, service: "mango-snake-highscore" }, origin);
     return;
@@ -298,8 +427,9 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`ManGo Snake high-score API listening on port ${PORT}`);
-  console.log(`Scores file: ${SCORES_FILE}`);
+  console.log(`ManGo high-score API listening on port ${PORT}`);
+  console.log(`Snake scores file: ${SCORES_FILE}`);
+  console.log(`Bounch scores file: ${BOUNCH_SCORES_FILE}`);
 
   if (!BOT_TOKEN || !TELEGRAM_CHAT_ID) {
     console.log("Telegram not configured — scores will be saved but not posted.");
