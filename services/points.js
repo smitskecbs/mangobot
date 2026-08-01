@@ -15,6 +15,9 @@ const TRIGGERS = {
   gn: 1,
 };
 
+/** Longer triggers first so "gmango" wins over "gm". */
+const TRIGGER_DETECT_ORDER = ["gmango", "gnango", "gm", "gn"];
+
 function getTodayDate() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -55,11 +58,35 @@ function isAdmin(userId) {
 }
 
 function getRank(points) {
-  if (points >= 500) return { emoji: "👑", title: "Mango Guardian" };
-  if (points >= 250) return { emoji: "🥭", title: "Mango Legend" };
-  if (points >= 100) return { emoji: "🌳", title: "Mango Tree" };
-  if (points >= 25) return { emoji: "🌿", title: "Mango Sprout" };
-  return { emoji: "🌱", title: "Mango Seed" };
+  if (points >= 600) return { emoji: "👑", title: "Legend" };
+  if (points >= 300) return { emoji: "🛡", title: "Guardian" };
+  if (points >= 150) return { emoji: "🥭", title: "Mango Tree" };
+  if (points >= 75) return { emoji: "🌳", title: "Tree" };
+  if (points >= 25) return { emoji: "🌿", title: "Sprout" };
+  return { emoji: "🌱", title: "Seed" };
+}
+
+/**
+ * Detect a daily trigger as a whole word (case-insensitive).
+ * Allows emoji/punctuation around the word; rejects matches inside other words.
+ */
+function detectTrigger(text) {
+  if (typeof text !== "string") {
+    return null;
+  }
+
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+
+  for (const trigger of TRIGGER_DETECT_ORDER) {
+    if (new RegExp(`\\b${trigger}\\b`).test(normalized)) {
+      return trigger;
+    }
+  }
+
+  return null;
 }
 
 function getTriggersClaimedToday(user) {
@@ -163,6 +190,7 @@ module.exports = {
   savePoints,
   isAdmin,
   getRank,
+  detectTrigger,
   getTriggersClaimedToday,
   getUserRecord,
   getEffectiveWeeklyPoints,

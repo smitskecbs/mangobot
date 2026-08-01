@@ -2,19 +2,18 @@
  * Award points when users send daily trigger words (gmango, gnango, gm, gn).
  */
 
-const { TRIGGERS, awardTriggerPoints } = require("../services/points");
+const { detectTrigger, awardTriggerPoints } = require("../services/points");
 
 module.exports = (bot) => {
   bot.on("text", (ctx) => {
-    const text = ctx.message.text.trim().toLowerCase();
-    const pointsToAdd = TRIGGERS[text];
+    const trigger = detectTrigger(ctx.message.text);
 
-    if (pointsToAdd === undefined) {
+    if (!trigger) {
       return;
     }
 
     const userName = ctx.from.first_name || ctx.from.username || "friend";
-    const result = awardTriggerPoints(ctx.from.id, userName, text);
+    const result = awardTriggerPoints(ctx.from.id, userName, trigger);
 
     if (!result.awarded) {
       ctx.reply("🥭 Already claimed today. Try another ManGo trigger!");
