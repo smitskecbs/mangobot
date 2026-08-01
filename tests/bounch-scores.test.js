@@ -188,10 +188,70 @@ runTest("invalid level 0", () => {
   assert.strictEqual(readScoresFile(testFile).leaderboard[0].gamesPlayed, 1);
 });
 
-runTest("invalid level 6", () => {
-  assert.strictEqual(parseLevel(6), null);
-  const invalid = submitLevel(testFile, "Kevin", 6);
+runTest("valid level 6", () => {
+  assert.strictEqual(parseLevel(6), 6);
+  const { data, result } = submitLevel(testFile, "Kevin", 6);
+
+  assert.strictEqual(result.level, 6);
+  assert.strictEqual(result.bestLevel, 6);
+  assert.strictEqual(data.globalBestLevel, 6);
+});
+
+runTest("valid level 7", () => {
+  assert.strictEqual(parseLevel(7), 7);
+  const { data, result } = submitLevel(testFile, "Kevin", 7);
+
+  assert.strictEqual(result.level, 7);
+  assert.strictEqual(result.bestLevel, 7);
+  assert.strictEqual(data.globalBestLevel, 7);
+});
+
+runTest("invalid level 8", () => {
+  assert.strictEqual(parseLevel(8), null);
+  const invalid = submitLevel(testFile, "Kevin", 8);
   assert.ok(invalid.error);
+});
+
+runTest("Level 7 becomes bestLevel", () => {
+  submitLevel(testFile, "Kevin", 5);
+  const { data, result } = submitLevel(testFile, "Kevin", 7);
+
+  assert.strictEqual(result.personalBest, true);
+  assert.strictEqual(result.bestLevel, 7);
+  assert.strictEqual(data.leaderboard[0].bestLevel, 7);
+});
+
+runTest("lower submit after Level 7 keeps bestLevel 7", () => {
+  submitLevel(testFile, "Kevin", 7);
+  const { data, result } = submitLevel(testFile, "Kevin", 3);
+
+  assert.strictEqual(result.personalBest, false);
+  assert.strictEqual(result.bestLevel, 7);
+  assert.strictEqual(result.lastLevel, 3);
+  assert.strictEqual(data.leaderboard[0].bestLevel, 7);
+  assert.strictEqual(data.globalBestLevel, 7);
+});
+
+runTest("globalBestLevel can become 7", () => {
+  submitLevel(testFile, "Kevin", 5);
+  const { data } = submitLevel(testFile, "Alice", 7);
+
+  assert.strictEqual(data.globalBestLevel, 7);
+  assert.strictEqual(data.globalBestLevelName, "Alice");
+});
+
+runTest("leaderboard sorts Level 7 above lower levels", () => {
+  submitLevel(testFile, "Tom", 4);
+  submitLevel(testFile, "Eva", 6);
+  submitLevel(testFile, "Kevin", 7);
+
+  const board = getDisplayLeaderboard(testFile);
+  assert.strictEqual(board[0].name, "Kevin");
+  assert.strictEqual(board[0].bestLevel, 7);
+  assert.strictEqual(board[1].name, "Eva");
+  assert.strictEqual(board[1].bestLevel, 6);
+  assert.strictEqual(board[2].name, "Tom");
+  assert.strictEqual(board[2].bestLevel, 4);
 });
 
 runTest("non-integer level", () => {

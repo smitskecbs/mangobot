@@ -7,7 +7,7 @@ const path = require("path");
 const { error: logError } = require("../utils/logger");
 
 const MIN_LEVEL = 1;
-const MAX_LEVEL = 5;
+const MAX_LEVEL = 7;
 const MAX_NAME_LENGTH = 24;
 const LEADERBOARD_LIMIT = 10;
 const PLAY_URL = "https://www.mangomeme.fun/mango-labs";
