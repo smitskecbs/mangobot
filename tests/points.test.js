@@ -1,12 +1,32 @@
 /**
- * Focused tests for community points trigger detection and ranks.
+ * Focused tests for community points trigger detection, ranks, and silent feedback.
  */
 
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 const assert = require("assert");
-const { detectTrigger, getRank, TRIGGERS } = require("../services/points");
+
+const {
+  detectTrigger,
+  getRank,
+  TRIGGERS,
+  awardTriggerPoints,
+  getAutomaticTriggerReply,
+  buildRankUpMessage,
+  loadPoints,
+} = require("../services/points");
+
+const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-points-test-"));
+const testFile = path.join(tempDir, "points.json");
+
+function resetFile(contents = { users: {} }) {
+  fs.writeFileSync(testFile, `${JSON.stringify(contents, null, 2)}\n`, "utf8");
+}
 
 function runTest(name, fn) {
   try {
+    resetFile();
     fn();
     console.log(`✓ ${name}`);
   } catch (err) {
@@ -101,4 +121,97 @@ runTest("rank thresholds", () => {
   assert.deepStrictEqual(getRank(600), { emoji: "👑", title: "Legend" });
 });
 
+runTest("successful claim saves points", () => {
+  const result = awardTriggerPoints(42, "Kevin", "gm", testFile);
+
+  assert.strictEqual(result.awarded, true);
+  assert.strictEqual(result.pointsToAdd, 1);
+  assert.strictEqual(result.points, 1);
+
+  const saved = loadPoints(testFile);
+  assert.strictEqual(saved.users["42"].points, 1);
+  assert.deepStrictEqual(saved.users["42"].triggersUsed, ["gm"]);
+});
+
+runTest("successful claim has no standard reply", () => {
+  const result = awardTriggerPoints(42, "Kevin", "gm", testFile);
+
+  assert.strictEqual(result.awarded, true);
+  assert.strictEqual(result.rankUp, false);
+  assert.strictEqual(getAutomaticTriggerReply(result, "Kevin"), null);
+});
+
+runTest("duplicate claim awards no points", () => {
+  awardTriggerPoints(42, "Kevin", "gm", testFile);
+  const second = awardTriggerPoints(42, "Kevin", "gm", testFile);
+
+  assert.strictEqual(second.awarded, false);
+  assert.strictEqual(second.points, 1);
+  assert.strictEqual(loadPoints(testFile).users["42"].points, 1);
+});
+
+runTest("duplicate claim has no reply", () => {
+  awardTriggerPoints(42, "Kevin", "gm", testFile);
+  const second = awardTriggerPoints(42, "Kevin", "gm", testFile);
+
+  assert.strictEqual(second.awarded, false);
+  assert.strictEqual(getAutomaticTriggerReply(second, "Kevin"), null);
+});
+
+runTest("rank-up is detected and may reply", () => {
+  resetFile({
+    users: {
+      "42": {
+        points: 24,
+        weeklyPoints: 0,
+        weekId: "2099-01-01",
+        name: "Kevin",
+        triggerDate: "2099-01-01",
+        triggersUsed: [],
+      },
+    },
+  });
+
+  const result = awardTriggerPoints(42, "Kevin", "gm", testFile);
+
+  assert.strictEqual(result.awarded, true);
+  assert.strictEqual(result.points, 25);
+  assert.strictEqual(result.rankUp, true);
+  assert.deepStrictEqual(result.rank, { emoji: "🌿", title: "Sprout" });
+  assert.strictEqual(
+    getAutomaticTriggerReply(result, "Kevin"),
+    "🥭 Kevin reached 🌿 Sprout!"
+  );
+  assert.strictEqual(
+    buildRankUpMessage("Kevin", result.rank),
+    "🥭 Kevin reached 🌿 Sprout!"
+  );
+});
+
+runTest("only rank-up yields automatic visible message", () => {
+  const silentSuccess = {
+    awarded: true,
+    rankUp: false,
+    rank: { emoji: "🌱", title: "Seed" },
+  };
+  const silentDuplicate = {
+    awarded: false,
+    rankUp: false,
+    rank: { emoji: "🌱", title: "Seed" },
+  };
+  const rankUp = {
+    awarded: true,
+    rankUp: true,
+    rank: { emoji: "🌳", title: "Tree" },
+  };
+
+  assert.strictEqual(getAutomaticTriggerReply(silentSuccess, "Kevin"), null);
+  assert.strictEqual(getAutomaticTriggerReply(silentDuplicate, "Kevin"), null);
+  assert.strictEqual(
+    getAutomaticTriggerReply(rankUp, "Kevin"),
+    "🥭 Kevin reached 🌳 Tree!"
+  );
+});
+
+fs.rmSync(tempDir, { recursive: true, force: true });
 console.log("\nAll points tests passed.");

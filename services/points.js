@@ -30,21 +30,21 @@ function getWeekId(date = new Date()) {
   return monday.toISOString().slice(0, 10);
 }
 
-function loadPoints() {
-  const data = readJsonFile(POINTS_FILE, () => ({ users: {} }), "points.json");
+function loadPoints(pointsFile = POINTS_FILE) {
+  const data = readJsonFile(pointsFile, () => ({ users: {} }), path.basename(pointsFile));
 
   if (!data || typeof data !== "object" || !data.users || typeof data.users !== "object") {
-    logError("points.json has invalid structure, resetting...");
+    logError(`${path.basename(pointsFile)} has invalid structure, resetting...`);
     const fresh = { users: {} };
-    savePoints(fresh);
+    savePoints(fresh, pointsFile);
     return fresh;
   }
 
   return data;
 }
 
-function savePoints(data) {
-  writeJsonFile(POINTS_FILE, data);
+function savePoints(data, pointsFile = POINTS_FILE) {
+  writeJsonFile(pointsFile, data);
 }
 
 function ensurePointsFile() {
@@ -138,10 +138,34 @@ function resetTriggersIfNewDay(user) {
   }
 }
 
-function awardTriggerPoints(userId, userName, trigger) {
-  const data = loadPoints();
+function buildRankUpMessage(userName, rank) {
+  return `🥭 ${userName} reached ${rank.emoji} ${rank.title}!`;
+}
+
+/**
+ * Automatic group feedback: only a short rank-up message, otherwise silent.
+ */
+function getAutomaticTriggerReply(result, userName) {
+  if (result && result.awarded && result.rankUp && result.rank) {
+    return buildRankUpMessage(userName, result.rank);
+  }
+  return null;
+}
+
+function awardTriggerPoints(userId, userName, trigger, pointsFile = POINTS_FILE) {
+  const data = loadPoints(pointsFile);
   const id = String(userId);
   const pointsToAdd = TRIGGERS[trigger];
+
+  if (pointsToAdd === undefined) {
+    return {
+      awarded: false,
+      points: 0,
+      pointsToAdd: 0,
+      rankUp: false,
+      rank: getRank(0),
+    };
+  }
 
   if (!data.users[id]) {
     data.users[id] = {
@@ -160,14 +184,33 @@ function awardTriggerPoints(userId, userName, trigger) {
   resetWeeklyIfNewWeek(user);
 
   if (user.triggersUsed.includes(trigger)) {
-    return { awarded: false, points: user.points, pointsToAdd };
+    return {
+      awarded: false,
+      points: user.points,
+      pointsToAdd,
+      rankUp: false,
+      rank: getRank(user.points),
+    };
   }
 
+  const pointsBefore = user.points;
   user.points += pointsToAdd;
   user.weeklyPoints += pointsToAdd;
   user.triggersUsed.push(trigger);
-  savePoints(data);
-  return { awarded: true, points: user.points, pointsToAdd };
+  savePoints(data, pointsFile);
+
+  const previousRank = getRank(pointsBefore);
+  const rank = getRank(user.points);
+  const rankUp = previousRank.title !== rank.title;
+
+  return {
+    awarded: true,
+    points: user.points,
+    pointsToAdd,
+    rankUp,
+    rank,
+    previousRank,
+  };
 }
 
 function resetWeeklyForAll() {
@@ -191,6 +234,8 @@ module.exports = {
   isAdmin,
   getRank,
   detectTrigger,
+  buildRankUpMessage,
+  getAutomaticTriggerReply,
   getTriggersClaimedToday,
   getUserRecord,
   getEffectiveWeeklyPoints,
