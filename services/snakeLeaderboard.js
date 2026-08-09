@@ -5,8 +5,11 @@
 const {
   getScoresFilePath,
   getDisplayLeaderboard,
-  PLAY_URL,
 } = require("./snakeScores");
+const {
+  buildPrivateDeepLink,
+  getConfiguredBotUsername,
+} = require("../utils/botMenu");
 
 const MEDALS = ["🥇", "🥈", "🥉"];
 
@@ -18,16 +21,28 @@ function getTopSnakeScores(limit = 10, scoresFile = getScoresFilePath()) {
   return getDisplayLeaderboard(scoresFile, limit);
 }
 
-function formatSnakeLeaderboardMessage(scoresFile = getScoresFilePath()) {
+/**
+ * @param {string} [scoresFile]
+ * @param {string|null} [botUsername] omit for TELEGRAM_BOT_USERNAME; pass null to omit CTA
+ */
+function formatSnakeLeaderboardMessage(
+  scoresFile = getScoresFilePath(),
+  botUsername = getConfiguredBotUsername()
+) {
   const scores = getTopSnakeScores(10, scoresFile);
+  const playUrl = buildPrivateDeepLink(botUsername, "snake");
 
   if (scores.length === 0) {
-    return `🐍 ManGo Snake Leaderboard
+    let text = `🐍 ManGo Snake Leaderboard
 
-No scores yet.
+No scores yet.`;
+    if (playUrl) {
+      text += `
 
 Be the first to set a score:
-${PLAY_URL}`;
+${playUrl}`;
+    }
+    return text;
   }
 
   const lines = scores.map((entry, index) => {
@@ -35,12 +50,18 @@ ${PLAY_URL}`;
     return `${prefix} ${entry.name} — ${entry.score}`;
   });
 
-  return `🐍 ManGo Snake Leaderboard
+  let text = `🐍 ManGo Snake Leaderboard
 
-${lines.join("\n")}
+${lines.join("\n")}`;
+
+  if (playUrl) {
+    text += `
 
 🎮 Play:
-${PLAY_URL}`;
+${playUrl}`;
+  }
+
+  return text;
 }
 
 module.exports = {

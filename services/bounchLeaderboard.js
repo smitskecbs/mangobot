@@ -5,8 +5,11 @@
 const {
   getScoresFilePath,
   getDisplayLeaderboard,
-  PLAY_URL,
 } = require("./bounchScores");
+const {
+  buildPrivateDeepLink,
+  getConfiguredBotUsername,
+} = require("../utils/botMenu");
 
 const MEDALS = ["🥇", "🥈", "🥉"];
 
@@ -18,16 +21,28 @@ function getTopBounchLevels(limit = 10, scoresFile = getScoresFilePath()) {
   return getDisplayLeaderboard(scoresFile, limit);
 }
 
-function formatBounchLeaderboardMessage(scoresFile = getScoresFilePath()) {
+/**
+ * @param {string} [scoresFile]
+ * @param {string|null} [botUsername] omit for TELEGRAM_BOT_USERNAME; pass null to omit CTA
+ */
+function formatBounchLeaderboardMessage(
+  scoresFile = getScoresFilePath(),
+  botUsername = getConfiguredBotUsername()
+) {
   const scores = getTopBounchLevels(10, scoresFile);
+  const playUrl = buildPrivateDeepLink(botUsername, "bounch");
 
   if (scores.length === 0) {
-    return `🏀 ManGo Bounch Leaderboard
+    let text = `🏀 ManGo Bounch Leaderboard
 
-No clears yet.
+No clears yet.`;
+    if (playUrl) {
+      text += `
 
 Be the first to clear a level:
-${PLAY_URL}`;
+${playUrl}`;
+    }
+    return text;
   }
 
   const lines = scores.map((entry, index) => {
@@ -35,12 +50,18 @@ ${PLAY_URL}`;
     return `${prefix} ${entry.name} — Level ${entry.bestLevel}`;
   });
 
-  return `🏀 ManGo Bounch Leaderboard
+  let text = `🏀 ManGo Bounch Leaderboard
 
-${lines.join("\n")}
+${lines.join("\n")}`;
+
+  if (playUrl) {
+    text += `
 
 🎮 Play:
-${PLAY_URL}`;
+${playUrl}`;
+  }
+
+  return text;
 }
 
 module.exports = {
