@@ -6,8 +6,8 @@ const {
   loadPoints,
   getUserRecord,
   getRank,
-  getTriggersClaimedToday,
   getEffectiveWeeklyPoints,
+  formatClaimedTodayLines,
 } = require("../services/points");
 
 module.exports = (bot) => {
@@ -17,8 +17,7 @@ module.exports = (bot) => {
     const name = ctx.from.first_name || "friend";
     const rank = getRank(user.points);
     const weeklyPoints = getEffectiveWeeklyPoints(user);
-    const claimedToday = getTriggersClaimedToday(user);
-    const claimedText = claimedToday.length > 0 ? claimedToday.join(", ") : "none";
+    const claimedToday = formatClaimedTodayLines(user);
     const lifetimeLabel = user.points === 1 ? "point" : "points";
     const weeklyLabel = weeklyPoints === 1 ? "point" : "points";
 
@@ -28,6 +27,7 @@ Lifetime points: ${user.points} ${lifetimeLabel}
 Weekly points: ${weeklyPoints} ${weeklyLabel}
 Rank: ${rank.emoji} ${rank.title}
 
-Claimed today: ${claimedText}`);
+Claimed today:
+${claimedToday}`);
   });
 };

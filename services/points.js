@@ -103,6 +103,32 @@ function getTriggersClaimedToday(user) {
   return user.triggersUsed || [];
 }
 
+/**
+ * Whether the user already claimed the daily activity point (UTC calendar day).
+ * Missing/null activityDate means not claimed today.
+ */
+function hasClaimedDailyActivity(user) {
+  if (!user || typeof user !== "object") {
+    return false;
+  }
+  return user.activityDate === getTodayDate();
+}
+
+/**
+ * Multi-line "Claimed today" block for /points (activity + claimed triggers).
+ */
+function formatClaimedTodayLines(user) {
+  const lines = [
+    hasClaimedDailyActivity(user) ? "✅ Daily activity" : "⬜ Daily activity",
+  ];
+
+  for (const trigger of getTriggersClaimedToday(user)) {
+    lines.push(`✅ ${trigger}`);
+  }
+
+  return lines.join("\n");
+}
+
 function getUserRecord(data, userId) {
   return (
     data.users[String(userId)] || {
@@ -306,6 +332,8 @@ module.exports = {
   getAutomaticTriggerReply,
   getCombinedRankUpReply,
   getTriggersClaimedToday,
+  hasClaimedDailyActivity,
+  formatClaimedTodayLines,
   getUserRecord,
   getEffectiveWeeklyPoints,
   awardDailyActivityPoint,

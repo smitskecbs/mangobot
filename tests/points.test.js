@@ -20,6 +20,9 @@ const {
   loadPoints,
   savePoints,
   getEffectiveWeeklyPoints,
+  hasClaimedDailyActivity,
+  getTriggersClaimedToday,
+  formatClaimedTodayLines,
 } = require("../services/points");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-points-test-"));
@@ -380,6 +383,57 @@ runTest("activity then gmango crossing Sprout yields single combined reply", () 
 
   const reply = getCombinedRankUpReply(activity, trigger, "Kevin");
   assert.strictEqual(reply, "🥭 Kevin reached 🌿 Sprout!");
+});
+
+runTest("activityDate today means daily activity claimed", () => {
+  const today = new Date().toISOString().slice(0, 10);
+  assert.strictEqual(hasClaimedDailyActivity({ activityDate: today }), true);
+  assert.strictEqual(
+    formatClaimedTodayLines({ activityDate: today, triggerDate: null, triggersUsed: [] }),
+    "✅ Daily activity"
+  );
+});
+
+runTest("activityDate other day means daily activity not claimed", () => {
+  assert.strictEqual(hasClaimedDailyActivity({ activityDate: "2000-01-01" }), false);
+  assert.strictEqual(
+    formatClaimedTodayLines({
+      activityDate: "2000-01-01",
+      triggerDate: null,
+      triggersUsed: [],
+    }),
+    "⬜ Daily activity"
+  );
+});
+
+runTest("missing activityDate means daily activity not claimed", () => {
+  assert.strictEqual(hasClaimedDailyActivity({}), false);
+  assert.strictEqual(hasClaimedDailyActivity({ activityDate: null }), false);
+  assert.strictEqual(hasClaimedDailyActivity(undefined), false);
+});
+
+runTest("trigger claimed-today status still works with activity lines", () => {
+  const today = new Date().toISOString().slice(0, 10);
+  const user = {
+    activityDate: today,
+    triggerDate: today,
+    triggersUsed: ["gm", "gmango"],
+  };
+
+  assert.deepStrictEqual(getTriggersClaimedToday(user), ["gm", "gmango"]);
+  assert.strictEqual(
+    formatClaimedTodayLines(user),
+    "✅ Daily activity\n✅ gm\n✅ gmango"
+  );
+
+  const triggersOnly = {
+    triggerDate: today,
+    triggersUsed: ["gm", "gmango"],
+  };
+  assert.strictEqual(
+    formatClaimedTodayLines(triggersOnly),
+    "⬜ Daily activity\n✅ gm\n✅ gmango"
+  );
 });
 
 fs.rmSync(tempDir, { recursive: true, force: true });
