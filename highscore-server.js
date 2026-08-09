@@ -25,6 +25,7 @@ const {
   buildPersonalBestMessage,
 } = require("./services/snakeScores");
 const bounchScores = require("./services/bounchScores");
+const { verifyOptionalGameIdentity } = require("./utils/gameIdentity");
 
 const PORT = Number.parseInt(process.env.PORT || "8787", 10);
 const BOT_TOKEN = process.env.BOT_TOKEN?.trim();
@@ -120,11 +121,20 @@ function applyCorsHeaders(res, origin) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 }
 
-function sendJson(res, statusCode, body, origin) {
+function sendJson(res, statusCode, body, origin, identity) {
   res.statusCode = statusCode;
   res.setHeader("content-type", "application/json; charset=utf-8");
 
   applyCorsHeaders(res, origin);
+
+  if (identity) {
+    body = {
+      ...body,
+      identity: {
+        verified: Boolean(identity.verified),
+      },
+    };
+  }
 
   res.end(JSON.stringify(body));
 }
@@ -178,6 +188,9 @@ async function handleSnakeHighscore(req, res, origin) {
     return;
   }
 
+  // Optional signed game token — never blocks public submit; uid never trusted from body.
+  const identity = verifyOptionalGameIdentity(body.t, "snake");
+
   let submission;
 
   try {
@@ -215,7 +228,8 @@ async function handleSnakeHighscore(req, res, origin) {
         personalBestImproved: false,
         reason: "not_personal_best",
       }),
-      origin
+      origin,
+      identity
     );
     return;
   }
@@ -231,7 +245,8 @@ async function handleSnakeHighscore(req, res, origin) {
         personalBestImproved: true,
         reason: "telegram_not_configured",
       }),
-      origin
+      origin,
+      identity
     );
     return;
   }
@@ -253,7 +268,8 @@ async function handleSnakeHighscore(req, res, origin) {
         personalBestImproved: true,
         reason: posted ? undefined : "telegram_send_failed",
       }),
-      origin
+      origin,
+      identity
     );
   } catch {
     sendJson(
@@ -266,7 +282,8 @@ async function handleSnakeHighscore(req, res, origin) {
         personalBestImproved: true,
         reason: "telegram_send_failed",
       }),
-      origin
+      origin,
+      identity
     );
   }
 }
@@ -299,6 +316,9 @@ async function handleBounchHighscore(req, res, origin) {
     sendJson(res, 400, { ok: false, error: "Invalid name." }, origin);
     return;
   }
+
+  // Optional signed game token — never blocks public submit; uid never trusted from body.
+  const identity = verifyOptionalGameIdentity(body.t, "bounch");
 
   let submission;
 
@@ -338,7 +358,8 @@ async function handleBounchHighscore(req, res, origin) {
         personalBestImproved: false,
         reason: "not_personal_best",
       }),
-      origin
+      origin,
+      identity
     );
     return;
   }
@@ -354,7 +375,8 @@ async function handleBounchHighscore(req, res, origin) {
         personalBestImproved: true,
         reason: "telegram_not_configured",
       }),
-      origin
+      origin,
+      identity
     );
     return;
   }
@@ -376,7 +398,8 @@ async function handleBounchHighscore(req, res, origin) {
         personalBestImproved: true,
         reason: posted ? undefined : "telegram_send_failed",
       }),
-      origin
+      origin,
+      identity
     );
   } catch {
     sendJson(
@@ -389,7 +412,8 @@ async function handleBounchHighscore(req, res, origin) {
         personalBestImproved: true,
         reason: "telegram_send_failed",
       }),
-      origin
+      origin,
+      identity
     );
   }
 }
