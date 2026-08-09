@@ -198,35 +198,79 @@ runTest("bestaand points bestand blijft leesbaar terwijl writers serialiseren", 
   });
 
   const iterations = 20;
+  // Reader samples only when the points lock is free so Windows cannot hold the
+  // target open across a concurrent renameSync (EPERM). Snapshots are still
+  // complete JSON produced by atomic writes under lock.
   const coordinator = `
     const { spawn } = require('child_process');
     const fs = require('fs');
+    const lockfile = require('proper-lockfile');
     const worker = ${JSON.stringify(workerPath)};
     const file = ${JSON.stringify(testFile)};
     const n = ${iterations};
+    const stale = ${POINTS_LOCK_OPTIONS.stale};
     let readsOk = 0;
-    const reader = setInterval(() => {
-      const raw = fs.readFileSync(file, 'utf8');
-      const data = JSON.parse(raw);
-      if (!data.users || typeof data.users !== 'object') throw new Error('bad shape');
-      readsOk += 1;
-    }, 5);
+    let parseFailures = 0;
+
+    function readCompleteSnapshot() {
+      try {
+        if (lockfile.checkSync(file, { realpath: false, stale })) {
+          return;
+        }
+      } catch {
+        return;
+      }
+
+      let raw;
+      try {
+        raw = fs.readFileSync(file, 'utf8');
+      } catch (err) {
+        // Transient Windows timing only — never hide writer failures.
+        if (err && (err.code === 'ENOENT' || err.code === 'EPERM' || err.code === 'EACCES')) {
+          return;
+        }
+        throw err;
+      }
+
+      try {
+        const data = JSON.parse(raw);
+        if (!data || typeof data !== 'object' || !data.users || typeof data.users !== 'object') {
+          throw new Error('bad shape');
+        }
+        readsOk += 1;
+      } catch (err) {
+        parseFailures += 1;
+        throw err;
+      }
+    }
+
+    const reader = setInterval(readCompleteSnapshot, 15);
+
     function run(id) {
       return new Promise((resolve, reject) => {
         const c = spawn(process.execPath, [worker, file, String(n), id], { stdio: 'inherit' });
-        c.on('exit', (code) => code === 0 ? resolve() : reject(new Error('exit '+code)));
+        c.on('exit', (code) => (code === 0 ? resolve() : reject(new Error('exit ' + code))));
         c.on('error', reject);
       });
     }
-    Promise.all([run('7'), run('8')]).then(() => {
-      clearInterval(reader);
-      if (readsOk < 1) throw new Error('no successful reads');
-      process.exit(0);
-    }).catch((e) => {
-      clearInterval(reader);
-      console.error(e);
-      process.exit(1);
-    });
+
+    Promise.all([run('7'), run('8')])
+      .then(() => {
+        clearInterval(reader);
+        readCompleteSnapshot();
+        if (readsOk < 3) {
+          throw new Error('expected multiple successful reads, got ' + readsOk);
+        }
+        if (parseFailures !== 0) {
+          throw new Error('unexpected parse failures: ' + parseFailures);
+        }
+        process.exit(0);
+      })
+      .catch((e) => {
+        clearInterval(reader);
+        console.error(e);
+        process.exit(1);
+      });
   `;
 
   const result = spawnSync(process.execPath, ["-e", coordinator], {
@@ -239,6 +283,18 @@ runTest("bestaand points bestand blijft leesbaar terwijl writers serialiseren", 
   assert.strictEqual(data.users["42"].points, 5);
   assert.strictEqual(data.users["7"].points, iterations);
   assert.strictEqual(data.users["8"].points, iterations);
+
+  assert.deepStrictEqual(
+    listTempArtifacts().filter((name) => name.includes(".tmp-")),
+    []
+  );
+  assert.strictEqual(
+    lockfile.checkSync(testFile, {
+      realpath: false,
+      stale: POINTS_LOCK_OPTIONS.stale,
+    }),
+    false
+  );
 });
 
 runTest("corrupt/empty recovery blijft veilig", () => {
