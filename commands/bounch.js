@@ -1,19 +1,12 @@
 /**
- * /bounch — play link and leaderboard pointer.
+ * /bounch — personal signed play link and leaderboard pointer.
  */
+
+const { getGameCommandReply } = require("../utils/gameLinks");
 
 module.exports = (bot) => {
   bot.command("bounch", (ctx) => {
-    ctx.reply(`🏀 ManGo Bounch
-
-Clear levels and climb the board.
-
-🎮 Play:
-https://www.mangomeme.fun/mango-labs
-
-🏆 Global leaderboard:
-/bounchhighscore
-
-🥭 How far can you bounce?`);
+    const userId = ctx.from && ctx.from.id;
+    return ctx.reply(getGameCommandReply(userId, "bounch"));
   });
 };

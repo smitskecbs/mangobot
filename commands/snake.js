@@ -1,17 +1,12 @@
 /**
- * /snake — play link and leaderboard pointer.
+ * /snake — personal signed play link and leaderboard pointer.
  */
+
+const { getGameCommandReply } = require("../utils/gameLinks");
 
 module.exports = (bot) => {
   bot.command("snake", (ctx) => {
-    ctx.reply(`🐍 ManGo Snake
-
-🎮 Play:
-https://www.mangomeme.fun/mango-labs.html
-
-🏆 Global leaderboard:
-/snakehighscore
-
-🥭 Think you can beat the top score?`);
+    const userId = ctx.from && ctx.from.id;
+    return ctx.reply(getGameCommandReply(userId, "snake"));
   });
 };
