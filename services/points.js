@@ -1,9 +1,14 @@
 /**
  * Community points system — storage, triggers, ranks, weekly tracking, and daily activity.
+ *
+ * All points.json mutations go through mutatePoints(): exclusive cross-process lock +
+ * atomic write. Read-only helpers never write.
  */
 
+const fs = require("fs");
 const path = require("path");
-const { readJsonFile, writeJsonFile, ensureJsonFile } = require("../utils/json");
+const lockfile = require("proper-lockfile");
+const { writeJsonFileAtomic } = require("../utils/json");
 const { error: logError } = require("../utils/logger");
 
 const POINTS_FILE = path.join(__dirname, "..", "points.json");
@@ -18,6 +23,63 @@ const TRIGGERS = {
 /** Longer triggers first so "gmango" wins over "gm". */
 const TRIGGER_DETECT_ORDER = ["gmango", "gnango", "gm", "gn"];
 
+/**
+ * Cross-process lock options for points.json.
+ * realpath:false so a missing file can still be locked via sibling .lock.
+ * Note: proper-lockfile lockSync does not support `retries`; we poll manually.
+ */
+const POINTS_LOCK_OPTIONS = Object.freeze({
+  stale: 10_000,
+  realpath: false,
+});
+
+const LOCK_RETRY = Object.freeze({
+  attempts: 100,
+  minTimeoutMs: 20,
+  maxTimeoutMs: 500,
+  factor: 1.5,
+});
+
+function sleepSync(ms) {
+  const delay = Math.max(0, Math.ceil(ms));
+  if (delay === 0) {
+    return;
+  }
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
+}
+
+/**
+ * Acquire an exclusive lock, waiting when another process holds it.
+ * @param {string} pointsFile
+ * @returns {() => void} release
+ */
+function acquirePointsLock(pointsFile) {
+  let lastError;
+  let timeoutMs = LOCK_RETRY.minTimeoutMs;
+
+  for (let attempt = 0; attempt < LOCK_RETRY.attempts; attempt += 1) {
+    try {
+      return lockfile.lockSync(pointsFile, POINTS_LOCK_OPTIONS);
+    } catch (err) {
+      lastError = err;
+      const code = err && err.code;
+      if (code !== "ELOCKED") {
+        const message = err && err.message ? err.message : String(err);
+        throw new Error(`Failed to acquire points.json lock: ${message}`);
+      }
+      sleepSync(timeoutMs);
+      timeoutMs = Math.min(
+        LOCK_RETRY.maxTimeoutMs,
+        Math.ceil(timeoutMs * LOCK_RETRY.factor)
+      );
+    }
+  }
+
+  const message =
+    lastError && lastError.message ? lastError.message : "lock retries exhausted";
+  throw new Error(`Failed to acquire points.json lock: ${message}`);
+}
+
 function getTodayDate() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -30,25 +92,106 @@ function getWeekId(date = new Date()) {
   return monday.toISOString().slice(0, 10);
 }
 
-function loadPoints(pointsFile = POINTS_FILE) {
-  const data = readJsonFile(pointsFile, () => ({ users: {} }), path.basename(pointsFile));
+function emptyPointsData() {
+  return { users: {} };
+}
 
-  if (!data || typeof data !== "object" || !data.users || typeof data.users !== "object") {
-    logError(`${path.basename(pointsFile)} has invalid structure, resetting...`);
-    const fresh = { users: {} };
-    savePoints(fresh, pointsFile);
-    return fresh;
+/**
+ * Read-only snapshot. Never writes. Invalid/missing → empty structure in memory.
+ * @param {string} [pointsFile]
+ * @returns {{ users: Record<string, object> }}
+ */
+function readPointsSnapshot(pointsFile = POINTS_FILE) {
+  try {
+    if (!fs.existsSync(pointsFile)) {
+      return emptyPointsData();
+    }
+
+    const raw = fs.readFileSync(pointsFile, "utf8").trim();
+    if (!raw) {
+      return emptyPointsData();
+    }
+
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== "object" || !data.users || typeof data.users !== "object") {
+      return emptyPointsData();
+    }
+
+    return data;
+  } catch (err) {
+    logError(`Error reading ${path.basename(pointsFile)}:`, err);
+    return emptyPointsData();
+  }
+}
+
+/**
+ * Read-only load for commands/leaderboards. Does not repair the file on disk.
+ * @param {string} [pointsFile]
+ */
+function loadPoints(pointsFile = POINTS_FILE) {
+  return readPointsSnapshot(pointsFile);
+}
+
+/**
+ * Exclusive cross-process mutation of points.json.
+ * Lock → read → mutator(data) → atomic write → release (always).
+ *
+ * @template T
+ * @param {(data: { users: Record<string, object> }) => T} mutator
+ * @param {string} [pointsFile]
+ * @returns {T}
+ */
+function mutatePoints(mutator, pointsFile = POINTS_FILE) {
+  if (typeof mutator !== "function") {
+    throw new TypeError("mutatePoints requires a mutator function");
   }
 
-  return data;
+  const release = acquirePointsLock(pointsFile);
+
+  try {
+    const data = readPointsSnapshot(pointsFile);
+    const result = mutator(data);
+
+    try {
+      writeJsonFileAtomic(pointsFile, data);
+    } catch (err) {
+      const message = err && err.message ? err.message : String(err);
+      throw new Error(`Failed to write points.json: ${message}`);
+    }
+
+    return result;
+  } finally {
+    try {
+      release();
+    } catch (err) {
+      logError("Failed to release points.json lock:", err);
+    }
+  }
 }
 
+/**
+ * Replace points.json contents under lock (legacy/test helper).
+ * Prefer mutatePoints for read-modify-write.
+ *
+ * @param {{ users: Record<string, object> }} data
+ * @param {string} [pointsFile]
+ */
 function savePoints(data, pointsFile = POINTS_FILE) {
-  writeJsonFile(pointsFile, data);
+  if (!data || typeof data !== "object" || !data.users || typeof data.users !== "object") {
+    throw new Error("savePoints requires an object with a users map");
+  }
+
+  mutatePoints((current) => {
+    current.users = data.users;
+  }, pointsFile);
 }
 
-function ensurePointsFile() {
-  ensureJsonFile(POINTS_FILE, () => ({ users: {} }));
+function ensurePointsFile(pointsFile = POINTS_FILE) {
+  if (fs.existsSync(pointsFile)) {
+    return;
+  }
+
+  mutatePoints(() => undefined, pointsFile);
 }
 
 function isAdmin(userId) {
@@ -218,47 +361,45 @@ function ensureUserRecord(data, id, userName) {
  * Silent by design — callers should not announce "+1 activity".
  */
 function awardDailyActivityPoint(userId, userName, pointsFile = POINTS_FILE) {
-  const data = loadPoints(pointsFile);
-  const id = String(userId);
-  const today = getTodayDate();
-  const user = ensureUserRecord(data, id, userName);
+  return mutatePoints((data) => {
+    const id = String(userId);
+    const today = getTodayDate();
+    const user = ensureUserRecord(data, id, userName);
 
-  user.name = userName;
-  resetWeeklyIfNewWeek(user);
+    user.name = userName;
+    resetWeeklyIfNewWeek(user);
 
-  if (user.activityDate === today) {
+    if (user.activityDate === today) {
+      return {
+        awarded: false,
+        points: user.points,
+        pointsToAdd: 1,
+        rankUp: false,
+        rank: getRank(user.points),
+      };
+    }
+
+    const pointsBefore = user.points;
+    user.points += 1;
+    user.weeklyPoints += 1;
+    user.activityDate = today;
+
+    const previousRank = getRank(pointsBefore);
+    const rank = getRank(user.points);
+    const rankUp = previousRank.title !== rank.title;
+
     return {
-      awarded: false,
+      awarded: true,
       points: user.points,
       pointsToAdd: 1,
-      rankUp: false,
-      rank: getRank(user.points),
+      rankUp,
+      rank,
+      previousRank,
     };
-  }
-
-  const pointsBefore = user.points;
-  user.points += 1;
-  user.weeklyPoints += 1;
-  user.activityDate = today;
-  savePoints(data, pointsFile);
-
-  const previousRank = getRank(pointsBefore);
-  const rank = getRank(user.points);
-  const rankUp = previousRank.title !== rank.title;
-
-  return {
-    awarded: true,
-    points: user.points,
-    pointsToAdd: 1,
-    rankUp,
-    rank,
-    previousRank,
-  };
+  }, pointsFile);
 }
 
 function awardTriggerPoints(userId, userName, trigger, pointsFile = POINTS_FILE) {
-  const data = loadPoints(pointsFile);
-  const id = String(userId);
   const pointsToAdd = TRIGGERS[trigger];
 
   if (pointsToAdd === undefined) {
@@ -271,59 +412,63 @@ function awardTriggerPoints(userId, userName, trigger, pointsFile = POINTS_FILE)
     };
   }
 
-  const user = ensureUserRecord(data, id, userName);
-  user.name = userName;
-  resetTriggersIfNewDay(user);
-  resetWeeklyIfNewWeek(user);
+  return mutatePoints((data) => {
+    const id = String(userId);
+    const user = ensureUserRecord(data, id, userName);
+    user.name = userName;
+    resetTriggersIfNewDay(user);
+    resetWeeklyIfNewWeek(user);
 
-  if (user.triggersUsed.includes(trigger)) {
+    if (user.triggersUsed.includes(trigger)) {
+      return {
+        awarded: false,
+        points: user.points,
+        pointsToAdd,
+        rankUp: false,
+        rank: getRank(user.points),
+      };
+    }
+
+    const pointsBefore = user.points;
+    user.points += pointsToAdd;
+    user.weeklyPoints += pointsToAdd;
+    user.triggersUsed.push(trigger);
+
+    const previousRank = getRank(pointsBefore);
+    const rank = getRank(user.points);
+    const rankUp = previousRank.title !== rank.title;
+
     return {
-      awarded: false,
+      awarded: true,
       points: user.points,
       pointsToAdd,
-      rankUp: false,
-      rank: getRank(user.points),
+      rankUp,
+      rank,
+      previousRank,
     };
-  }
-
-  const pointsBefore = user.points;
-  user.points += pointsToAdd;
-  user.weeklyPoints += pointsToAdd;
-  user.triggersUsed.push(trigger);
-  savePoints(data, pointsFile);
-
-  const previousRank = getRank(pointsBefore);
-  const rank = getRank(user.points);
-  const rankUp = previousRank.title !== rank.title;
-
-  return {
-    awarded: true,
-    points: user.points,
-    pointsToAdd,
-    rankUp,
-    rank,
-    previousRank,
-  };
+  }, pointsFile);
 }
 
-function resetWeeklyForAll() {
-  const data = loadPoints();
-  const currentWeek = getWeekId();
+function resetWeeklyForAll(pointsFile = POINTS_FILE) {
+  mutatePoints((data) => {
+    const currentWeek = getWeekId();
 
-  for (const user of Object.values(data.users)) {
-    user.weeklyPoints = 0;
-    user.weekId = currentWeek;
-  }
-
-  savePoints(data);
+    for (const user of Object.values(data.users)) {
+      user.weeklyPoints = 0;
+      user.weekId = currentWeek;
+    }
+  }, pointsFile);
 }
 
 ensurePointsFile();
 
 module.exports = {
   TRIGGERS,
+  POINTS_LOCK_OPTIONS,
   loadPoints,
   savePoints,
+  mutatePoints,
+  readPointsSnapshot,
   isAdmin,
   getRank,
   isCommandText,

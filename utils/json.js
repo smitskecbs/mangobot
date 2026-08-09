@@ -4,6 +4,7 @@
  */
 
 const fs = require("fs");
+const path = require("path");
 const { error: logError } = require("./logger");
 
 function resolveDefault(defaultValue) {
@@ -12,6 +13,7 @@ function resolveDefault(defaultValue) {
 
 /**
  * Read a JSON file, returning defaultValue when the file is missing, empty, or invalid.
+ * May rewrite the file when recovering — prefer read-only helpers for shared mutable state.
  */
 function readJsonFile(filePath, defaultValue, label = filePath) {
   try {
@@ -41,11 +43,53 @@ function readJsonFile(filePath, defaultValue, label = filePath) {
 }
 
 /**
- * Write data to a JSON file. Logs errors instead of throwing.
+ * Atomically write JSON to filePath (same-directory temp + rename).
+ * Throws on failure after best-effort temp cleanup.
+ *
+ * @param {string} filePath
+ * @param {unknown} data
+ */
+function writeJsonFileAtomic(filePath, data) {
+  const dir = path.dirname(filePath);
+  const base = path.basename(filePath);
+  const unique = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const tempFile = path.join(dir, `${base}.tmp-${unique}`);
+  const payload = JSON.stringify(data, null, 2);
+
+  try {
+    fs.writeFileSync(tempFile, payload, "utf8");
+
+    try {
+      const fd = fs.openSync(tempFile, "r+");
+      try {
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch {
+      // fsync is best-effort; rename still replaces the target atomically on the same volume.
+    }
+
+    fs.renameSync(tempFile, filePath);
+  } catch (err) {
+    try {
+      if (fs.existsSync(tempFile)) {
+        fs.unlinkSync(tempFile);
+      }
+    } catch {
+      // ignore cleanup errors
+    }
+    throw err;
+  }
+}
+
+/**
+ * Write data to a JSON file using atomic temp+rename.
+ * Logs errors instead of throwing (legacy helper behavior).
  */
 function writeJsonFile(filePath, data) {
   try {
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+    writeJsonFileAtomic(filePath, data);
   } catch (err) {
     logError(`Error writing ${filePath}:`, err);
   }
@@ -60,4 +104,9 @@ function ensureJsonFile(filePath, defaultValue) {
   }
 }
 
-module.exports = { readJsonFile, writeJsonFile, ensureJsonFile };
+module.exports = {
+  readJsonFile,
+  writeJsonFile,
+  writeJsonFileAtomic,
+  ensureJsonFile,
+};

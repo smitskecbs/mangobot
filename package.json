@@ -11,6 +11,7 @@
   "description": "",
   "dependencies": {
     "dotenv": "^17.4.2",
+    "proper-lockfile": "^4.1.2",
     "telegraf": "^4.16.3"
   }
 }
