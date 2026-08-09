@@ -6,7 +6,10 @@ require("dotenv").config();
  * and start it alongside the bot:
  *
  *   cd /home/adje/mangobot
- *   BOT_TOKEN=your_token TELEGRAM_CHAT_ID=your_chat_id PORT=8787 node highscore-server.js
+ *   BOT_TOKEN=your_token TELEGRAM_CHAT_ID=your_chat_id TELEGRAM_BOT_USERNAME=YourBot PORT=8787 node highscore-server.js
+ *
+ * TELEGRAM_BOT_USERNAME is optional but recommended so highscore announcements can
+ * deep-link into private /start snake|bounch (no signed tokens in group messages).
  *
  * Endpoints:
  *   POST /snake-highscore

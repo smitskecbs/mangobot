@@ -467,8 +467,31 @@ runTest("getBotUsername / buildPrivateDeepLink helpers", () => {
     "https://t.me/MyBot?start=snake"
   );
   assert.strictEqual(buildPrivateDeepLink(null, "snake"), null);
+  assert.strictEqual(buildPrivateDeepLink("ab", "snake"), null);
   assert.strictEqual(getGroupGameMessage("snake"), GROUP_SNAKE_MESSAGE);
   assert.deepStrictEqual(getGroupGameGateExtra({ botInfo: {} }, "snake"), {});
+});
+
+runTest("Points menu-button includes game claimed + unlock lines", () => {
+  resetPointsFile({
+    users: {
+      [String(USER_A)]: {
+        name: "Ada",
+        points: 5,
+        weeklyPoints: 2,
+        weekId: "2026-08-04",
+        triggerDate: null,
+        triggersUsed: [],
+        activityDate: null,
+      },
+    },
+  });
+  const ctx = createMockCtx({ chatType: "private", userId: USER_A });
+  handlePoints(ctx, { pointsFile: testPointsFile });
+  const text = ctx.replies[0].text;
+  assert.ok(text.includes("⬜ Snake"));
+  assert.ok(text.includes("⬜ Bounch"));
+  assert.ok(text.includes("🎮 Bounch unlocks: 0 / 7"));
 });
 
 runTest("isPrivateMenuLabel exact match only", () => {

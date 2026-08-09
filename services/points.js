@@ -258,7 +258,55 @@ function hasClaimedDailyActivity(user) {
 }
 
 /**
- * Multi-line "Claimed today" block for /points (activity + claimed triggers).
+ * Read-only: Snake daily play XP claimed today (UTC).
+ * Missing/null game or snakePlayDate → not claimed. Does not mutate.
+ */
+function hasClaimedSnakeToday(user) {
+  if (!user || typeof user !== "object" || !user.game || typeof user.game !== "object") {
+    return false;
+  }
+  return user.game.snakePlayDate === getTodayDate();
+}
+
+/**
+ * Read-only: Bounch daily play XP claimed today (UTC).
+ * Missing/null game or bounchPlayDate → not claimed. Does not mutate.
+ */
+function hasClaimedBounchToday(user) {
+  if (!user || typeof user !== "object" || !user.game || typeof user.game !== "object") {
+    return false;
+  }
+  return user.game.bounchPlayDate === getTodayDate();
+}
+
+/**
+ * Read-only display value for Bounch unlock progress (0–7).
+ * Missing/malformed → 0. Does not mutate user or points.json.
+ */
+function getBounchUnlockedMaxForDisplay(user) {
+  if (!user || typeof user !== "object" || !user.game || typeof user.game !== "object") {
+    return 0;
+  }
+  const raw = user.game.bounchUnlockedMax;
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 0) {
+    return 0;
+  }
+  if (raw > 7) {
+    return 7;
+  }
+  return raw;
+}
+
+/**
+ * Single line for /points Bounch unlock progress.
+ */
+function formatBounchUnlocksLine(user) {
+  return `🎮 Bounch unlocks: ${getBounchUnlockedMaxForDisplay(user)} / 7`;
+}
+
+/**
+ * Multi-line "Claimed today" block for /points (activity + triggers + games).
+ * Read-only — does not mutate user or points.json.
  */
 function formatClaimedTodayLines(user) {
   const lines = [
@@ -268,6 +316,9 @@ function formatClaimedTodayLines(user) {
   for (const trigger of getTriggersClaimedToday(user)) {
     lines.push(`✅ ${trigger}`);
   }
+
+  lines.push(hasClaimedSnakeToday(user) ? "✅ Snake" : "⬜ Snake");
+  lines.push(hasClaimedBounchToday(user) ? "✅ Bounch" : "⬜ Bounch");
 
   return lines.join("\n");
 }
@@ -606,6 +657,10 @@ module.exports = {
   getCombinedRankUpReply,
   getTriggersClaimedToday,
   hasClaimedDailyActivity,
+  hasClaimedSnakeToday,
+  hasClaimedBounchToday,
+  getBounchUnlockedMaxForDisplay,
+  formatBounchUnlocksLine,
   formatClaimedTodayLines,
   getUserRecord,
   getEffectiveWeeklyPoints,

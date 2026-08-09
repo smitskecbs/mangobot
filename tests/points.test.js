@@ -21,6 +21,10 @@ const {
   savePoints,
   getEffectiveWeeklyPoints,
   hasClaimedDailyActivity,
+  hasClaimedSnakeToday,
+  hasClaimedBounchToday,
+  getBounchUnlockedMaxForDisplay,
+  formatBounchUnlocksLine,
   getTriggersClaimedToday,
   formatClaimedTodayLines,
 } = require("../services/points");
@@ -390,7 +394,7 @@ runTest("activityDate today means daily activity claimed", () => {
   assert.strictEqual(hasClaimedDailyActivity({ activityDate: today }), true);
   assert.strictEqual(
     formatClaimedTodayLines({ activityDate: today, triggerDate: null, triggersUsed: [] }),
-    "✅ Daily activity"
+    "✅ Daily activity\n⬜ Snake\n⬜ Bounch"
   );
 });
 
@@ -402,7 +406,7 @@ runTest("activityDate other day means daily activity not claimed", () => {
       triggerDate: null,
       triggersUsed: [],
     }),
-    "⬜ Daily activity"
+    "⬜ Daily activity\n⬜ Snake\n⬜ Bounch"
   );
 });
 
@@ -423,7 +427,7 @@ runTest("trigger claimed-today status still works with activity lines", () => {
   assert.deepStrictEqual(getTriggersClaimedToday(user), ["gm", "gmango"]);
   assert.strictEqual(
     formatClaimedTodayLines(user),
-    "✅ Daily activity\n✅ gm\n✅ gmango"
+    "✅ Daily activity\n✅ gm\n✅ gmango\n⬜ Snake\n⬜ Bounch"
   );
 
   const triggersOnly = {
@@ -432,8 +436,106 @@ runTest("trigger claimed-today status still works with activity lines", () => {
   };
   assert.strictEqual(
     formatClaimedTodayLines(triggersOnly),
-    "⬜ Daily activity\n✅ gm\n✅ gmango"
+    "⬜ Daily activity\n✅ gm\n✅ gmango\n⬜ Snake\n⬜ Bounch"
   );
+});
+
+runTest("legacy user without game → Snake/Bounch unchecked and unlocks 0/7", () => {
+  const legacy = { activityDate: null, triggerDate: null, triggersUsed: [] };
+  assert.strictEqual(hasClaimedSnakeToday(legacy), false);
+  assert.strictEqual(hasClaimedBounchToday(legacy), false);
+  assert.strictEqual(getBounchUnlockedMaxForDisplay(legacy), 0);
+  assert.strictEqual(formatBounchUnlocksLine(legacy), "🎮 Bounch unlocks: 0 / 7");
+  assert.strictEqual(
+    formatClaimedTodayLines(legacy),
+    "⬜ Daily activity\n⬜ Snake\n⬜ Bounch"
+  );
+  assert.strictEqual(hasClaimedSnakeToday(undefined), false);
+  assert.strictEqual(hasClaimedBounchToday(null), false);
+  assert.strictEqual(getBounchUnlockedMaxForDisplay({}), 0);
+});
+
+runTest("snakePlayDate today → claimed; yesterday → not claimed", () => {
+  const today = new Date().toISOString().slice(0, 10);
+  assert.strictEqual(
+    hasClaimedSnakeToday({ game: { snakePlayDate: today } }),
+    true
+  );
+  assert.ok(formatClaimedTodayLines({ game: { snakePlayDate: today } }).includes("✅ Snake"));
+  assert.strictEqual(
+    hasClaimedSnakeToday({ game: { snakePlayDate: "2000-01-01" } }),
+    false
+  );
+  assert.ok(
+    formatClaimedTodayLines({ game: { snakePlayDate: "2000-01-01" } }).includes(
+      "⬜ Snake"
+    )
+  );
+});
+
+runTest("bounchPlayDate today → claimed; yesterday → not claimed", () => {
+  const today = new Date().toISOString().slice(0, 10);
+  assert.strictEqual(
+    hasClaimedBounchToday({ game: { bounchPlayDate: today } }),
+    true
+  );
+  assert.ok(
+    formatClaimedTodayLines({ game: { bounchPlayDate: today } }).includes("✅ Bounch")
+  );
+  assert.strictEqual(
+    hasClaimedBounchToday({ game: { bounchPlayDate: "2000-01-01" } }),
+    false
+  );
+  assert.ok(
+    formatClaimedTodayLines({ game: { bounchPlayDate: "2000-01-01" } }).includes(
+      "⬜ Bounch"
+    )
+  );
+});
+
+runTest("bounchUnlockedMax display clamps and is read-only", () => {
+  assert.strictEqual(
+    getBounchUnlockedMaxForDisplay({ game: { bounchUnlockedMax: 4 } }),
+    4
+  );
+  assert.strictEqual(
+    formatBounchUnlocksLine({ game: { bounchUnlockedMax: 4 } }),
+    "🎮 Bounch unlocks: 4 / 7"
+  );
+  assert.strictEqual(
+    getBounchUnlockedMaxForDisplay({ game: { bounchUnlockedMax: 7 } }),
+    7
+  );
+  assert.strictEqual(
+    formatBounchUnlocksLine({ game: { bounchUnlockedMax: 7 } }),
+    "🎮 Bounch unlocks: 7 / 7"
+  );
+  assert.strictEqual(
+    getBounchUnlockedMaxForDisplay({ game: { bounchUnlockedMax: 99 } }),
+    7
+  );
+  assert.strictEqual(
+    getBounchUnlockedMaxForDisplay({ game: { bounchUnlockedMax: -3 } }),
+    0
+  );
+  assert.strictEqual(
+    getBounchUnlockedMaxForDisplay({ game: { bounchUnlockedMax: 2.5 } }),
+    0
+  );
+  assert.strictEqual(
+    getBounchUnlockedMaxForDisplay({ game: { bounchUnlockedMax: "4" } }),
+    0
+  );
+  assert.strictEqual(
+    getBounchUnlockedMaxForDisplay({ game: { bounchUnlockedMax: null } }),
+    0
+  );
+
+  const user = { game: { bounchUnlockedMax: 99 } };
+  getBounchUnlockedMaxForDisplay(user);
+  formatBounchUnlocksLine(user);
+  formatClaimedTodayLines(user);
+  assert.strictEqual(user.game.bounchUnlockedMax, 99);
 });
 
 fs.rmSync(tempDir, { recursive: true, force: true });

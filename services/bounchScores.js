@@ -5,6 +5,7 @@
 const fs = require("fs");
 const path = require("path");
 const { error: logError } = require("../utils/logger");
+const { appendHighscoreAnnouncementPlayCta } = require("../utils/botMenu");
 
 const MIN_LEVEL = 1;
 const MAX_LEVEL = 7;
@@ -274,28 +275,24 @@ function buildApiResponse(data, options) {
   return response;
 }
 
-function buildGlobalBestMessage(name, level) {
-  return `🏆 New Bounch global best!
+function buildGlobalBestMessage(name, level, botUsername) {
+  const base = `🏆 New Bounch global best!
 
 🥭 ${name}
 🎮 Level ${level}
 
-Can anyone beat this?
-
-Play:
-${PLAY_URL}`;
+Can anyone beat this?`;
+  return appendHighscoreAnnouncementPlayCta(base, "bounch", botUsername);
 }
 
-function buildPersonalBestMessage(name, level, rank) {
-  return `🥭 New Bounch personal best!
+function buildPersonalBestMessage(name, level, rank, botUsername) {
+  const base = `🥭 New Bounch personal best!
 
 🥭 ${name}
 🎮 Level ${level}
 
-Current rank: #${rank}
-
-Play:
-${PLAY_URL}`;
+Current rank: #${rank}`;
+  return appendHighscoreAnnouncementPlayCta(base, "bounch", botUsername);
 }
 
 /**

@@ -41,16 +41,45 @@ function isPrivateMenuLabel(text) {
 }
 
 /**
+ * Normalize/validate a Telegram bot username for public deep-links.
+ * Strips a leading @; rejects malformed values. No secrets involved.
+ * @param {unknown} username
+ * @returns {string|null}
+ */
+function normalizeBotUsername(username) {
+  if (typeof username !== "string") {
+    return null;
+  }
+  let value = username.trim();
+  if (!value) {
+    return null;
+  }
+  if (value.startsWith("@")) {
+    value = value.slice(1).trim();
+  }
+  // Telegram: 5–32 chars, starts with a letter, then letters/digits/underscore.
+  if (!/^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(value)) {
+    return null;
+  }
+  return value;
+}
+
+/**
+ * Bot username from TELEGRAM_BOT_USERNAME (for highscore-server / non-Telegraf).
+ * @returns {string|null}
+ */
+function getConfiguredBotUsername() {
+  return normalizeBotUsername(process.env.TELEGRAM_BOT_USERNAME);
+}
+
+/**
  * Prefer live bot username from Telegraf context (ctx.botInfo).
  * @param {object} ctx
  * @returns {string|null}
  */
 function getBotUsername(ctx) {
   const username = ctx && ctx.botInfo && ctx.botInfo.username;
-  if (typeof username === "string" && username.trim()) {
-    return username.trim();
-  }
-  return null;
+  return normalizeBotUsername(username);
 }
 
 /**
@@ -59,13 +88,52 @@ function getBotUsername(ctx) {
  * @returns {string|null}
  */
 function buildPrivateDeepLink(username, payload) {
-  if (typeof username !== "string" || !username.trim()) {
+  const safeUsername = normalizeBotUsername(username);
+  if (!safeUsername) {
     return null;
   }
   if (typeof payload !== "string" || !payload.trim()) {
     return null;
   }
-  return `https://t.me/${username.trim()}?start=${encodeURIComponent(payload.trim())}`;
+  return `https://t.me/${safeUsername}?start=${encodeURIComponent(payload.trim())}`;
+}
+
+/**
+ * Public highscore announcement CTA → private /start deep-link (no signed token).
+ * Missing/invalid username → null (caller omits CTA; never falls back to Labs URL).
+ *
+ * @param {"snake"|"bounch"} game
+ * @param {string|null|undefined} [username]
+ * @returns {string|null}
+ */
+function buildHighscoreAnnouncementPlayCta(game, username = getConfiguredBotUsername()) {
+  if (game !== "snake" && game !== "bounch") {
+    return null;
+  }
+  const url = buildPrivateDeepLink(username, game);
+  if (!url) {
+    return null;
+  }
+  return `🎮 Want to challenge it?\nPlay with your profile:\n${url}`;
+}
+
+/**
+ * Append private play CTA to an announcement body when a valid bot username exists.
+ * @param {string} baseText
+ * @param {"snake"|"bounch"} game
+ * @param {string|null|undefined} [username]
+ * @returns {string}
+ */
+function appendHighscoreAnnouncementPlayCta(
+  baseText,
+  game,
+  username = getConfiguredBotUsername()
+) {
+  const cta = buildHighscoreAnnouncementPlayCta(game, username);
+  if (!cta) {
+    return baseText;
+  }
+  return `${baseText}\n\n${cta}`;
 }
 
 function getPrivateMenuKeyboard() {
@@ -117,8 +185,12 @@ module.exports = {
   isPrivateChat,
   isGroupChat,
   isPrivateMenuLabel,
+  normalizeBotUsername,
+  getConfiguredBotUsername,
   getBotUsername,
   buildPrivateDeepLink,
+  buildHighscoreAnnouncementPlayCta,
+  appendHighscoreAnnouncementPlayCta,
   getPrivateMenuKeyboard,
   getGroupGameMessage,
   getGroupGameGateExtra,

@@ -5,6 +5,7 @@
 const fs = require("fs");
 const path = require("path");
 const { error: logError } = require("../utils/logger");
+const { appendHighscoreAnnouncementPlayCta } = require("../utils/botMenu");
 
 const MAX_SCORE = 100_000;
 const MAX_NAME_LENGTH = 24;
@@ -301,28 +302,24 @@ function buildApiResponse(data, options) {
   return response;
 }
 
-function buildGlobalHighscoreMessage(name, score) {
-  return `🐍 NEW GLOBAL HIGHSCORE!
+function buildGlobalHighscoreMessage(name, score, botUsername) {
+  const base = `🐍 NEW GLOBAL HIGHSCORE!
 
 🏆 ${name}
 🎮 ${score} points
 
-Can anyone beat this?
-
-Play:
-${PLAY_URL}`;
+Can anyone beat this?`;
+  return appendHighscoreAnnouncementPlayCta(base, "snake", botUsername);
 }
 
-function buildPersonalBestMessage(name, score, rank) {
-  return `🐍 NEW PERSONAL BEST!
+function buildPersonalBestMessage(name, score, rank, botUsername) {
+  const base = `🐍 NEW PERSONAL BEST!
 
 🥭 ${name}
 🎮 ${score} points
 
-Current rank: #${rank}
-
-Play:
-${PLAY_URL}`;
+Current rank: #${rank}`;
+  return appendHighscoreAnnouncementPlayCta(base, "snake", botUsername);
 }
 
 /**
