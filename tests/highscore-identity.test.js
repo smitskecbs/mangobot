@@ -465,10 +465,15 @@ runTest("malformed token does not throw and stays unverified", () => {
   );
 });
 
-runTest("highscore-server source does not write points.json", () => {
+runTest("highscore-server awards XP via points helpers without embedding points.json path", () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "highscore-server.js"), "utf8");
+  // Score API must not hardcode the points file path; awards go through services/points defaults.
   assert.ok(!source.includes("points.json"));
-  assert.ok(!/require\(["'].*points/.test(source));
+  assert.ok(source.includes('require("./services/points")'));
+  assert.ok(source.includes("awardSnakeGameXp"));
+  assert.ok(source.includes("awardBounchGameXp"));
+  assert.ok(source.includes("tryAwardSnakeGameXp"));
+  assert.ok(source.includes("tryAwardBounchGameXp"));
   assert.ok(source.includes('verifyOptionalGameIdentity(body.t, "snake")'));
   assert.ok(source.includes('verifyOptionalGameIdentity(body.t, "bounch")'));
   assert.ok(!source.includes("require.main"));

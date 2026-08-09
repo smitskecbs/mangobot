@@ -357,6 +357,134 @@ function ensureUserRecord(data, id, userName) {
 }
 
 /**
+ * Ensure optional game XP state exists on a user record (in-memory defaults).
+ * @param {object} user
+ * @returns {{ snakePlayDate: string|null, bounchPlayDate: string|null, bounchUnlockedMax: number }}
+ */
+function ensureGameState(user) {
+  if (!user.game || typeof user.game !== "object") {
+    user.game = {
+      snakePlayDate: null,
+      bounchPlayDate: null,
+      bounchUnlockedMax: 0,
+    };
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(user.game, "snakePlayDate")) {
+    user.game.snakePlayDate = null;
+  }
+  if (!Object.prototype.hasOwnProperty.call(user.game, "bounchPlayDate")) {
+    user.game.bounchPlayDate = null;
+  }
+
+  let unlockedMax = user.game.bounchUnlockedMax;
+  if (typeof unlockedMax !== "number" || !Number.isInteger(unlockedMax) || unlockedMax < 0) {
+    unlockedMax = 0;
+  }
+  if (unlockedMax > 7) {
+    unlockedMax = 7;
+  }
+  user.game.bounchUnlockedMax = unlockedMax;
+
+  return user.game;
+}
+
+function emptyGameXpPayload() {
+  return { awarded: 0, dailyPlay: 0, unlock: 0 };
+}
+
+function buildGameXpResult(pointsBefore, pointsAfter, dailyPlay, unlock) {
+  const pointsToAdd = dailyPlay + unlock;
+  const previousRank = getRank(pointsBefore);
+  const rank = getRank(pointsAfter);
+  return {
+    awarded: pointsToAdd > 0,
+    points: pointsAfter,
+    pointsToAdd,
+    xp: {
+      awarded: pointsToAdd,
+      dailyPlay,
+      unlock,
+    },
+    rankUp: previousRank.title !== rank.title,
+    rank,
+    previousRank,
+  };
+}
+
+/**
+ * First verified Snake play per UTC day → +1 XP.
+ */
+function awardSnakeGameXp(userId, userName, pointsFile = POINTS_FILE) {
+  return mutatePoints((data) => {
+    const id = String(userId);
+    const user = ensureUserRecord(data, id, userName);
+    user.name = userName;
+    resetWeeklyIfNewWeek(user);
+    const game = ensureGameState(user);
+    const today = getTodayDate();
+    const pointsBefore = user.points;
+
+    let dailyPlay = 0;
+    if (game.snakePlayDate !== today) {
+      dailyPlay = 1;
+      game.snakePlayDate = today;
+      user.points += 1;
+      user.weeklyPoints += 1;
+    }
+
+    return buildGameXpResult(pointsBefore, user.points, dailyPlay, 0);
+  }, pointsFile);
+}
+
+/**
+ * Verified Bounch play: +1 first UTC day + unlock XP for newly reached levels 1..7.
+ * Direct level L unlocks 1..L when above current bounchUnlockedMax.
+ */
+function awardBounchGameXp(userId, userName, level, pointsFile = POINTS_FILE) {
+  if (typeof level !== "number" || !Number.isInteger(level) || level < 1 || level > 7) {
+    return {
+      awarded: false,
+      points: 0,
+      pointsToAdd: 0,
+      xp: emptyGameXpPayload(),
+      rankUp: false,
+      rank: getRank(0),
+    };
+  }
+
+  return mutatePoints((data) => {
+    const id = String(userId);
+    const user = ensureUserRecord(data, id, userName);
+    user.name = userName;
+    resetWeeklyIfNewWeek(user);
+    const game = ensureGameState(user);
+    const today = getTodayDate();
+    const pointsBefore = user.points;
+
+    let dailyPlay = 0;
+    if (game.bounchPlayDate !== today) {
+      dailyPlay = 1;
+      game.bounchPlayDate = today;
+    }
+
+    let unlock = 0;
+    if (level > game.bounchUnlockedMax) {
+      unlock = level - game.bounchUnlockedMax;
+      game.bounchUnlockedMax = level;
+    }
+
+    const pointsToAdd = dailyPlay + unlock;
+    if (pointsToAdd > 0) {
+      user.points += pointsToAdd;
+      user.weeklyPoints += pointsToAdd;
+    }
+
+    return buildGameXpResult(pointsBefore, user.points, dailyPlay, unlock);
+  }, pointsFile);
+}
+
+/**
  * Award 1 lifetime/weekly point for the first normal chat message of the UTC day.
  * Silent by design — callers should not announce "+1 activity".
  */
@@ -483,5 +611,9 @@ module.exports = {
   getEffectiveWeeklyPoints,
   awardDailyActivityPoint,
   awardTriggerPoints,
+  awardSnakeGameXp,
+  awardBounchGameXp,
+  ensureGameState,
+  emptyGameXpPayload,
   resetWeeklyForAll,
 };

@@ -26,6 +26,11 @@ const {
 } = require("./services/snakeScores");
 const bounchScores = require("./services/bounchScores");
 const { verifyOptionalGameIdentity } = require("./utils/gameIdentity");
+const {
+  awardSnakeGameXp,
+  awardBounchGameXp,
+  emptyGameXpPayload,
+} = require("./services/points");
 
 const PORT = Number.parseInt(process.env.PORT || "8787", 10);
 const BOT_TOKEN = process.env.BOT_TOKEN?.trim();
@@ -121,22 +126,77 @@ function applyCorsHeaders(res, origin) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 }
 
-function sendJson(res, statusCode, body, origin, identity) {
+function sendJson(res, statusCode, body, origin, identity, xp) {
   res.statusCode = statusCode;
   res.setHeader("content-type", "application/json; charset=utf-8");
 
   applyCorsHeaders(res, origin);
 
+  let payload = body;
+
   if (identity) {
-    body = {
-      ...body,
+    payload = {
+      ...payload,
       identity: {
         verified: Boolean(identity.verified),
       },
     };
   }
 
-  res.end(JSON.stringify(body));
+  if (xp) {
+    payload = {
+      ...payload,
+      xp: {
+        awarded: Number(xp.awarded) || 0,
+        dailyPlay: Number(xp.dailyPlay) || 0,
+        unlock: Number(xp.unlock) || 0,
+      },
+    };
+  }
+
+  res.end(JSON.stringify(payload));
+}
+
+function publicXpFromAward(result) {
+  if (!result || !result.xp) {
+    return emptyGameXpPayload();
+  }
+
+  return {
+    awarded: result.xp.awarded || 0,
+    dailyPlay: result.xp.dailyPlay || 0,
+    unlock: result.xp.unlock || 0,
+  };
+}
+
+/**
+ * Award game XP only for verified identity. Never throws to callers.
+ * Score persistence must remain successful even if this fails.
+ */
+function tryAwardSnakeGameXp(identity, playerName) {
+  if (!identity || !identity.verified || !identity.uid) {
+    return emptyGameXpPayload();
+  }
+
+  try {
+    return publicXpFromAward(awardSnakeGameXp(identity.uid, playerName));
+  } catch {
+    console.error("[ManGo Highscore API] Failed to award Snake XP");
+    return emptyGameXpPayload();
+  }
+}
+
+function tryAwardBounchGameXp(identity, playerName, level) {
+  if (!identity || !identity.verified || !identity.uid) {
+    return emptyGameXpPayload();
+  }
+
+  try {
+    return publicXpFromAward(awardBounchGameXp(identity.uid, playerName, level));
+  } catch {
+    console.error("[ManGo Highscore API] Failed to award Bounch XP");
+    return emptyGameXpPayload();
+  }
 }
 
 async function sendTelegramMessage(text) {
@@ -205,6 +265,9 @@ async function handleSnakeHighscore(req, res, origin) {
     return;
   }
 
+  // XP only after a valid persisted submit; failures here must not undo the score.
+  const xp = tryAwardSnakeGameXp(identity, name);
+
   const { data, result } = submission;
 
   const responseBase = {
@@ -229,7 +292,8 @@ async function handleSnakeHighscore(req, res, origin) {
         reason: "not_personal_best",
       }),
       origin,
-      identity
+      identity,
+      xp
     );
     return;
   }
@@ -246,7 +310,8 @@ async function handleSnakeHighscore(req, res, origin) {
         reason: "telegram_not_configured",
       }),
       origin,
-      identity
+      identity,
+      xp
     );
     return;
   }
@@ -269,7 +334,8 @@ async function handleSnakeHighscore(req, res, origin) {
         reason: posted ? undefined : "telegram_send_failed",
       }),
       origin,
-      identity
+      identity,
+      xp
     );
   } catch {
     sendJson(
@@ -283,7 +349,8 @@ async function handleSnakeHighscore(req, res, origin) {
         reason: "telegram_send_failed",
       }),
       origin,
-      identity
+      identity,
+      xp
     );
   }
 }
@@ -334,6 +401,9 @@ async function handleBounchHighscore(req, res, origin) {
     return;
   }
 
+  // XP only after a valid persisted submit; failures here must not undo the level.
+  const xp = tryAwardBounchGameXp(identity, name, level);
+
   const { data, result } = submission;
 
   const responseBase = {
@@ -359,7 +429,8 @@ async function handleBounchHighscore(req, res, origin) {
         reason: "not_personal_best",
       }),
       origin,
-      identity
+      identity,
+      xp
     );
     return;
   }
@@ -376,7 +447,8 @@ async function handleBounchHighscore(req, res, origin) {
         reason: "telegram_not_configured",
       }),
       origin,
-      identity
+      identity,
+      xp
     );
     return;
   }
@@ -399,7 +471,8 @@ async function handleBounchHighscore(req, res, origin) {
         reason: posted ? undefined : "telegram_send_failed",
       }),
       origin,
-      identity
+      identity,
+      xp
     );
   } catch {
     sendJson(
@@ -413,7 +486,8 @@ async function handleBounchHighscore(req, res, origin) {
         reason: "telegram_send_failed",
       }),
       origin,
-      identity
+      identity,
+      xp
     );
   }
 }
