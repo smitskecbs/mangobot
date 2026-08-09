@@ -11,6 +11,7 @@ const assert = require("assert");
 const {
   migrateInMemory,
   readScoresFile,
+  writeScoresFile,
   submitScore,
   getDisplayLeaderboard,
   normalizeNameKey,
@@ -21,6 +22,7 @@ const {
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-snake-test-"));
 const testFile = path.join(tempDir, "snake-highscores.json");
+const FIXED_OLD_TIMESTAMP = "2000-01-01T00:00:00.000Z";
 
 function resetFile(contents = null) {
   if (fs.existsSync(testFile)) {
@@ -30,6 +32,17 @@ function resetFile(contents = null) {
   if (contents !== null) {
     fs.writeFileSync(testFile, `${JSON.stringify(contents, null, 2)}\n`, "utf8");
   }
+}
+
+function patchTopPlayerTimestamps(fields) {
+  const data = readScoresFile(testFile);
+  Object.assign(data.leaderboard[0], fields);
+  writeScoresFile(testFile, data);
+}
+
+function assertIsoTimestamp(value) {
+  assert.strictEqual(typeof value, "string");
+  assert.ok(!Number.isNaN(Date.parse(value)), `expected ISO timestamp, got ${value}`);
 }
 
 function runTest(name, fn) {
@@ -270,12 +283,16 @@ runTest("equal score increments gamesPlayed", () => {
 
 runTest("new personal best updates score and updatedAt", () => {
   submitScore(testFile, "Kevin", 500);
-  const before = readScoresFile(testFile).leaderboard[0].updatedAt;
+  patchTopPlayerTimestamps({ updatedAt: FIXED_OLD_TIMESTAMP });
+
   const { data, result } = submitScore(testFile, "Kevin", 620);
+  const updatedAt = data.leaderboard[0].updatedAt;
 
   assert.strictEqual(result.personalBest, true);
   assert.strictEqual(data.leaderboard[0].score, 620);
-  assert.notStrictEqual(data.leaderboard[0].updatedAt, before);
+  assert.notStrictEqual(updatedAt, FIXED_OLD_TIMESTAMP);
+  assertIsoTimestamp(updatedAt);
+  assert.ok(Date.parse(updatedAt) > Date.parse(FIXED_OLD_TIMESTAMP));
 });
 
 runTest("lower score does not change updatedAt", () => {
@@ -289,11 +306,14 @@ runTest("lower score does not change updatedAt", () => {
 
 runTest("lastPlayedAt changes on every valid run", () => {
   submitScore(testFile, "Kevin", 500);
-  const first = readScoresFile(testFile).leaderboard[0].lastPlayedAt;
+  patchTopPlayerTimestamps({ lastPlayedAt: FIXED_OLD_TIMESTAMP });
+
   submitScore(testFile, "Kevin", 480);
   const second = readScoresFile(testFile).leaderboard[0].lastPlayedAt;
 
-  assert.notStrictEqual(second, first);
+  assert.notStrictEqual(second, FIXED_OLD_TIMESTAMP);
+  assertIsoTimestamp(second);
+  assert.ok(Date.parse(second) > Date.parse(FIXED_OLD_TIMESTAMP));
 });
 
 runTest("existing leaderboard entry without stats migrates safely", () => {

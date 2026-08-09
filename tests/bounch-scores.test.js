@@ -22,6 +22,7 @@ const {
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-bounch-test-"));
 const testFile = path.join(tempDir, "bounch-highscores.json");
+const FIXED_OLD_TIMESTAMP = "2000-01-01T00:00:00.000Z";
 
 function resetFile(contents = null) {
   if (fs.existsSync(testFile)) {
@@ -41,6 +42,17 @@ function resetFile(contents = null) {
 
     fs.writeFileSync(testFile, `${JSON.stringify(contents, null, 2)}\n`, "utf8");
   }
+}
+
+function patchTopPlayerTimestamps(fields) {
+  const data = readScoresFile(testFile);
+  Object.assign(data.leaderboard[0], fields);
+  writeScoresFile(testFile, data);
+}
+
+function assertIsoTimestamp(value) {
+  assert.strictEqual(typeof value, "string");
+  assert.ok(!Number.isNaN(Date.parse(value)), `expected ISO timestamp, got ${value}`);
 }
 
 function runTest(name, fn) {
@@ -109,11 +121,14 @@ runTest("lastLevel is updated", () => {
 
 runTest("lastPlayedAt is updated", () => {
   submitLevel(testFile, "Kevin", 1);
-  const first = readScoresFile(testFile).leaderboard[0].lastPlayedAt;
+  patchTopPlayerTimestamps({ lastPlayedAt: FIXED_OLD_TIMESTAMP });
+
   submitLevel(testFile, "Kevin", 1);
   const second = readScoresFile(testFile).leaderboard[0].lastPlayedAt;
 
-  assert.notStrictEqual(second, first);
+  assert.notStrictEqual(second, FIXED_OLD_TIMESTAMP);
+  assertIsoTimestamp(second);
+  assert.ok(Date.parse(second) > Date.parse(FIXED_OLD_TIMESTAMP));
 });
 
 runTest("case-insensitive name matching", () => {
@@ -357,12 +372,16 @@ runTest("equal bestLevels ordered by newest updatedAt", () => {
 
 runTest("new personal best updates updatedAt", () => {
   submitLevel(testFile, "Kevin", 2);
-  const before = readScoresFile(testFile).leaderboard[0].updatedAt;
+  patchTopPlayerTimestamps({ updatedAt: FIXED_OLD_TIMESTAMP });
+
   const { data, result } = submitLevel(testFile, "Kevin", 4);
+  const updatedAt = data.leaderboard[0].updatedAt;
 
   assert.strictEqual(result.personalBest, true);
   assert.strictEqual(data.leaderboard[0].bestLevel, 4);
-  assert.notStrictEqual(data.leaderboard[0].updatedAt, before);
+  assert.notStrictEqual(updatedAt, FIXED_OLD_TIMESTAMP);
+  assertIsoTimestamp(updatedAt);
+  assert.ok(Date.parse(updatedAt) > Date.parse(FIXED_OLD_TIMESTAMP));
 });
 
 runTest("lower level does not change updatedAt", () => {
