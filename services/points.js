@@ -1,5 +1,5 @@
 /**
- * Community points system — storage, triggers, ranks, and weekly tracking.
+ * Community points system — storage, triggers, ranks, weekly tracking, and daily activity.
  */
 
 const path = require("path");
@@ -67,6 +67,13 @@ function getRank(points) {
 }
 
 /**
+ * Telegram commands start with "/" and must not earn daily activity points.
+ */
+function isCommandText(text) {
+  return typeof text === "string" && text.trim().startsWith("/");
+}
+
+/**
  * Detect a daily trigger as a whole word (case-insensitive).
  * Allows emoji/punctuation around the word; rejects matches inside other words.
  */
@@ -105,6 +112,7 @@ function getUserRecord(data, userId) {
       name: "Unknown",
       triggerDate: null,
       triggersUsed: [],
+      activityDate: null,
     }
   );
 }
@@ -152,6 +160,76 @@ function getAutomaticTriggerReply(result, userName) {
   return null;
 }
 
+/**
+ * At most one rank-up reply per text message (activity + optional trigger).
+ * Prefers the later award so the final rank is announced.
+ */
+function getCombinedRankUpReply(activityResult, triggerResult, userName) {
+  const triggerReply = getAutomaticTriggerReply(triggerResult, userName);
+  if (triggerReply) {
+    return triggerReply;
+  }
+  return getAutomaticTriggerReply(activityResult, userName);
+}
+
+function ensureUserRecord(data, id, userName) {
+  if (!data.users[id]) {
+    data.users[id] = {
+      points: 0,
+      weeklyPoints: 0,
+      weekId: getWeekId(),
+      name: userName,
+      triggerDate: getTodayDate(),
+      triggersUsed: [],
+      activityDate: null,
+    };
+  }
+  return data.users[id];
+}
+
+/**
+ * Award 1 lifetime/weekly point for the first normal chat message of the UTC day.
+ * Silent by design — callers should not announce "+1 activity".
+ */
+function awardDailyActivityPoint(userId, userName, pointsFile = POINTS_FILE) {
+  const data = loadPoints(pointsFile);
+  const id = String(userId);
+  const today = getTodayDate();
+  const user = ensureUserRecord(data, id, userName);
+
+  user.name = userName;
+  resetWeeklyIfNewWeek(user);
+
+  if (user.activityDate === today) {
+    return {
+      awarded: false,
+      points: user.points,
+      pointsToAdd: 1,
+      rankUp: false,
+      rank: getRank(user.points),
+    };
+  }
+
+  const pointsBefore = user.points;
+  user.points += 1;
+  user.weeklyPoints += 1;
+  user.activityDate = today;
+  savePoints(data, pointsFile);
+
+  const previousRank = getRank(pointsBefore);
+  const rank = getRank(user.points);
+  const rankUp = previousRank.title !== rank.title;
+
+  return {
+    awarded: true,
+    points: user.points,
+    pointsToAdd: 1,
+    rankUp,
+    rank,
+    previousRank,
+  };
+}
+
 function awardTriggerPoints(userId, userName, trigger, pointsFile = POINTS_FILE) {
   const data = loadPoints(pointsFile);
   const id = String(userId);
@@ -167,18 +245,7 @@ function awardTriggerPoints(userId, userName, trigger, pointsFile = POINTS_FILE)
     };
   }
 
-  if (!data.users[id]) {
-    data.users[id] = {
-      points: 0,
-      weeklyPoints: 0,
-      weekId: getWeekId(),
-      name: userName,
-      triggerDate: getTodayDate(),
-      triggersUsed: [],
-    };
-  }
-
-  const user = data.users[id];
+  const user = ensureUserRecord(data, id, userName);
   user.name = userName;
   resetTriggersIfNewDay(user);
   resetWeeklyIfNewWeek(user);
@@ -233,12 +300,15 @@ module.exports = {
   savePoints,
   isAdmin,
   getRank,
+  isCommandText,
   detectTrigger,
   buildRankUpMessage,
   getAutomaticTriggerReply,
+  getCombinedRankUpReply,
   getTriggersClaimedToday,
   getUserRecord,
   getEffectiveWeeklyPoints,
+  awardDailyActivityPoint,
   awardTriggerPoints,
   resetWeeklyForAll,
 };

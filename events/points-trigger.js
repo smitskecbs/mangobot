@@ -1,26 +1,38 @@
 /**
- * Award points when users send daily trigger words (gmango, gnango, gm, gn).
- * Silent by default; only announces rank-ups.
+ * Text pipeline: daily activity (silent) then gm/gn trigger awards.
+ * Rank-ups may announce; activity itself never posts "+1".
  */
 
 const {
+  isCommandText,
   detectTrigger,
+  awardDailyActivityPoint,
   awardTriggerPoints,
-  getAutomaticTriggerReply,
+  getCombinedRankUpReply,
 } = require("../services/points");
 
 module.exports = (bot) => {
   bot.on("text", (ctx) => {
-    const trigger = detectTrigger(ctx.message.text);
-
-    if (!trigger) {
+    if (!ctx.from) {
       return;
     }
 
+    const text = ctx.message.text;
     const userName = ctx.from.first_name || ctx.from.username || "friend";
-    const result = awardTriggerPoints(ctx.from.id, userName, trigger);
-    const reply = getAutomaticTriggerReply(result, userName);
+    const userId = ctx.from.id;
 
+    let activityResult = null;
+    if (!ctx.from.is_bot && !isCommandText(text)) {
+      activityResult = awardDailyActivityPoint(userId, userName);
+    }
+
+    const trigger = detectTrigger(text);
+    let triggerResult = null;
+    if (trigger) {
+      triggerResult = awardTriggerPoints(userId, userName, trigger);
+    }
+
+    const reply = getCombinedRankUpReply(activityResult, triggerResult, userName);
     if (reply) {
       ctx.reply(reply);
     }

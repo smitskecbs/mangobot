@@ -12,9 +12,14 @@ const {
   getRank,
   TRIGGERS,
   awardTriggerPoints,
+  awardDailyActivityPoint,
   getAutomaticTriggerReply,
+  getCombinedRankUpReply,
   buildRankUpMessage,
+  isCommandText,
   loadPoints,
+  savePoints,
+  getEffectiveWeeklyPoints,
 } = require("../services/points");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-points-test-"));
@@ -211,6 +216,170 @@ runTest("only rank-up yields automatic visible message", () => {
     getAutomaticTriggerReply(rankUp, "Kevin"),
     "🥭 Kevin reached 🌳 Tree!"
   );
+});
+
+runTest("first normal message awards +1 activity", () => {
+  const result = awardDailyActivityPoint(42, "Kevin", testFile);
+
+  assert.strictEqual(result.awarded, true);
+  assert.strictEqual(result.pointsToAdd, 1);
+  assert.strictEqual(result.points, 1);
+
+  const saved = loadPoints(testFile).users["42"];
+  assert.strictEqual(saved.points, 1);
+  assert.ok(typeof saved.activityDate === "string" && saved.activityDate.length === 10);
+});
+
+runTest("second normal message same UTC day awards +0 activity", () => {
+  awardDailyActivityPoint(42, "Kevin", testFile);
+  const second = awardDailyActivityPoint(42, "Kevin", testFile);
+
+  assert.strictEqual(second.awarded, false);
+  assert.strictEqual(second.points, 1);
+  assert.strictEqual(loadPoints(testFile).users["42"].points, 1);
+});
+
+runTest("next UTC day awards activity again", () => {
+  awardDailyActivityPoint(42, "Kevin", testFile);
+  const data = loadPoints(testFile);
+  data.users["42"].activityDate = "2000-01-01";
+  savePoints(data, testFile);
+
+  const nextDay = awardDailyActivityPoint(42, "Kevin", testFile);
+  assert.strictEqual(nextDay.awarded, true);
+  assert.strictEqual(nextDay.points, 2);
+});
+
+runTest("existing user without activityDate still works", () => {
+  resetFile({
+    users: {
+      "42": {
+        points: 10,
+        weeklyPoints: 3,
+        weekId: new Date().toISOString().slice(0, 10),
+        name: "Kevin",
+        triggerDate: "2000-01-01",
+        triggersUsed: [],
+      },
+    },
+  });
+
+  const result = awardDailyActivityPoint(42, "Kevin", testFile);
+  assert.strictEqual(result.awarded, true);
+  assert.strictEqual(result.points, 11);
+  assert.strictEqual(loadPoints(testFile).users["42"].points, 11);
+  assert.ok(loadPoints(testFile).users["42"].activityDate);
+});
+
+runTest("activity increases lifetime points", () => {
+  awardDailyActivityPoint(42, "Kevin", testFile);
+  assert.strictEqual(loadPoints(testFile).users["42"].points, 1);
+});
+
+runTest("activity increases weeklyPoints", () => {
+  awardDailyActivityPoint(42, "Kevin", testFile);
+  const user = loadPoints(testFile).users["42"];
+  assert.strictEqual(user.weeklyPoints, 1);
+  assert.strictEqual(getEffectiveWeeklyPoints(user), 1);
+});
+
+runTest("activity and gmango both award on same message flow", () => {
+  const activity = awardDailyActivityPoint(42, "Kevin", testFile);
+  const trigger = awardTriggerPoints(42, "Kevin", "gmango", testFile);
+
+  assert.strictEqual(activity.awarded, true);
+  assert.strictEqual(trigger.awarded, true);
+  assert.strictEqual(loadPoints(testFile).users["42"].points, 3);
+  assert.strictEqual(loadPoints(testFile).users["42"].weeklyPoints, 3);
+  assert.deepStrictEqual(loadPoints(testFile).users["42"].triggersUsed, ["gmango"]);
+});
+
+runTest("activity of one user does not affect another", () => {
+  awardDailyActivityPoint(42, "Kevin", testFile);
+  awardDailyActivityPoint(99, "Ada", testFile);
+
+  const data = loadPoints(testFile);
+  assert.strictEqual(data.users["42"].points, 1);
+  assert.strictEqual(data.users["99"].points, 1);
+
+  const secondKevin = awardDailyActivityPoint(42, "Kevin", testFile);
+  assert.strictEqual(secondKevin.awarded, false);
+  assert.strictEqual(loadPoints(testFile).users["99"].points, 1);
+});
+
+runTest("existing gm/gmango/gn/gnango behavior still works with activity present", () => {
+  awardDailyActivityPoint(42, "Kevin", testFile);
+  assert.strictEqual(awardTriggerPoints(42, "Kevin", "gm", testFile).points, 2);
+  assert.strictEqual(awardTriggerPoints(42, "Kevin", "gmango", testFile).points, 4);
+  assert.strictEqual(awardTriggerPoints(42, "Kevin", "gn", testFile).points, 5);
+  assert.strictEqual(awardTriggerPoints(42, "Kevin", "gnango", testFile).points, 7);
+
+  assert.strictEqual(awardTriggerPoints(42, "Kevin", "gm", testFile).awarded, false);
+  assert.strictEqual(loadPoints(testFile).users["42"].points, 7);
+});
+
+runTest("isCommandText filters slash commands for activity", () => {
+  assert.strictEqual(isCommandText("/help"), true);
+  assert.strictEqual(isCommandText("/points"), true);
+  assert.strictEqual(isCommandText("  /weekly"), true);
+  assert.strictEqual(isCommandText("hello"), false);
+  assert.strictEqual(isCommandText("gmango"), false);
+  assert.strictEqual(isCommandText("/"), true);
+});
+
+runTest("combined rank-up reply is at most one message", () => {
+  const activityRankUp = {
+    awarded: true,
+    rankUp: true,
+    rank: { emoji: "🌿", title: "Sprout" },
+  };
+  const triggerNoRankUp = {
+    awarded: true,
+    rankUp: false,
+    rank: { emoji: "🌿", title: "Sprout" },
+  };
+  const triggerRankUp = {
+    awarded: true,
+    rankUp: true,
+    rank: { emoji: "🌳", title: "Tree" },
+  };
+
+  assert.strictEqual(
+    getCombinedRankUpReply(activityRankUp, triggerNoRankUp, "Kevin"),
+    "🥭 Kevin reached 🌿 Sprout!"
+  );
+  assert.strictEqual(
+    getCombinedRankUpReply(activityRankUp, triggerRankUp, "Kevin"),
+    "🥭 Kevin reached 🌳 Tree!"
+  );
+  assert.strictEqual(getCombinedRankUpReply(null, null, "Kevin"), null);
+});
+
+runTest("activity then gmango crossing Sprout yields single combined reply", () => {
+  resetFile({
+    users: {
+      "42": {
+        points: 24,
+        weeklyPoints: 0,
+        weekId: new Date().toISOString().slice(0, 10),
+        name: "Kevin",
+        triggerDate: "2000-01-01",
+        triggersUsed: [],
+      },
+    },
+  });
+
+  const activity = awardDailyActivityPoint(42, "Kevin", testFile);
+  const trigger = awardTriggerPoints(42, "Kevin", "gmango", testFile);
+
+  assert.strictEqual(activity.awarded, true);
+  assert.strictEqual(activity.rankUp, true);
+  assert.strictEqual(trigger.awarded, true);
+  assert.strictEqual(trigger.rankUp, false);
+  assert.strictEqual(loadPoints(testFile).users["42"].points, 27);
+
+  const reply = getCombinedRankUpReply(activity, trigger, "Kevin");
+  assert.strictEqual(reply, "🥭 Kevin reached 🌿 Sprout!");
 });
 
 fs.rmSync(tempDir, { recursive: true, force: true });
