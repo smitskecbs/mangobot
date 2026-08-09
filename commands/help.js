@@ -2,9 +2,12 @@
  * /help — list available commands.
  */
 
-module.exports = (bot) => {
-  bot.help((ctx) => {
-    ctx.reply(`🥭 Commands
+const {
+  isPrivateChat,
+  getPrivateMenuKeyboard,
+} = require("../utils/botMenu");
+
+const HELP_MESSAGE = `🥭 Commands
 
 🥭 Community
 /points
@@ -28,6 +31,18 @@ module.exports = (bot) => {
 /links
 /rules
 
-/help`);
-  });
+/help`;
+
+function handleHelp(ctx) {
+  if (isPrivateChat(ctx)) {
+    return ctx.reply(HELP_MESSAGE, getPrivateMenuKeyboard());
+  }
+  return ctx.reply(HELP_MESSAGE);
+}
+
+module.exports = (bot) => {
+  bot.help(handleHelp);
 };
+
+module.exports.handleHelp = handleHelp;
+module.exports.HELP_MESSAGE = HELP_MESSAGE;

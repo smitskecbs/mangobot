@@ -7,20 +7,32 @@ const {
   getLifetimeTop,
   formatLifetimeLines,
 } = require("../services/leaderboard");
+const {
+  isPrivateChat,
+  getPrivateMenuKeyboard,
+} = require("../utils/botMenu");
+
+function handleLeaderboard(ctx, options = {}) {
+  const data = loadPoints(options.pointsFile);
+  const top = getLifetimeTop(data.users);
+
+  let text;
+  if (top.length === 0) {
+    text =
+      "🥭 Leaderboard is empty. Type gmango, gnango, gm or gn to earn points!";
+  } else {
+    const lines = formatLifetimeLines(top, getRank);
+    text = `🥭 ManGo Leaderboard — Top 10\n\n${lines.join("\n")}`;
+  }
+
+  if (isPrivateChat(ctx)) {
+    return ctx.reply(text, getPrivateMenuKeyboard());
+  }
+  return ctx.reply(text);
+}
 
 module.exports = (bot) => {
-  bot.command("leaderboard", (ctx) => {
-    const data = loadPoints();
-    const top = getLifetimeTop(data.users);
-
-    if (top.length === 0) {
-      ctx.reply(
-        "🥭 Leaderboard is empty. Type gmango, gnango, gm or gn to earn points!"
-      );
-      return;
-    }
-
-    const lines = formatLifetimeLines(top, getRank);
-    ctx.reply(`🥭 ManGo Leaderboard — Top 10\n\n${lines.join("\n")}`);
-  });
+  bot.command("leaderboard", handleLeaderboard);
 };
+
+module.exports.handleLeaderboard = handleLeaderboard;

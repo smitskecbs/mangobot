@@ -9,25 +9,38 @@ const {
   getEffectiveWeeklyPoints,
   formatClaimedTodayLines,
 } = require("../services/points");
+const {
+  isPrivateChat,
+  getPrivateMenuKeyboard,
+} = require("../utils/botMenu");
 
-module.exports = (bot) => {
-  bot.command("points", (ctx) => {
-    const data = loadPoints();
-    const user = getUserRecord(data, ctx.from.id);
-    const name = ctx.from.first_name || "friend";
-    const rank = getRank(user.points);
-    const weeklyPoints = getEffectiveWeeklyPoints(user);
-    const claimedToday = formatClaimedTodayLines(user);
-    const lifetimeLabel = user.points === 1 ? "point" : "points";
-    const weeklyLabel = weeklyPoints === 1 ? "point" : "points";
+function handlePoints(ctx, options = {}) {
+  const data = loadPoints(options.pointsFile);
+  const user = getUserRecord(data, ctx.from.id);
+  const name = ctx.from.first_name || "friend";
+  const rank = getRank(user.points);
+  const weeklyPoints = getEffectiveWeeklyPoints(user);
+  const claimedToday = formatClaimedTodayLines(user);
+  const lifetimeLabel = user.points === 1 ? "point" : "points";
+  const weeklyLabel = weeklyPoints === 1 ? "point" : "points";
 
-    ctx.reply(`🥭 ${name}
+  const text = `🥭 ${name}
 
 Lifetime points: ${user.points} ${lifetimeLabel}
 Weekly points: ${weeklyPoints} ${weeklyLabel}
 Rank: ${rank.emoji} ${rank.title}
 
 Claimed today:
-${claimedToday}`);
-  });
+${claimedToday}`;
+
+  if (isPrivateChat(ctx)) {
+    return ctx.reply(text, getPrivateMenuKeyboard());
+  }
+  return ctx.reply(text);
+}
+
+module.exports = (bot) => {
+  bot.command("points", handlePoints);
 };
+
+module.exports.handlePoints = handlePoints;
