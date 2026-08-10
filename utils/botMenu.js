@@ -15,6 +15,19 @@ const MENU_LABELS = Object.freeze({
 
 const MENU_LABEL_LIST = Object.freeze(Object.values(MENU_LABELS));
 
+const GROUP_MENU_TEXT = `🥭 ManGo Community
+
+Check your progress, rankings or play for XP.`;
+
+const PRIVATE_MENU_HINT =
+  "🥭 Use the menu below to check points, rankings or play.";
+
+const GROUP_MENU_CALLBACK = Object.freeze({
+  LEADERBOARD: "gmenu:lb",
+  WEEKLY: "gmenu:weekly",
+  HELP: "gmenu:help",
+});
+
 const GROUP_SNAKE_MESSAGE =
   "🎮 Snake uses a personal game link.\nOpen ManGo Bot privately to play with your profile.";
 
@@ -80,6 +93,15 @@ function getConfiguredBotUsername() {
 function getBotUsername(ctx) {
   const username = ctx && ctx.botInfo && ctx.botInfo.username;
   return normalizeBotUsername(username);
+}
+
+/**
+ * Resolve bot username from ctx, then env.
+ * @param {object} [ctx]
+ * @returns {string|null}
+ */
+function resolveBotUsername(ctx) {
+  return getBotUsername(ctx) || getConfiguredBotUsername();
 }
 
 /**
@@ -175,9 +197,59 @@ function getGroupGameGateExtra(ctx, game) {
   return Markup.inlineKeyboard([Markup.button.url(label, url)]);
 }
 
+/**
+ * Compact group inline menu. Public actions use callbacks; personal flows use deep-links.
+ * @param {object} [ctx]
+ * @returns {object} Telegraf reply extra
+ */
+function getGroupMenuExtra(ctx) {
+  const username = resolveBotUsername(ctx);
+  const snakeUrl = buildPrivateDeepLink(username, "snake");
+  const bounchUrl = buildPrivateDeepLink(username, "bounch");
+  const pointsUrl = buildPrivateDeepLink(username, "points");
+
+  const rows = [
+    [
+      Markup.button.callback("🏆 Leaderboard", GROUP_MENU_CALLBACK.LEADERBOARD),
+      Markup.button.callback("📅 Weekly", GROUP_MENU_CALLBACK.WEEKLY),
+    ],
+  ];
+
+  const playRow = [];
+  if (snakeUrl) {
+    playRow.push(Markup.button.url("🐍 Snake", snakeUrl));
+  }
+  if (bounchUrl) {
+    playRow.push(Markup.button.url("🏀 Bounch", bounchUrl));
+  }
+  if (playRow.length) {
+    rows.push(playRow);
+  }
+
+  const bottomRow = [];
+  if (pointsUrl) {
+    bottomRow.push(Markup.button.url("🥭 My Points", pointsUrl));
+  }
+  bottomRow.push(Markup.button.callback("ℹ️ Help", GROUP_MENU_CALLBACK.HELP));
+  rows.push(bottomRow);
+
+  return Markup.inlineKeyboard(rows);
+}
+
+function isGroupMenuCallback(data) {
+  return (
+    data === GROUP_MENU_CALLBACK.LEADERBOARD ||
+    data === GROUP_MENU_CALLBACK.WEEKLY ||
+    data === GROUP_MENU_CALLBACK.HELP
+  );
+}
+
 module.exports = {
   MENU_LABELS,
   MENU_LABEL_LIST,
+  GROUP_MENU_TEXT,
+  PRIVATE_MENU_HINT,
+  GROUP_MENU_CALLBACK,
   GROUP_SNAKE_MESSAGE,
   GROUP_BOUNCH_MESSAGE,
   GROUP_SNAKE_BUTTON_LABEL,
@@ -188,10 +260,13 @@ module.exports = {
   normalizeBotUsername,
   getConfiguredBotUsername,
   getBotUsername,
+  resolveBotUsername,
   buildPrivateDeepLink,
   buildHighscoreAnnouncementPlayCta,
   appendHighscoreAnnouncementPlayCta,
   getPrivateMenuKeyboard,
   getGroupGameMessage,
   getGroupGameGateExtra,
+  getGroupMenuExtra,
+  isGroupMenuCallback,
 };

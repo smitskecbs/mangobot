@@ -1,9 +1,10 @@
 /**
- * /start — welcome, private menu, and deep-link payloads (snake / bounch).
+ * /start — welcome, private menu, and deep-link payloads (snake / bounch / points).
  */
 
 const { handleSnake } = require("./snake");
 const { handleBounch } = require("./bounch");
+const { handlePoints } = require("./points");
 const {
   isPrivateChat,
   getPrivateMenuKeyboard,
@@ -13,7 +14,7 @@ const WELCOME_MESSAGE = "🥭 Welcome to ManGo Bot!\n\nType /help for commands."
 
 /**
  * @param {object} ctx
- * @param {{ secret?: string, ttlSeconds?: number, now?: number }} [options]
+ * @param {{ secret?: string, ttlSeconds?: number, now?: number, pointsFile?: string }} [options]
  */
 function handleStart(ctx, options = {}) {
   const payload =
@@ -26,11 +27,14 @@ function handleStart(ctx, options = {}) {
     if (payload === "bounch") {
       return handleBounch(ctx, options);
     }
+    if (payload === "points") {
+      return handlePoints(ctx, options);
+    }
 
     return ctx.reply(WELCOME_MESSAGE, getPrivateMenuKeyboard());
   }
 
-  // Groups / other chats: never mint personal signed game tokens from /start.
+  // Groups / other chats: never mint personal signed game tokens or show private points.
   return ctx.reply(WELCOME_MESSAGE);
 }
 

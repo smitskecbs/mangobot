@@ -4,6 +4,9 @@ const fs = require("fs");
 const path = require("path");
 const { Telegraf } = require("telegraf");
 const { log } = require("./utils/logger");
+const {
+  startCommunityScheduler,
+} = require("./services/communityScheduler");
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
@@ -24,8 +27,25 @@ function registerModules(dir) {
 registerModules("commands");
 registerModules("events");
 
-bot.launch();
-log("🥭 ManGo Bot running...");
+let communityScheduler = null;
 
-process.once("SIGINT", () => bot.stop("SIGINT"));
-process.once("SIGTERM", () => bot.stop("SIGTERM"));
+bot
+  .launch()
+  .then(() => {
+    log("🥭 ManGo Bot running...");
+    communityScheduler = startCommunityScheduler(bot.telegram);
+  })
+  .catch((err) => {
+    log("Failed to launch ManGo Bot:", err && err.message ? err.message : err);
+    process.exit(1);
+  });
+
+function shutdown(signal) {
+  if (communityScheduler) {
+    communityScheduler.stop();
+  }
+  bot.stop(signal);
+}
+
+process.once("SIGINT", () => shutdown("SIGINT"));
+process.once("SIGTERM", () => shutdown("SIGTERM"));

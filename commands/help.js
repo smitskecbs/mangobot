@@ -10,6 +10,7 @@ const {
 const HELP_MESSAGE = `🥭 Commands
 
 🥭 Community
+/menu
 /points
 /leaderboard
 /weekly

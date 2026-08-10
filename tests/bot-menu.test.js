@@ -12,6 +12,9 @@ const { GAME_LINK_UNAVAILABLE_MESSAGE } = require("../utils/gameLinks");
 const {
   MENU_LABELS,
   MENU_LABEL_LIST,
+  GROUP_MENU_TEXT,
+  PRIVATE_MENU_HINT,
+  GROUP_MENU_CALLBACK,
   GROUP_SNAKE_MESSAGE,
   GROUP_BOUNCH_MESSAGE,
   GROUP_SNAKE_BUTTON_LABEL,
@@ -24,6 +27,7 @@ const {
   getPrivateMenuKeyboard,
   getGroupGameMessage,
   getGroupGameGateExtra,
+  getGroupMenuExtra,
 } = require("../utils/botMenu");
 const { handleSnake } = require("../commands/snake");
 const { handleBounch } = require("../commands/bounch");
@@ -32,6 +36,10 @@ const { handlePoints } = require("../commands/points");
 const { handleLeaderboard } = require("../commands/leaderboard");
 const { handleWeekly } = require("../commands/weekly");
 const { handleHelp, HELP_MESSAGE } = require("../commands/help");
+const {
+  handleMenu,
+  handleGroupMenuCallback,
+} = require("../commands/menu");
 const {
   shouldSkipCommunityActivity,
 } = require("../events/points-trigger");
@@ -51,9 +59,24 @@ const BOT_USERNAME = "ManGoTestBot";
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-bot-menu-test-"));
 const testPointsFile = path.join(tempDir, "points.json");
 
+const pendingAsyncTests = [];
+
 function runTest(name, fn) {
   try {
-    fn();
+    const result = fn();
+    if (result && typeof result.then === "function") {
+      pendingAsyncTests.push(
+        result
+          .then(() => {
+            console.log(`✓ ${name}`);
+          })
+          .catch((err) => {
+            console.error(`✗ ${name}`);
+            throw err;
+          })
+      );
+      return;
+    }
     console.log(`✓ ${name}`);
   } catch (err) {
     console.error(`✗ ${name}`);
@@ -67,19 +90,36 @@ function createMockCtx({
   firstName = "Ada",
   botUsername = BOT_USERNAME,
   startPayload,
+  callbackData,
 } = {}) {
   const replies = [];
+  const answered = [];
   return {
     chat: { type: chatType },
     from: { id: userId, first_name: firstName },
     botInfo: botUsername ? { username: botUsername } : {},
     startPayload,
+    callbackQuery: callbackData ? { data: callbackData } : undefined,
     replies,
+    answered,
     reply(text, extra) {
       replies.push({ text, extra });
       return Promise.resolve(replies[replies.length - 1]);
     },
+    answerCbQuery(text) {
+      answered.push(text || true);
+      return Promise.resolve();
+    },
   };
+}
+
+function getInlineButtons(extra) {
+  const rows =
+    (extra &&
+      extra.reply_markup &&
+      extra.reply_markup.inline_keyboard) ||
+    [];
+  return rows.flat();
 }
 
 function extractPlayUrl(replyText) {
@@ -503,4 +543,129 @@ runTest("isPrivateMenuLabel exact match only", () => {
   assert.strictEqual(isPrivateMenuLabel("gmango"), false);
 });
 
-console.log("\nAll bot-menu tests passed.");
+runTest("/menu group toont exact gewenste knoppen", () => {
+  const ctx = createMockCtx({ chatType: "supergroup" });
+  handleMenu(ctx);
+  assert.strictEqual(ctx.replies[0].text, GROUP_MENU_TEXT);
+  const buttons = getInlineButtons(ctx.replies[0].extra);
+  const labels = buttons.map((b) => b.text);
+  assert.deepStrictEqual(labels, [
+    "🏆 Leaderboard",
+    "📅 Weekly",
+    "🐍 Snake",
+    "🏀 Bounch",
+    "🥭 My Points",
+    "ℹ️ Help",
+  ]);
+});
+
+runTest("group menu Snake/Bounch/Points deep-links zijn veilig", () => {
+  const ctx = createMockCtx({ chatType: "group" });
+  handleMenu(ctx);
+  const buttons = getInlineButtons(ctx.replies[0].extra);
+  const snake = buttons.find((b) => b.text === "🐍 Snake");
+  const bounch = buttons.find((b) => b.text === "🏀 Bounch");
+  const points = buttons.find((b) => b.text === "🥭 My Points");
+  assert.strictEqual(snake.url, `https://t.me/${BOT_USERNAME}?start=snake`);
+  assert.strictEqual(bounch.url, `https://t.me/${BOT_USERNAME}?start=bounch`);
+  assert.strictEqual(points.url, `https://t.me/${BOT_USERNAME}?start=points`);
+  const blob = JSON.stringify(ctx.replies[0]);
+  assert.ok(!blob.includes("?t="));
+  assert.ok(!blob.includes("uid="));
+  assert.ok(!blob.includes("telegramUserId="));
+});
+
+runTest("/menu private toont reply-keyboard hint", () => {
+  const ctx = createMockCtx({ chatType: "private" });
+  handleMenu(ctx);
+  assert.strictEqual(ctx.replies[0].text, PRIVATE_MENU_HINT);
+  assert.ok(ctx.replies[0].extra.reply_markup.keyboard);
+});
+
+runTest("/start points private → persoonlijke points", () => {
+  resetPointsFile({
+    users: {
+      [String(USER_A)]: {
+        name: "Ada",
+        points: 9,
+        weeklyPoints: 1,
+        weekId: "2026-08-04",
+        triggerDate: null,
+        triggersUsed: [],
+        activityDate: null,
+      },
+    },
+  });
+  const ctx = createMockCtx({
+    chatType: "private",
+    userId: USER_A,
+    startPayload: "points",
+  });
+  handleStart(ctx, { pointsFile: testPointsFile });
+  assert.ok(ctx.replies[0].text.includes("🥭 Ada"));
+  assert.ok(ctx.replies[0].text.includes("Lifetime points: 9 points"));
+  assert.ok(ctx.replies[0].text.includes("Claimed today:"));
+});
+
+runTest("/start points group → geen persoonlijke points", () => {
+  resetPointsFile({
+    users: {
+      [String(USER_A)]: {
+        name: "Ada",
+        points: 9,
+        weeklyPoints: 1,
+        weekId: "2026-08-04",
+      },
+    },
+  });
+  const ctx = createMockCtx({
+    chatType: "group",
+    userId: USER_A,
+    startPayload: "points",
+  });
+  handleStart(ctx, { pointsFile: testPointsFile });
+  assert.strictEqual(ctx.replies[0].text, WELCOME_MESSAGE);
+  assert.ok(!ctx.replies[0].text.includes("Lifetime points"));
+});
+
+runTest("Weekly callback gebruikt bestaande weekly logic", async () => {
+  const ctx = createMockCtx({
+    chatType: "group",
+    callbackData: GROUP_MENU_CALLBACK.WEEKLY,
+  });
+  await handleGroupMenuCallback(ctx, { pointsFile: testPointsFile });
+  assert.strictEqual(ctx.answered.length, 1);
+  assert.ok(ctx.replies[0].text.includes("Weekly"));
+});
+
+runTest("Leaderboard callback gebruikt bestaande leaderboard logic", async () => {
+  const ctx = createMockCtx({
+    chatType: "group",
+    callbackData: GROUP_MENU_CALLBACK.LEADERBOARD,
+  });
+  await handleGroupMenuCallback(ctx, { pointsFile: testPointsFile });
+  assert.ok(ctx.replies[0].text.includes("Leaderboard"));
+});
+
+runTest("Help callback toont bestaande help", async () => {
+  const ctx = createMockCtx({
+    chatType: "group",
+    callbackData: GROUP_MENU_CALLBACK.HELP,
+  });
+  await handleGroupMenuCallback(ctx);
+  assert.strictEqual(ctx.replies[0].text, HELP_MESSAGE);
+});
+
+runTest("/menu command skips daily activity", () => {
+  assert.strictEqual(shouldSkipCommunityActivity(createMockCtx(), "/menu"), true);
+});
+
+Promise.all(pendingAsyncTests)
+  .then(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    console.log("\nAll bot-menu tests passed.");
+  })
+  .catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });

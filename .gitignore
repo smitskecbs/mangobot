@@ -6,3 +6,4 @@ node_modules/
 points.json
 snake-highscores.json
 bounch-highscores.json
+data/community-scheduler.json
