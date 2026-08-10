@@ -1,6 +1,9 @@
 /**
  * Text pipeline: daily activity (silent) then gm/gn trigger awards.
  * Rank-ups may announce; activity itself never posts "+1".
+ *
+ * Runs after events/chat-fight.js (alphabetical). If ChatFight already
+ * announced a rank-up on the winner reply, skip a duplicate rank-up here.
  */
 
 const {
@@ -51,7 +54,20 @@ module.exports = (bot) => {
       triggerResult = awardTriggerPoints(userId, userName, trigger);
     }
 
-    const reply = getCombinedRankUpReply(activityResult, triggerResult, userName);
+    const fightAward =
+      ctx.state && ctx.state.chatFightAward ? ctx.state.chatFightAward : null;
+
+    // Winner reply already includes rank-up when the fight award crossed a threshold.
+    if (fightAward && fightAward.rankUp) {
+      return;
+    }
+
+    const reply = getCombinedRankUpReply(
+      activityResult,
+      triggerResult,
+      userName,
+      fightAward
+    );
     if (reply) {
       ctx.reply(reply);
     }

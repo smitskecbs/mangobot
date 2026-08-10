@@ -381,10 +381,19 @@ function getAutomaticTriggerReply(result, userName) {
 }
 
 /**
- * At most one rank-up reply per text message (activity + optional trigger).
- * Prefers the later award so the final rank is announced.
+ * At most one rank-up reply per text message (activity + optional trigger + optional fight).
+ * Prefers the later award so the final rank is announced (fight > trigger > activity).
  */
-function getCombinedRankUpReply(activityResult, triggerResult, userName) {
+function getCombinedRankUpReply(
+  activityResult,
+  triggerResult,
+  userName,
+  fightResult = null
+) {
+  const fightReply = getAutomaticTriggerReply(fightResult, userName);
+  if (fightReply) {
+    return fightReply;
+  }
   const triggerReply = getAutomaticTriggerReply(triggerResult, userName);
   if (triggerReply) {
     return triggerReply;
@@ -628,6 +637,38 @@ function awardTriggerPoints(userId, userName, trigger, pointsFile = POINTS_FILE)
   }, pointsFile);
 }
 
+/**
+ * ChatFight win: +2 lifetime XP and +2 weeklyPoints.
+ * Call only after an in-process winner claim; does not enforce fight state itself.
+ */
+function awardChatFightXp(userId, userName, pointsFile = POINTS_FILE) {
+  const pointsToAdd = 2;
+
+  return mutatePoints((data) => {
+    const id = String(userId);
+    const user = ensureUserRecord(data, id, userName);
+    user.name = userName;
+    resetWeeklyIfNewWeek(user);
+
+    const pointsBefore = user.points;
+    user.points += pointsToAdd;
+    user.weeklyPoints += pointsToAdd;
+
+    const previousRank = getRank(pointsBefore);
+    const rank = getRank(user.points);
+    const rankUp = previousRank.title !== rank.title;
+
+    return {
+      awarded: true,
+      points: user.points,
+      pointsToAdd,
+      rankUp,
+      rank,
+      previousRank,
+    };
+  }, pointsFile);
+}
+
 function resetWeeklyForAll(pointsFile = POINTS_FILE) {
   mutatePoints((data) => {
     const currentWeek = getWeekId();
@@ -666,6 +707,7 @@ module.exports = {
   getEffectiveWeeklyPoints,
   awardDailyActivityPoint,
   awardTriggerPoints,
+  awardChatFightXp,
   awardSnakeGameXp,
   awardBounchGameXp,
   ensureGameState,

@@ -14,6 +14,7 @@ const HELP_MESSAGE = `🥭 Commands
 /points
 /leaderboard
 /weekly
+/chatfight
 
 🐍 Snake
 /snake
