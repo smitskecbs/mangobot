@@ -1,9 +1,10 @@
 /**
  * /chatfight — admin-only manual ChatFight start in the community group.
+ * Admin = ADMIN_USER_ID allowlist OR Telegram creator/administrator.
  */
 
-const { isAdmin } = require("../services/points");
 const { isPrivateChat, isGroupChat } = require("../utils/botMenu");
+const { canManageGroup } = require("../utils/admin");
 const {
   USAGE_TEXT,
   parseFightTypeArg,
@@ -15,13 +16,18 @@ const {
  * @param {object} ctx
  * @param {object} [options]
  * @param {(params: object) => object} [options.startFightFn]
+ * @param {(ctx: object, options?: object) => Promise<boolean>|boolean} [options.canManageGroupFn]
  * @param {(userId: *) => boolean} [options.isAdminFn]
+ * @param {(chatId: *, userId: *) => Promise<object>|object} [options.getChatMember]
+ * @returns {Promise<*>}
  */
-function handleChatFight(ctx, options = {}) {
+async function handleChatFight(ctx, options = {}) {
   const startFightFn =
     typeof options.startFightFn === "function" ? options.startFightFn : startFight;
-  const isAdminFn =
-    typeof options.isAdminFn === "function" ? options.isAdminFn : isAdmin;
+  const canManageFn =
+    typeof options.canManageGroupFn === "function"
+      ? options.canManageGroupFn
+      : canManageGroup;
 
   if (!ctx || !ctx.from) {
     return;
@@ -43,7 +49,19 @@ function handleChatFight(ctx, options = {}) {
     return ctx.reply("⚔️ ChatFight is not available in this group.");
   }
 
-  if (!isAdminFn(ctx.from.id)) {
+  let allowed = false;
+  try {
+    allowed = Boolean(
+      await canManageFn(ctx, {
+        isAdminFn: options.isAdminFn,
+        getChatMember: options.getChatMember,
+      })
+    );
+  } catch (_err) {
+    allowed = false;
+  }
+
+  if (!allowed) {
     return ctx.reply(
       "⚔️ ChatFight can currently only be started by an admin."
     );
@@ -87,7 +105,9 @@ function handleChatFight(ctx, options = {}) {
 }
 
 module.exports = (bot) => {
-  bot.command("chatfight", handleChatFight);
+  bot.command("chatfight", (ctx) =>
+    Promise.resolve(handleChatFight(ctx)).catch(() => undefined)
+  );
 };
 
 module.exports.handleChatFight = handleChatFight;

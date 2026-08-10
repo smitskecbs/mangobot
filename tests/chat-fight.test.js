@@ -34,6 +34,7 @@ const {
   isCommandText,
 } = require("../services/points");
 const { handleChatFight } = require("../commands/chatfight");
+const { canManageGroup } = require("../utils/admin");
 const { registerChatFightListener } = require("../events/chat-fight");
 const { shouldSkipCommunityActivity } = require("../events/points-trigger");
 const { MENU_LABELS } = require("../utils/botMenu");
@@ -49,6 +50,7 @@ const USER_B = 222;
 
 const originalAdmin = process.env.ADMIN_USER_ID;
 const originalChatId = process.env.TELEGRAM_CHAT_ID;
+const pendingAsyncTests = [];
 
 function pointsFile() {
   testCounter += 1;
@@ -77,7 +79,18 @@ function runTest(name, fn) {
   try {
     const result = fn();
     if (result && typeof result.then === "function") {
-      throw new Error(`Async test not awaited: ${name}`);
+      pendingAsyncTests.push(
+        result
+          .then(() => {
+            console.log(`✓ ${name}`);
+          })
+          .catch((err) => {
+            console.error(`✗ ${name}`);
+            restoreEnv();
+            throw err;
+          })
+      );
+      return;
     }
     console.log(`✓ ${name}`);
   } catch (err) {
@@ -95,9 +108,19 @@ function createMockCtx({
   username,
   text = "",
   isBot = false,
+  memberStatus = "member",
+  getChatMemberImpl,
 } = {}) {
   const replies = [];
   const telegramMessages = [];
+  const getChatMemberCalls = [];
+  const defaultGetChatMember = (id, uid) => {
+    getChatMemberCalls.push({ chatId: id, userId: uid });
+    return Promise.resolve({
+      status: memberStatus,
+      user: { id: uid },
+    });
+  };
   const ctx = {
     chat: { type: chatType, id: chatId },
     from: {
@@ -110,11 +133,16 @@ function createMockCtx({
     state: {},
     replies,
     telegramMessages,
+    getChatMemberCalls,
     telegram: {
       sendMessage(id, msg) {
         telegramMessages.push({ chatId: id, text: msg });
         return Promise.resolve();
       },
+      getChatMember:
+        typeof getChatMemberImpl === "function"
+          ? getChatMemberImpl
+          : defaultGetChatMember,
     },
     reply(msg) {
       replies.push(msg);
@@ -216,7 +244,7 @@ resetEnv();
 // Type Rush
 // ---------------------------------------------------------------------------
 
-runTest("1. admin can start Type Rush in group", () => {
+runTest("1. admin can start Type Rush in group", async () => {
   const { service } = createService({
     random: () => 0, // first word MANGO
   });
@@ -224,7 +252,7 @@ runTest("1. admin can start Type Rush in group", () => {
     userId: ADMIN_ID,
     text: "/chatfight type",
   });
-  handleChatFight(ctx, {
+  await handleChatFight(ctx, {
     startFightFn: (p) => service.startFight(p),
     isAdminFn: (id) => String(id) === String(ADMIN_ID),
   });
@@ -235,10 +263,14 @@ runTest("1. admin can start Type Rush in group", () => {
   assert.strictEqual(service.getActiveFight().type, FIGHT_TYPES.TYPE_RUSH);
 });
 
-runTest("2. non-admin cannot start", () => {
+runTest("2. non-admin cannot start", async () => {
   const { service } = createService();
-  const ctx = createMockCtx({ userId: USER_A, text: "/chatfight" });
-  handleChatFight(ctx, {
+  const ctx = createMockCtx({
+    userId: USER_A,
+    text: "/chatfight",
+    memberStatus: "member",
+  });
+  await handleChatFight(ctx, {
     startFightFn: (p) => service.startFight(p),
     isAdminFn: (id) => String(id) === String(ADMIN_ID),
   });
@@ -247,7 +279,7 @@ runTest("2. non-admin cannot start", () => {
   assert.strictEqual(service.getActiveFight(), null);
 });
 
-runTest("3. private cannot start", () => {
+runTest("3. private cannot start", async () => {
   const { service } = createService();
   const ctx = createMockCtx({
     chatType: "private",
@@ -255,7 +287,7 @@ runTest("3. private cannot start", () => {
     userId: ADMIN_ID,
     text: "/chatfight",
   });
-  handleChatFight(ctx, {
+  await handleChatFight(ctx, {
     startFightFn: (p) => service.startFight(p),
     isAdminFn: () => true,
   });
@@ -602,16 +634,16 @@ runTest("28. cooldown survives fight completion in memory", () => {
   assert.ok(service.isOnCooldown());
 });
 
-runTest("29. displayed remaining minutes sensible", () => {
+runTest("29. displayed remaining minutes sensible", async () => {
   const { service, clock } = createService({ random: () => 0 });
   const ctx = createMockCtx({ userId: ADMIN_ID, text: "/chatfight" });
-  handleChatFight(ctx, {
+  await handleChatFight(ctx, {
     startFightFn: (p) => service.startFight(p),
     isAdminFn: () => true,
   });
   clock.advance(10 * 60 * 1000);
   const ctx2 = createMockCtx({ userId: ADMIN_ID, text: "/chatfight" });
-  handleChatFight(ctx2, {
+  await handleChatFight(ctx2, {
     startFightFn: (p) => service.startFight(p),
     isAdminFn: () => true,
   });
@@ -714,7 +746,7 @@ runTest("35. points locking remains safe via awardChatFightXp", () => {
 });
 
 // Extra sanity
-runTest("parseFightTypeArg + usage on unknown", () => {
+runTest("parseFightTypeArg + usage on unknown", async () => {
   assert.strictEqual(parseFightTypeArg("").random, true);
   assert.strictEqual(parseFightTypeArg("type").type, FIGHT_TYPES.TYPE_RUSH);
   assert.strictEqual(parseFightTypeArg("math").type, FIGHT_TYPES.MATH_RUSH);
@@ -723,7 +755,7 @@ runTest("parseFightTypeArg + usage on unknown", () => {
 
   const { service } = createService();
   const ctx = createMockCtx({ userId: ADMIN_ID, text: "/chatfight banana" });
-  handleChatFight(ctx, {
+  await handleChatFight(ctx, {
     startFightFn: (p) => service.startFight(p),
     isAdminFn: () => true,
   });
@@ -750,5 +782,239 @@ runTest("dev mode without TELEGRAM_CHAT_ID allows any group", () => {
   resetEnv();
 });
 
-restoreEnv();
-console.log("\nAll ChatFight tests passed.");
+// ---------------------------------------------------------------------------
+// Group admin authorization (Telegram creator/administrator + ADMIN_USER_ID)
+// ---------------------------------------------------------------------------
+
+runTest("auth1. ADMIN_USER_ID mag starten", async () => {
+  resetEnv();
+  const { service } = createService({ random: () => 0 });
+  const ctx = createMockCtx({
+    userId: ADMIN_ID,
+    text: "/chatfight type",
+    memberStatus: "member",
+  });
+  await handleChatFight(ctx, {
+    startFightFn: (p) => service.startFight(p),
+  });
+  assert.ok(ctx.replies[0].includes("Type this exactly:"));
+  assert.ok(service.getActiveFight());
+});
+
+runTest("auth2. creator mag starten", async () => {
+  resetEnv();
+  delete process.env.ADMIN_USER_ID;
+  const { service } = createService({ random: () => 0 });
+  const ctx = createMockCtx({
+    userId: USER_A,
+    text: "/chatfight type",
+    memberStatus: "creator",
+  });
+  await handleChatFight(ctx, {
+    startFightFn: (p) => service.startFight(p),
+  });
+  assert.ok(ctx.replies[0].includes("CHAT FIGHT"));
+  assert.ok(service.getActiveFight());
+  resetEnv();
+});
+
+runTest("auth3. administrator mag starten", async () => {
+  resetEnv();
+  delete process.env.ADMIN_USER_ID;
+  const { service } = createService({ random: () => 0 });
+  const ctx = createMockCtx({
+    userId: USER_A,
+    text: "/chatfight math",
+    memberStatus: "administrator",
+  });
+  await handleChatFight(ctx, {
+    startFightFn: (p) => service.startFight(p),
+  });
+  assert.ok(ctx.replies[0].includes("Solve:"));
+  assert.strictEqual(service.getActiveFight().type, FIGHT_TYPES.MATH_RUSH);
+  resetEnv();
+});
+
+runTest("auth4. member mag niet starten", async () => {
+  resetEnv();
+  delete process.env.ADMIN_USER_ID;
+  const { service } = createService();
+  const ctx = createMockCtx({
+    userId: USER_A,
+    text: "/chatfight",
+    memberStatus: "member",
+  });
+  await handleChatFight(ctx, {
+    startFightFn: (p) => service.startFight(p),
+  });
+  assert.ok(ctx.replies[0].includes("only be started by an admin"));
+  assert.strictEqual(service.getActiveFight(), null);
+  resetEnv();
+});
+
+runTest("auth5. restricted mag niet starten", async () => {
+  resetEnv();
+  delete process.env.ADMIN_USER_ID;
+  const { service } = createService();
+  const ctx = createMockCtx({
+    userId: USER_A,
+    text: "/chatfight",
+    memberStatus: "restricted",
+  });
+  await handleChatFight(ctx, {
+    startFightFn: (p) => service.startFight(p),
+  });
+  assert.ok(ctx.replies[0].includes("only be started by an admin"));
+  assert.strictEqual(service.getActiveFight(), null);
+  resetEnv();
+});
+
+runTest("auth6. left mag niet starten", async () => {
+  const allowed = await canManageGroup(
+    createMockCtx({ userId: USER_A, memberStatus: "left" }),
+    { isAdminFn: () => false }
+  );
+  assert.strictEqual(allowed, false);
+});
+
+runTest("auth7. kicked mag niet starten", async () => {
+  const allowed = await canManageGroup(
+    createMockCtx({ userId: USER_A, memberStatus: "kicked" }),
+    { isAdminFn: () => false }
+  );
+  assert.strictEqual(allowed, false);
+});
+
+runTest("auth8. getChatMember error + ADMIN_USER_ID match → toegestaan", async () => {
+  resetEnv();
+  const { service } = createService({ random: () => 0 });
+  const ctx = createMockCtx({
+    userId: ADMIN_ID,
+    text: "/chatfight type",
+    getChatMemberImpl: async () => {
+      throw new Error("telegram down");
+    },
+  });
+  await handleChatFight(ctx, {
+    startFightFn: (p) => service.startFight(p),
+  });
+  assert.ok(ctx.replies[0].includes("CHAT FIGHT"));
+  assert.ok(service.getActiveFight());
+});
+
+runTest("auth9. getChatMember error zonder ADMIN_USER_ID → geweigerd", async () => {
+  resetEnv();
+  delete process.env.ADMIN_USER_ID;
+  const { service } = createService();
+  const ctx = createMockCtx({
+    userId: USER_A,
+    text: "/chatfight",
+    getChatMemberImpl: async () => {
+      throw new Error("telegram down");
+    },
+  });
+  await handleChatFight(ctx, {
+    startFightFn: (p) => service.startFight(p),
+  });
+  assert.ok(ctx.replies[0].includes("only be started by an admin"));
+  assert.strictEqual(service.getActiveFight(), null);
+  resetEnv();
+});
+
+runTest("auth10. private chat blijft geweigerd", async () => {
+  resetEnv();
+  const { service } = createService();
+  const ctx = createMockCtx({
+    chatType: "private",
+    chatId: ADMIN_ID,
+    userId: ADMIN_ID,
+    text: "/chatfight",
+    memberStatus: "creator",
+  });
+  await handleChatFight(ctx, {
+    startFightFn: (p) => service.startFight(p),
+  });
+  assert.ok(ctx.replies[0].includes("community group"));
+  assert.strictEqual(service.getActiveFight(), null);
+});
+
+runTest("auth11. verkeerde configured community group blijft geweigerd", async () => {
+  resetEnv();
+  const { service } = createService();
+  const ctx = createMockCtx({
+    chatId: OTHER_CHAT,
+    userId: ADMIN_ID,
+    text: "/chatfight",
+    memberStatus: "creator",
+  });
+  await handleChatFight(ctx, {
+    startFightFn: (p) => service.startFight(p),
+  });
+  assert.ok(ctx.replies[0].includes("not available in this group"));
+  assert.strictEqual(service.getActiveFight(), null);
+});
+
+runTest("auth12. Telegram-admin start ChatFight core correct", async () => {
+  resetEnv();
+  delete process.env.ADMIN_USER_ID;
+  const { service } = createService({ random: () => 0 });
+  const ctx = createMockCtx({
+    userId: USER_A,
+    firstName: "Owner",
+    text: "/chatfight type",
+    memberStatus: "creator",
+  });
+  await handleChatFight(ctx, {
+    startFightFn: (p) => service.startFight(p),
+  });
+  const fight = service.getActiveFight();
+  assert.ok(fight);
+  assert.strictEqual(fight.type, FIGHT_TYPES.TYPE_RUSH);
+  assert.deepStrictEqual(fight.acceptedAnswers, ["mango"]);
+  resetEnv();
+});
+
+runTest("auth13. non-admin /chatfight awards geen XP", async () => {
+  resetEnv();
+  delete process.env.ADMIN_USER_ID;
+  const file = pointsFile();
+  const { service } = createService();
+  const ctx = createMockCtx({
+    userId: USER_A,
+    text: "/chatfight",
+    memberStatus: "member",
+  });
+  await handleChatFight(ctx, {
+    startFightFn: (p) => service.startFight(p),
+  });
+  assert.strictEqual(service.getActiveFight(), null);
+  assert.strictEqual(loadPoints(file).users[String(USER_A)], undefined);
+  resetEnv();
+});
+
+runTest("canManageGroup: env-admin skips getChatMember", async () => {
+  let called = false;
+  const allowed = await canManageGroup(
+    createMockCtx({ userId: ADMIN_ID }),
+    {
+      isAdminFn: (id) => String(id) === String(ADMIN_ID),
+      getChatMember: async () => {
+        called = true;
+        throw new Error("should not be called");
+      },
+    }
+  );
+  assert.strictEqual(allowed, true);
+  assert.strictEqual(called, false);
+});
+
+Promise.all(pendingAsyncTests)
+  .then(() => {
+    restoreEnv();
+    console.log("\nAll ChatFight tests passed.");
+  })
+  .catch((err) => {
+    console.error(err);
+    restoreEnv();
+    process.exit(1);
+  });
