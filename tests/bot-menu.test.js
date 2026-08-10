@@ -141,6 +141,7 @@ runTest("private /snake → signed Snake link", () => {
   });
   assert.strictEqual(verified.ok, true);
   assert.strictEqual(verified.uid, String(USER_A));
+  assert.strictEqual(verified.name, "Ada");
 });
 
 runTest("group /snake → geen t= token", () => {
@@ -177,6 +178,7 @@ runTest("private /bounch → signed Bounch link", () => {
   });
   assert.strictEqual(verified.ok, true);
   assert.strictEqual(verified.uid, String(USER_A));
+  assert.strictEqual(verified.name, "Ada");
 });
 
 runTest("group /bounch → geen t=", () => {

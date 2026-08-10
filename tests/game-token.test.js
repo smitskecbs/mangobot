@@ -78,6 +78,7 @@ runTest("valid snake token", () => {
     uid: "123456",
     game: "snake",
     exp: FIXED_NOW + DEFAULT_TTL_SECONDS,
+    name: null,
   });
 });
 
@@ -96,6 +97,7 @@ runTest("valid bounch token", () => {
     uid: "999",
     game: "bounch",
     exp: FIXED_NOW + DEFAULT_TTL_SECONDS,
+    name: null,
   });
 });
 
@@ -156,6 +158,7 @@ runTest("exp === now is valid", () => {
     uid: "1",
     game: "snake",
     exp: FIXED_NOW,
+    name: null,
   });
 });
 
@@ -506,6 +509,74 @@ runTest("same payload/secret/now produces deterministic token", () => {
   });
 
   assert.strictEqual(a, b);
+});
+
+runTest("optional name is signed into payload", () => {
+  const token = createGameToken("42", "snake", {
+    secret: TEST_SECRET,
+    now: FIXED_NOW,
+    name: "Kevin",
+  });
+  const payload = decodePayload(splitToken(token).payloadPart);
+  assert.strictEqual(payload.name, "Kevin");
+
+  const result = verifyGameToken(token, "snake", {
+    secret: TEST_SECRET,
+    now: FIXED_NOW,
+  });
+  assert.strictEqual(result.ok, true);
+  assert.strictEqual(result.name, "Kevin");
+});
+
+runTest("name is sanitized and omitted when empty after sanitize", () => {
+  const token = createGameToken("42", "snake", {
+    secret: TEST_SECRET,
+    now: FIXED_NOW,
+    name: "!!!",
+  });
+  const payload = decodePayload(splitToken(token).payloadPart);
+  assert.ok(!Object.prototype.hasOwnProperty.call(payload, "name"));
+
+  const result = verifyGameToken(token, "snake", {
+    secret: TEST_SECRET,
+    now: FIXED_NOW,
+  });
+  assert.strictEqual(result.ok, true);
+  assert.strictEqual(result.name, null);
+});
+
+runTest("legacy token without name still verifies", () => {
+  const token = craftToken({
+    uid: "7",
+    game: "bounch",
+    exp: FIXED_NOW + 100,
+  });
+  const result = verifyGameToken(token, "bounch", {
+    secret: TEST_SECRET,
+    now: FIXED_NOW,
+  });
+  assert.deepStrictEqual(result, {
+    ok: true,
+    uid: "7",
+    game: "bounch",
+    exp: FIXED_NOW + 100,
+    name: null,
+  });
+});
+
+runTest("invalid name field does not fail verification", () => {
+  const token = craftToken({
+    uid: "7",
+    game: "snake",
+    exp: FIXED_NOW + 100,
+    name: 123,
+  });
+  const result = verifyGameToken(token, "snake", {
+    secret: TEST_SECRET,
+    now: FIXED_NOW,
+  });
+  assert.strictEqual(result.ok, true);
+  assert.strictEqual(result.name, null);
 });
 
 console.log("\nAll game-token tests passed.");

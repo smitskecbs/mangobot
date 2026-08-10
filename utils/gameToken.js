@@ -7,6 +7,22 @@ const crypto = require("node:crypto");
 
 const ALLOWED_GAMES = Object.freeze(["snake", "bounch"]);
 const DEFAULT_TTL_SECONDS = 86400;
+const MAX_DISPLAY_NAME_LENGTH = 24;
+
+/**
+ * Sanitize optional display name for token payload (same rules as highscore names).
+ * @param {unknown} raw
+ * @returns {string|null}
+ */
+function sanitizeTokenDisplayName(raw) {
+  if (typeof raw !== "string") {
+    return null;
+  }
+
+  const trimmed = raw.trim().slice(0, MAX_DISPLAY_NAME_LENGTH);
+  const safe = trimmed.replace(/[^\w\s-]/gi, "").replace(/\s+/g, " ").trim();
+  return safe || null;
+}
 
 function isAllowedGame(game) {
   return typeof game === "string" && ALLOWED_GAMES.includes(game);
@@ -86,7 +102,7 @@ function safeEqual(a, b) {
 /**
  * @param {string|number} userId
  * @param {string} game
- * @param {{ secret?: string, ttlSeconds?: number, now?: number }} [options]
+ * @param {{ secret?: string, ttlSeconds?: number, now?: number, name?: string }} [options]
  * @returns {string}
  */
 function createGameToken(userId, game, options = {}) {
@@ -115,6 +131,11 @@ function createGameToken(userId, game, options = {}) {
     exp: now + ttlSeconds,
   };
 
+  const displayName = sanitizeTokenDisplayName(options.name);
+  if (displayName) {
+    payload.name = displayName;
+  }
+
   const payloadPart = base64UrlEncode(Buffer.from(JSON.stringify(payload), "utf8"));
   const signature = base64UrlEncode(signPayloadPart(payloadPart, secret));
 
@@ -125,7 +146,7 @@ function createGameToken(userId, game, options = {}) {
  * @param {unknown} token
  * @param {string} expectedGame
  * @param {{ secret?: string, now?: number }} [options]
- * @returns {{ ok: true, uid: string, game: string, exp: number } | { ok: false, reason: string }}
+ * @returns {{ ok: true, uid: string, game: string, exp: number, name: string|null } | { ok: false, reason: string }}
  */
 function verifyGameToken(token, expectedGame, options = {}) {
   if (token === undefined || token === null || token === "") {
@@ -225,17 +246,26 @@ function verifyGameToken(token, expectedGame, options = {}) {
     return { ok: false, reason: "expired" };
   }
 
+  // Optional name: invalid/missing → null (never fails verification).
+  let name = null;
+  if (Object.prototype.hasOwnProperty.call(payload, "name")) {
+    name = sanitizeTokenDisplayName(payload.name);
+  }
+
   return {
     ok: true,
     uid: payload.uid,
     game: payload.game,
     exp: payload.exp,
+    name,
   };
 }
 
 module.exports = {
   createGameToken,
   verifyGameToken,
+  sanitizeTokenDisplayName,
   ALLOWED_GAMES,
   DEFAULT_TTL_SECONDS,
+  MAX_DISPLAY_NAME_LENGTH,
 };

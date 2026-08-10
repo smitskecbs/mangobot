@@ -12,7 +12,7 @@ const GAME_LINK_UNAVAILABLE_MESSAGE =
 /**
  * @param {string|number} userId
  * @param {"snake"|"bounch"} game
- * @param {{ secret?: string, ttlSeconds?: number, now?: number }} [options]
+ * @param {{ secret?: string, ttlSeconds?: number, now?: number, name?: string }} [options]
  * @returns {{ ok: true, url: string } | { ok: false }}
  */
 function buildSignedGameUrl(userId, game, options = {}) {
@@ -64,7 +64,7 @@ ${playUrl}
  *
  * @param {string|number} userId
  * @param {"snake"|"bounch"} game
- * @param {{ secret?: string, ttlSeconds?: number, now?: number }} [options]
+ * @param {{ secret?: string, ttlSeconds?: number, now?: number, name?: string }} [options]
  * @returns {string}
  */
 function getGameCommandReply(userId, game, options = {}) {

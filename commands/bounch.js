@@ -12,7 +12,7 @@ const {
 
 /**
  * @param {object} ctx
- * @param {{ secret?: string, ttlSeconds?: number, now?: number }} [options]
+ * @param {{ secret?: string, ttlSeconds?: number, now?: number, name?: string }} [options]
  */
 function handleBounch(ctx, options = {}) {
   if (!isPrivateChat(ctx)) {
@@ -23,8 +23,12 @@ function handleBounch(ctx, options = {}) {
   }
 
   const userId = ctx.from && ctx.from.id;
+  const displayName =
+    options.name !== undefined
+      ? options.name
+      : ctx.from && ctx.from.first_name;
   return ctx.reply(
-    getGameCommandReply(userId, "bounch", options),
+    getGameCommandReply(userId, "bounch", { ...options, name: displayName }),
     getPrivateMenuKeyboard()
   );
 }
