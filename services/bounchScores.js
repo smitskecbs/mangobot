@@ -6,6 +6,11 @@ const fs = require("fs");
 const path = require("path");
 const { error: logError } = require("../utils/logger");
 const { appendHighscoreAnnouncementPlayCta } = require("../utils/botMenu");
+const {
+  normalizeVerifiedTelegramUserId,
+  applyVerifiedTelegramUserId,
+} = require("../utils/scoreIdentity");
+const { shouldHideScoreLeaderboardEntry } = require("../utils/admin");
 
 const MIN_LEVEL = 1;
 const MAX_LEVEL = 7;
@@ -66,7 +71,7 @@ function migratePlayerEntry(entry) {
       : new Date().toISOString();
   const gamesPlayed = Number.parseInt(String(entry.gamesPlayed ?? 1), 10);
 
-  return {
+  const migrated = {
     name: entry.name,
     bestLevel,
     lastLevel: Number.isFinite(Number.parseInt(String(entry.lastLevel ?? bestLevel), 10))
@@ -79,10 +84,17 @@ function migratePlayerEntry(entry) {
         ? entry.lastPlayedAt
         : updatedAt,
   };
+
+  const telegramUserId = normalizeVerifiedTelegramUserId(entry.telegramUserId);
+  if (telegramUserId) {
+    migrated.telegramUserId = telegramUserId;
+  }
+
+  return migrated;
 }
 
-function createPlayerEntry(name, level, now) {
-  return {
+function createPlayerEntry(name, level, now, verifiedTelegramUserId) {
+  const entry = {
     name,
     bestLevel: level,
     lastLevel: level,
@@ -90,6 +102,8 @@ function createPlayerEntry(name, level, now) {
     updatedAt: now,
     lastPlayedAt: now,
   };
+  applyVerifiedTelegramUserId(entry, verifiedTelegramUserId);
+  return entry;
 }
 
 function sortLeaderboard(leaderboard) {
@@ -137,6 +151,7 @@ function normalizeLeaderboardEntries(leaderboard) {
       lastLevel: entry.lastLevel,
       gamesPlayed: entry.gamesPlayed,
       lastPlayedAt: entry.lastPlayedAt,
+      telegramUserId: entry.telegramUserId,
     });
     const existing = byKey.get(key);
 
@@ -297,9 +312,10 @@ Current rank: #${rank}`;
 
 /**
  * Submit a cleared level and update the leaderboard.
+ * options.verifiedTelegramUserId — only from signed game identity.uid (never request body).
  * Returns { data, result } on success or { error } on validation failure.
  */
-function submitLevel(scoresFile, rawName, rawLevel) {
+function submitLevel(scoresFile, rawName, rawLevel, options = {}) {
   const name = sanitizeName(rawName);
   if (!name) {
     return { error: "Invalid name." };
@@ -310,6 +326,11 @@ function submitLevel(scoresFile, rawName, rawLevel) {
     return { error: "Invalid level." };
   }
 
+  const verifiedTelegramUserId =
+    options && options.verifiedTelegramUserId !== undefined
+      ? options.verifiedTelegramUserId
+      : undefined;
+
   const data = readScoresFile(scoresFile);
   const previousGlobalBestLevel = data.globalBestLevel || 0;
   const nameKey = normalizeNameKey(name);
@@ -319,7 +340,9 @@ function submitLevel(scoresFile, rawName, rawLevel) {
   let personalBest = false;
 
   if (playerIndex === -1) {
-    data.leaderboard.push(createPlayerEntry(name, level, now));
+    data.leaderboard.push(
+      createPlayerEntry(name, level, now, verifiedTelegramUserId)
+    );
     personalBest = true;
   } else {
     const existing = data.leaderboard[playerIndex];
@@ -331,6 +354,10 @@ function submitLevel(scoresFile, rawName, rawLevel) {
       updatedAt: existing.updatedAt,
       lastPlayedAt: now,
     };
+    if (existing.telegramUserId !== undefined) {
+      updatedPlayer.telegramUserId = existing.telegramUserId;
+    }
+    applyVerifiedTelegramUserId(updatedPlayer, verifiedTelegramUserId);
 
     if (level > existing.bestLevel) {
       updatedPlayer.bestLevel = level;
@@ -354,7 +381,7 @@ function submitLevel(scoresFile, rawName, rawLevel) {
   const player =
     finalPlayerIndex >= 0
       ? data.leaderboard[finalPlayerIndex]
-      : createPlayerEntry(name, level, now);
+      : createPlayerEntry(name, level, now, verifiedTelegramUserId);
 
   return {
     data,
@@ -369,16 +396,23 @@ function submitLevel(scoresFile, rawName, rawLevel) {
       gamesPlayed: player.gamesPlayed,
       lastLevel: player.lastLevel,
       lastPlayedAt: player.lastPlayedAt,
+      telegramUserId: player.telegramUserId || null,
     },
   };
 }
 
-function getDisplayLeaderboard(scoresFile = getScoresFilePath(), limit = LEADERBOARD_LIMIT) {
+function getDisplayLeaderboard(
+  scoresFile = getScoresFilePath(),
+  limit = LEADERBOARD_LIMIT
+) {
   const data = readScoresFile(scoresFile);
-  return data.leaderboard.slice(0, limit).map((entry) => ({
-    name: entry.name,
-    bestLevel: entry.bestLevel,
-  }));
+  return data.leaderboard
+    .filter((entry) => !shouldHideScoreLeaderboardEntry(entry))
+    .slice(0, limit)
+    .map((entry) => ({
+      name: entry.name,
+      bestLevel: entry.bestLevel,
+    }));
 }
 
 module.exports = {

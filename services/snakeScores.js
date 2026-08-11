@@ -6,6 +6,11 @@ const fs = require("fs");
 const path = require("path");
 const { error: logError } = require("../utils/logger");
 const { appendHighscoreAnnouncementPlayCta } = require("../utils/botMenu");
+const {
+  normalizeVerifiedTelegramUserId,
+  applyVerifiedTelegramUserId,
+} = require("../utils/scoreIdentity");
+const { shouldHideScoreLeaderboardEntry } = require("../utils/admin");
 
 const MAX_SCORE = 100_000;
 const MAX_NAME_LENGTH = 24;
@@ -65,7 +70,7 @@ function migratePlayerEntry(entry) {
       : new Date().toISOString();
   const gamesPlayed = Number.parseInt(String(entry.gamesPlayed ?? 1), 10);
 
-  return {
+  const migrated = {
     name: entry.name,
     score,
     lastScore: Number.isFinite(Number.parseInt(String(entry.lastScore ?? score), 10))
@@ -78,10 +83,17 @@ function migratePlayerEntry(entry) {
         ? entry.lastPlayedAt
         : updatedAt,
   };
+
+  const telegramUserId = normalizeVerifiedTelegramUserId(entry.telegramUserId);
+  if (telegramUserId) {
+    migrated.telegramUserId = telegramUserId;
+  }
+
+  return migrated;
 }
 
-function createPlayerEntry(name, score, now) {
-  return {
+function createPlayerEntry(name, score, now, verifiedTelegramUserId) {
+  const entry = {
     name,
     score,
     lastScore: score,
@@ -89,6 +101,8 @@ function createPlayerEntry(name, score, now) {
     updatedAt: now,
     lastPlayedAt: now,
   };
+  applyVerifiedTelegramUserId(entry, verifiedTelegramUserId);
+  return entry;
 }
 
 function sortLeaderboard(leaderboard) {
@@ -136,6 +150,7 @@ function normalizeLeaderboardEntries(leaderboard) {
       lastScore: entry.lastScore,
       gamesPlayed: entry.gamesPlayed,
       lastPlayedAt: entry.lastPlayedAt,
+      telegramUserId: entry.telegramUserId,
     });
     const existing = byKey.get(key);
 
@@ -324,9 +339,10 @@ Current rank: #${rank}`;
 
 /**
  * Submit a score and update the leaderboard.
+ * options.verifiedTelegramUserId — only from signed game identity.uid (never request body).
  * Returns { data, result } on success or { error } on validation failure.
  */
-function submitScore(scoresFile, rawName, rawScore) {
+function submitScore(scoresFile, rawName, rawScore, options = {}) {
   const name = sanitizeName(rawName);
   if (!name) {
     return { error: "Invalid name." };
@@ -337,6 +353,11 @@ function submitScore(scoresFile, rawName, rawScore) {
     return { error: "Invalid score." };
   }
 
+  const verifiedTelegramUserId =
+    options && options.verifiedTelegramUserId !== undefined
+      ? options.verifiedTelegramUserId
+      : undefined;
+
   const data = readScoresFile(scoresFile);
   const previousGlobalHighScore = data.globalHighScore || 0;
   const nameKey = normalizeNameKey(name);
@@ -346,7 +367,9 @@ function submitScore(scoresFile, rawName, rawScore) {
   let personalBest = false;
 
   if (playerIndex === -1) {
-    data.leaderboard.push(createPlayerEntry(name, score, now));
+    data.leaderboard.push(
+      createPlayerEntry(name, score, now, verifiedTelegramUserId)
+    );
     personalBest = true;
   } else {
     const existing = data.leaderboard[playerIndex];
@@ -358,6 +381,11 @@ function submitScore(scoresFile, rawName, rawScore) {
       updatedAt: existing.updatedAt,
       lastPlayedAt: now,
     };
+    if (existing.telegramUserId !== undefined) {
+      updatedPlayer.telegramUserId = existing.telegramUserId;
+    }
+    // Attach verified uid when missing; never overwrite a different verified uid.
+    applyVerifiedTelegramUserId(updatedPlayer, verifiedTelegramUserId);
 
     if (score > existing.score) {
       updatedPlayer.score = score;
@@ -379,7 +407,9 @@ function submitScore(scoresFile, rawName, rawScore) {
 
   const finalPlayerIndex = findPlayerIndex(data.leaderboard, nameKey);
   const player =
-    finalPlayerIndex >= 0 ? data.leaderboard[finalPlayerIndex] : createPlayerEntry(name, score, now);
+    finalPlayerIndex >= 0
+      ? data.leaderboard[finalPlayerIndex]
+      : createPlayerEntry(name, score, now, verifiedTelegramUserId);
   const personalBestScore = player.score;
 
   return {
@@ -395,16 +425,23 @@ function submitScore(scoresFile, rawName, rawScore) {
       gamesPlayed: player.gamesPlayed,
       lastScore: player.lastScore,
       lastPlayedAt: player.lastPlayedAt,
+      telegramUserId: player.telegramUserId || null,
     },
   };
 }
 
-function getDisplayLeaderboard(scoresFile = getScoresFilePath(), limit = LEADERBOARD_LIMIT) {
+function getDisplayLeaderboard(
+  scoresFile = getScoresFilePath(),
+  limit = LEADERBOARD_LIMIT
+) {
   const data = readScoresFile(scoresFile);
-  return data.leaderboard.slice(0, limit).map((entry) => ({
-    name: entry.name,
-    score: entry.score,
-  }));
+  return data.leaderboard
+    .filter((entry) => !shouldHideScoreLeaderboardEntry(entry))
+    .slice(0, limit)
+    .map((entry) => ({
+      name: entry.name,
+      score: entry.score,
+    }));
 }
 
 module.exports = {

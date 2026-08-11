@@ -1,12 +1,50 @@
 /**
  * Group management authorization for Telegram commands.
  * Allowlist (ADMIN_USER_ID) OR Telegram creator/administrator status.
+ * Leaderboard privacy uses ADMIN_USER_ID (and verified score telegramUserId).
  */
 
 const { isAdmin } = require("../services/points");
 const { isGroupChat } = require("./botMenu");
+const {
+  normalizeVerifiedTelegramUserId,
+} = require("./scoreIdentity");
 
 const MANAGE_STATUSES = new Set(["creator", "administrator"]);
+
+/**
+ * Whether this Telegram user id must be omitted from public leaderboards.
+ * Missing ADMIN_USER_ID → hide nobody.
+ * @param {string|number|null|undefined} userId
+ * @returns {boolean}
+ */
+function shouldHideFromLeaderboards(userId) {
+  const adminId = process.env.ADMIN_USER_ID;
+  if (!adminId) {
+    return false;
+  }
+  if (userId === undefined || userId === null || userId === "") {
+    return false;
+  }
+  return String(userId) === String(adminId);
+}
+
+/**
+ * Snake/Bounch entry hide: only verified telegramUserId === ADMIN_USER_ID.
+ * Legacy entries without telegramUserId stay visible (no name-based hide).
+ * @param {object|null|undefined} entry
+ * @returns {boolean}
+ */
+function shouldHideScoreLeaderboardEntry(entry) {
+  if (!entry || typeof entry !== "object") {
+    return false;
+  }
+  const uid = normalizeVerifiedTelegramUserId(entry.telegramUserId);
+  if (!uid) {
+    return false;
+  }
+  return shouldHideFromLeaderboards(uid);
+}
 
 /**
  * Whether the user may manage ChatFight (and similar) in this chat.
@@ -62,5 +100,7 @@ async function canManageGroup(ctx, options = {}) {
 
 module.exports = {
   MANAGE_STATUSES,
+  shouldHideFromLeaderboards,
+  shouldHideScoreLeaderboardEntry,
   canManageGroup,
 };

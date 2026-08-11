@@ -253,11 +253,15 @@ async function handleSnakeHighscore(req, res, origin) {
 
   // Optional signed game token — never blocks public submit; uid never trusted from body.
   const identity = verifyOptionalGameIdentity(body.t, "snake");
+  const verifiedTelegramUserId =
+    identity && identity.verified && identity.uid ? identity.uid : undefined;
 
   let submission;
 
   try {
-    submission = submitScore(SCORES_FILE, name, score);
+    submission = submitScore(SCORES_FILE, name, score, {
+      verifiedTelegramUserId,
+    });
   } catch {
     sendJson(res, 500, { ok: false, error: "Failed to save score." }, origin);
     return;
@@ -389,11 +393,15 @@ async function handleBounchHighscore(req, res, origin) {
 
   // Optional signed game token — never blocks public submit; uid never trusted from body.
   const identity = verifyOptionalGameIdentity(body.t, "bounch");
+  const verifiedTelegramUserId =
+    identity && identity.verified && identity.uid ? identity.uid : undefined;
 
   let submission;
 
   try {
-    submission = bounchScores.submitLevel(BOUNCH_SCORES_FILE, name, level);
+    submission = bounchScores.submitLevel(BOUNCH_SCORES_FILE, name, level, {
+      verifiedTelegramUserId,
+    });
   } catch {
     sendJson(res, 500, { ok: false, error: "Failed to save level." }, origin);
     return;
