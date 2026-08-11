@@ -106,6 +106,30 @@ function pickRandom(list, random) {
   return list[Math.max(0, Math.min(list.length - 1, index))];
 }
 
+const ALL_FIGHT_TYPES = Object.freeze([
+  FIGHT_TYPES.TYPE_RUSH,
+  FIGHT_TYPES.MATH_RUSH,
+  FIGHT_TYPES.EMOJI_GUESS,
+]);
+
+/**
+ * Pick a fight type, avoiding immediate repeat when alternatives exist.
+ * @param {string[]} [types]
+ * @param {string|null} [avoidType]
+ * @param {() => number} random
+ */
+function selectFightType(types, avoidType, random) {
+  const pool =
+    Array.isArray(types) && types.length > 0 ? types : [...ALL_FIGHT_TYPES];
+  if (avoidType && pool.length > 1) {
+    const filtered = pool.filter((t) => t !== avoidType);
+    if (filtered.length > 0) {
+      return pickRandom(filtered, random);
+    }
+  }
+  return pickRandom(pool, random);
+}
+
 function randomIntInclusive(min, max, random) {
   const lo = Math.ceil(min);
   const hi = Math.floor(max);
@@ -283,6 +307,7 @@ function createChatFightService(options = {}) {
       active: fight.status === FIGHT_STATUS.ACTIVE,
       chatId: fight.chatId,
       type: fight.type,
+      source: fight.source || "manual",
       prompt: fight.prompt,
       acceptedAnswers: [...fight.acceptedAnswers],
       revealAnswer: fight.revealAnswer,
@@ -375,7 +400,14 @@ function createChatFightService(options = {}) {
     }, delay);
   }
 
-  function startFight({ chatId, type = null, sendMessage: startSend = null } = {}) {
+  function startFight({
+    chatId,
+    type = null,
+    types = null,
+    avoidType = null,
+    source = "manual",
+    sendMessage: startSend = null,
+  } = {}) {
     if (chatId === undefined || chatId === null || chatId === "") {
       return { ok: false, reason: "missing-chat" };
     }
@@ -400,10 +432,7 @@ function createChatFightService(options = {}) {
 
     let resolvedType = type;
     if (!resolvedType) {
-      resolvedType = pickRandom(
-        [FIGHT_TYPES.TYPE_RUSH, FIGHT_TYPES.MATH_RUSH, FIGHT_TYPES.EMOJI_GUESS],
-        random
-      );
+      resolvedType = selectFightType(types, avoidType, random);
     }
 
     const challenge = generateChallenge(resolvedType, random);
@@ -414,12 +443,14 @@ function createChatFightService(options = {}) {
         : typeof sendMessage === "function"
           ? sendMessage
           : null;
+    const previousLastStartedAt = lastStartedAt;
 
     fight = {
       id: `cf-${startedAt}`,
       status: FIGHT_STATUS.WAITING_FOR_REVEAL,
       chatId,
       type: challenge.type,
+      source: source === "auto" ? "auto" : "manual",
       prompt: challenge.prompt,
       acceptedAnswers: [...challenge.acceptedAnswers],
       revealAnswer: challenge.revealAnswer,
@@ -430,6 +461,7 @@ function createChatFightService(options = {}) {
       meta: challenge.meta || null,
       sendMessage: notify,
       messageId: null,
+      previousLastStartedAt,
     };
     lastStartedAt = startedAt;
     scheduleRevealTimeout(fight);
@@ -448,6 +480,59 @@ function createChatFightService(options = {}) {
     if (fight && messageId != null) {
       fight.messageId = messageId;
     }
+  }
+
+  /**
+   * Roll back a fight that never reached Telegram (send failure).
+   * Restores prior cooldown clock. No-op if already published/revealed.
+   */
+  function abortUnpublishedFight() {
+    if (!fight || fight.status !== FIGHT_STATUS.WAITING_FOR_REVEAL) {
+      return { aborted: false, reason: "not-waiting" };
+    }
+    if (fight.messageId != null) {
+      return { aborted: false, reason: "already-published" };
+    }
+    const restore = fight.previousLastStartedAt;
+    clearFightTimer();
+    lastStartedAt = restore == null ? null : restore;
+    fight = null;
+    timeoutMessageSent = false;
+    return { aborted: true };
+  }
+
+  function getRuntimeStatus() {
+    const snap = snapshotFight();
+    let currentFight = "none";
+    if (snap) {
+      if (snap.status === FIGHT_STATUS.WAITING_FOR_REVEAL) {
+        currentFight = "waiting";
+      } else if (snap.status === FIGHT_STATUS.ACTIVE) {
+        currentFight = "active";
+      } else {
+        currentFight = snap.status;
+      }
+    }
+    const remainingMs = getCooldownRemainingMs();
+    return {
+      currentFight,
+      type:
+        snap &&
+        (snap.status === FIGHT_STATUS.WAITING_FOR_REVEAL ||
+          snap.status === FIGHT_STATUS.ACTIVE)
+          ? snap.type
+          : null,
+      source:
+        snap &&
+        (snap.status === FIGHT_STATUS.WAITING_FOR_REVEAL ||
+          snap.status === FIGHT_STATUS.ACTIVE)
+          ? snap.source
+          : null,
+      cooldownRemainingMs: remainingMs,
+      cooldownRemainingMinutes: formatCooldownMinutes(remainingMs),
+      isFightOpen: isFightOpen(),
+      isOnCooldown: remainingMs > 0,
+    };
   }
 
   /**
@@ -559,6 +644,8 @@ function createChatFightService(options = {}) {
     reset,
     setLastStartedAt,
     setFightMessageId,
+    abortUnpublishedFight,
+    getRuntimeStatus,
     clearFightTimer,
     buildWinnerReply,
     buildTimeoutMessage,
@@ -597,6 +684,10 @@ module.exports = {
   generateMathRush,
   generateEmojiGuess,
   createChatFightService,
+  selectFightType,
+  ALL_FIGHT_TYPES,
+  /** Shared production runtime — manual + auto must use this instance. */
+  chatFightRuntime: defaultService,
   startFight: (...args) => defaultService.startFight(...args),
   revealFight: (...args) => defaultService.revealFight(...args),
   tryClaimWinner: (...args) => defaultService.tryClaimWinner(...args),
@@ -605,9 +696,13 @@ module.exports = {
   getCooldownRemainingMs: (...args) =>
     defaultService.getCooldownRemainingMs(...args),
   isOnCooldown: (...args) => defaultService.isOnCooldown(...args),
+  isFightOpen: (...args) => defaultService.isFightOpen(...args),
   forceTimeout: (...args) => defaultService.forceTimeout(...args),
   resetChatFightState: (...args) => defaultService.reset(...args),
   setFightMessageId: (...args) => defaultService.setFightMessageId(...args),
+  abortUnpublishedFight: (...args) =>
+    defaultService.abortUnpublishedFight(...args),
+  getRuntimeStatus: (...args) => defaultService.getRuntimeStatus(...args),
   buildWinnerReplyDefault: (...args) => defaultService.buildWinnerReply(...args),
   _defaultService: defaultService,
 };

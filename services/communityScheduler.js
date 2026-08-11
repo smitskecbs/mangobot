@@ -18,6 +18,14 @@ const { log, error: logError } = require("../utils/logger");
 const {
   wasActiveWithin,
 } = require("../utils/communityActivityPulse");
+const {
+  parseAutoChatFightConfig,
+  normalizeAutoChatFightState,
+  emptyAutoChatFightState,
+  pruneAutoProcessedSlots,
+  tryStartAutoChatFight,
+} = require("./autoChatFight");
+const { chatFightRuntime } = require("./chatFight");
 
 const DEFAULT_STATE_FILE = path.join(
   __dirname,
@@ -203,7 +211,11 @@ function resolveSlotsFromEnv() {
 }
 
 function emptyState() {
-  return { sent: {}, lastMessageKey: null };
+  return {
+    sent: {},
+    lastMessageKey: null,
+    autoChatFight: emptyAutoChatFightState(),
+  };
 }
 
 function ensureParentDir(filePath) {
@@ -233,6 +245,7 @@ function loadState(stateFile) {
       sent: parsed.sent,
       lastMessageKey:
         typeof parsed.lastMessageKey === "string" ? parsed.lastMessageKey : null,
+      autoChatFight: normalizeAutoChatFightState(parsed.autoChatFight),
     };
   } catch (err) {
     logError("[community-scheduler] Failed to read state:", err);
@@ -242,14 +255,18 @@ function loadState(stateFile) {
 
 function pruneState(state, keepDays = 14) {
   const entries = Object.entries(state.sent || {});
-  if (entries.length <= keepDays) {
-    return state;
+  let sent = state.sent || {};
+  if (entries.length > keepDays) {
+    entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    sent = Object.fromEntries(entries.slice(-keepDays));
   }
-  entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  const kept = entries.slice(-keepDays);
   return {
-    sent: Object.fromEntries(kept),
+    sent,
     lastMessageKey: state.lastMessageKey || null,
+    autoChatFight: pruneAutoProcessedSlots(
+      normalizeAutoChatFightState(state.autoChatFight),
+      keepDays
+    ),
   };
 }
 
@@ -376,9 +393,34 @@ function createCommunityScheduler(options = {}) {
       ? options.wasActiveWithin
       : wasActiveWithin;
 
+  const autoConfig =
+    options.autoChatFightConfig ||
+    parseAutoChatFightConfig(process.env, options.autoChatFightOptions || {});
+  const chatFight =
+    options.chatFight || chatFightRuntime;
+  const announceChatFight =
+    typeof options.announceChatFight === "function"
+      ? options.announceChatFight
+      : null;
+  const autoRandom =
+    typeof options.autoChatFightRandom === "function"
+      ? options.autoChatFightRandom
+      : Math.random;
+
   let timer = null;
   let lastCheckedAt = null;
   let state = loadState(stateFile);
+  if (!state.autoChatFight) {
+    state.autoChatFight = emptyAutoChatFightState();
+  }
+
+  function persist() {
+    try {
+      saveState(stateFile, state);
+    } catch (err) {
+      logError("[community-scheduler] Failed to persist state:", err);
+    }
+  }
 
   async function sendSlot(slot, dayKey) {
     const text = pickMessage(slot.id, dayKey, {
@@ -397,15 +439,58 @@ function createCommunityScheduler(options = {}) {
     }
   }
 
+  async function processAutoChatFight(prevClock, nowClock, now) {
+    if (!autoConfig.enabled) {
+      return { enabled: false, started: [], skipped: [] };
+    }
+    if (!chatId) {
+      return { enabled: true, started: [], skipped: ["missing-chat-id"] };
+    }
+    if (!announceChatFight) {
+      return { enabled: true, started: [], skipped: ["missing-announcer"] };
+    }
+
+    const started = [];
+    const skipped = [];
+    const nowMs = now.getTime();
+
+    for (const slot of autoConfig.slots) {
+      if (!didCrossSlot(prevClock, nowClock, slot)) {
+        continue;
+      }
+
+      const result = await tryStartAutoChatFight({
+        chatId,
+        slot,
+        dayKey: nowClock.dayKey,
+        config: autoConfig,
+        autoState: state.autoChatFight,
+        chatFight,
+        announce: announceChatFight,
+        nowMs,
+        random: autoRandom,
+      });
+      persist();
+
+      if (result.started) {
+        started.push(slot.id);
+      } else if (result.reason && result.reason !== "already-processed") {
+        skipped.push({ slot: slot.id, reason: result.reason });
+      }
+    }
+
+    return { enabled: true, started, skipped };
+  }
+
   async function tick() {
-    if (!enabled) {
+    const remindersWanted = enabled;
+    const autoWanted = autoConfig.enabled;
+
+    if (!remindersWanted && !autoWanted) {
       return { skipped: "disabled" };
     }
     if (!chatId) {
       return { skipped: "missing-chat-id" };
-    }
-    if (!sendMessage) {
-      return { skipped: "missing-sender" };
     }
 
     const now = getNow();
@@ -422,64 +507,74 @@ function createCommunityScheduler(options = {}) {
     const fired = [];
     const skippedRecent = [];
 
-    for (const slot of slots) {
-      if (!didCrossSlot(prevClock, nowClock, slot)) {
-        continue;
-      }
-      if (wasSent(state, nowClock.dayKey, slot.id)) {
-        continue;
-      }
-
-      if (skipIfRecentMs > 0 && wasActiveFn(skipIfRecentMs, now.getTime())) {
-        markSent(state, nowClock.dayKey, slot.id);
-        try {
-          saveState(stateFile, state);
-        } catch (err) {
-          logError("[community-scheduler] Failed to persist state:", err);
+    if (remindersWanted && sendMessage) {
+      for (const slot of slots) {
+        if (!didCrossSlot(prevClock, nowClock, slot)) {
+          continue;
         }
-        skippedRecent.push(slot.id);
-        continue;
-      }
-
-      const result = await sendSlot(slot, nowClock.dayKey);
-      if (result.ok) {
-        markSent(state, nowClock.dayKey, slot.id);
-        state.lastMessageKey = messageKey(result.text);
-        try {
-          saveState(stateFile, state);
-        } catch (err) {
-          logError("[community-scheduler] Failed to persist state:", err);
+        if (wasSent(state, nowClock.dayKey, slot.id)) {
+          continue;
         }
-        fired.push(slot.id);
+
+        if (skipIfRecentMs > 0 && wasActiveFn(skipIfRecentMs, now.getTime())) {
+          markSent(state, nowClock.dayKey, slot.id);
+          persist();
+          skippedRecent.push(slot.id);
+          continue;
+        }
+
+        const result = await sendSlot(slot, nowClock.dayKey);
+        if (result.ok) {
+          markSent(state, nowClock.dayKey, slot.id);
+          state.lastMessageKey = messageKey(result.text);
+          persist();
+          fired.push(slot.id);
+        }
       }
     }
+
+    const autoFight = await processAutoChatFight(prevClock, nowClock, now);
 
     return {
       dayKey: nowClock.dayKey,
       fired,
       skippedRecent,
+      autoFight,
     };
   }
 
   function start() {
-    if (!enabled) {
-      log("[community-scheduler] Disabled (COMMUNITY_AUTO_MESSAGES_ENABLED != true)");
+    const autoWanted = autoConfig.enabled;
+    if (!enabled && !autoWanted) {
+      log(
+        "[community-scheduler] Disabled (reminders off, AUTO_CHATFIGHT_ENABLED != true)"
+      );
       return;
     }
     if (!chatId) {
       log("[community-scheduler] Disabled (TELEGRAM_CHAT_ID missing)");
       return;
     }
-    if (!sendMessage) {
-      log("[community-scheduler] Disabled (no sendMessage)");
-      return;
+    if (enabled && !sendMessage) {
+      log("[community-scheduler] Reminder sender missing");
     }
-
-    log(
-      `[community-scheduler] Enabled — timezone=${timeZone} slots=${slots
-        .map((s) => `${s.id}@${String(s.hour).padStart(2, "0")}:${String(s.minute).padStart(2, "0")}`)
-        .join(",")}`
-    );
+    if (autoWanted && !announceChatFight) {
+      log("[auto-chatfight] disabled (no announcer)");
+    }
+    if (enabled && sendMessage) {
+      log(
+        `[community-scheduler] Enabled — timezone=${timeZone} slots=${slots
+          .map((s) => `${s.id}@${String(s.hour).padStart(2, "0")}:${String(s.minute).padStart(2, "0")}`)
+          .join(",")}`
+      );
+    }
+    if (autoWanted && announceChatFight) {
+      log(
+        `[auto-chatfight] Enabled — interval=${autoConfig.intervalMinutes}m chance=${autoConfig.chancePercent}% slots=${autoConfig.slots.length}`
+      );
+    } else if (!autoWanted) {
+      log("[auto-chatfight] disabled");
+    }
 
     tick().catch((err) => logError("[community-scheduler] tick error:", err));
     timer = setInterval(() => {
@@ -516,6 +611,7 @@ function createCommunityScheduler(options = {}) {
     slots,
     stateFile,
     skipIfRecentMs,
+    autoConfig,
     start,
     stop,
     tick,
@@ -539,6 +635,18 @@ function startCommunityScheduler(telegram, options = {}) {
       });
       return true;
     },
+    announceChatFight: async (chatId, teaser, keyboard) => {
+      const extra = {
+        disable_web_page_preview: true,
+      };
+      if (keyboard && keyboard.reply_markup) {
+        extra.reply_markup = keyboard.reply_markup;
+      } else if (keyboard) {
+        Object.assign(extra, keyboard);
+      }
+      return telegram.sendMessage(chatId, teaser, extra);
+    },
+    chatFight: options.chatFight || chatFightRuntime,
   });
   scheduler.start();
   return scheduler;
