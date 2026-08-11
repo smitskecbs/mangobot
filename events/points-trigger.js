@@ -17,6 +17,7 @@ const {
   isPrivateChat,
   isPrivateMenuLabel,
 } = require("../utils/botMenu");
+const { noteCommunityActivity } = require("../utils/communityActivityPulse");
 
 /**
  * Private reply-keyboard taps are UI actions, not community messages.
@@ -46,6 +47,9 @@ module.exports = (bot) => {
     let activityResult = null;
     if (!ctx.from.is_bot && !skipActivity) {
       activityResult = awardDailyActivityPoint(userId, userName);
+      if (!isPrivateChat(ctx)) {
+        noteCommunityActivity();
+      }
     }
 
     const trigger = isMenuTap ? null : detectTrigger(text);

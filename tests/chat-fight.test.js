@@ -11,6 +11,7 @@ const assert = require("assert");
 const {
   createChatFightService,
   FIGHT_TYPES,
+  FIGHT_STATUS,
   TYPE_RUSH_WORDS,
   EMOJI_MAP,
   USAGE_TEXT,
@@ -20,6 +21,7 @@ const {
   buildWinnerReply,
   CHAT_FIGHT_XP,
   CHAT_FIGHT_COOLDOWN_MS,
+  REVEAL_CALLBACK_DATA,
 } = require("../services/chatFight");
 const {
   awardChatFightXp,
@@ -33,7 +35,10 @@ const {
   detectTrigger,
   isCommandText,
 } = require("../services/points");
-const { handleChatFight } = require("../commands/chatfight");
+const {
+  handleChatFight,
+  handleChatFightReveal,
+} = require("../commands/chatfight");
 const { canManageGroup } = require("../utils/admin");
 const { registerChatFightListener } = require("../events/chat-fight");
 const { shouldSkipCommunityActivity } = require("../events/points-trigger");
@@ -112,7 +117,10 @@ function createMockCtx({
   getChatMemberImpl,
 } = {}) {
   const replies = [];
+  const replyExtras = [];
   const telegramMessages = [];
+  const cbAnswers = [];
+  const edited = [];
   const getChatMemberCalls = [];
   const defaultGetChatMember = (id, uid) => {
     getChatMemberCalls.push({ chatId: id, userId: uid });
@@ -132,7 +140,10 @@ function createMockCtx({
     message: { text },
     state: {},
     replies,
+    replyExtras,
     telegramMessages,
+    cbAnswers,
+    edited,
     getChatMemberCalls,
     telegram: {
       sendMessage(id, msg) {
@@ -144,8 +155,17 @@ function createMockCtx({
           ? getChatMemberImpl
           : defaultGetChatMember,
     },
-    reply(msg) {
+    reply(msg, extra) {
       replies.push(msg);
+      replyExtras.push(extra);
+      return Promise.resolve({ message_id: 9001 });
+    },
+    answerCbQuery(text) {
+      cbAnswers.push(text || "");
+      return Promise.resolve();
+    },
+    editMessageText(text) {
+      edited.push(text);
       return Promise.resolve();
     },
   };
@@ -221,6 +241,7 @@ function createService(overrides = {}) {
     clearTimeout: clock.clearTimeout,
     random: overrides.random || (() => 0),
     durationMs: overrides.durationMs || 60_000,
+    revealWaitMs: overrides.revealWaitMs || 300_000,
     cooldownMs: overrides.cooldownMs || CHAT_FIGHT_COOLDOWN_MS,
     sendMessage: (chatId, text) => {
       sent.push({ chatId, text });
@@ -228,6 +249,26 @@ function createService(overrides = {}) {
     ...overrides,
   });
   return { service, clock, sent };
+}
+
+/** Start fight then reveal so answers are accepted (v2 flow). */
+function startActiveFight(service, params) {
+  const started = service.startFight(params);
+  if (!started.ok) {
+    return started;
+  }
+  const revealed = service.revealFight(params.chatId);
+  if (!revealed.ok) {
+    return { ok: false, reason: revealed.reason || "reveal-failed", started };
+  }
+  return {
+    ok: true,
+    fight: revealed.fight,
+    prompt: revealed.prompt,
+    teaser: started.teaser,
+    started,
+    revealed,
+  };
 }
 
 function createTextBot(handlers) {
@@ -257,10 +298,19 @@ runTest("1. admin can start Type Rush in group", async () => {
     isAdminFn: (id) => String(id) === String(ADMIN_ID),
   });
   assert.strictEqual(ctx.replies.length, 1);
-  assert.ok(ctx.replies[0].includes("Type this exactly:"));
-  assert.ok(ctx.replies[0].includes("MANGO"));
-  assert.ok(service.getActiveFight());
-  assert.strictEqual(service.getActiveFight().type, FIGHT_TYPES.TYPE_RUSH);
+  assert.ok(ctx.replies[0].includes("A new challenge is ready"));
+  assert.ok(!ctx.replies[0].includes("MANGO"));
+  assert.ok(!ctx.replies[0].includes("Type this exactly:"));
+  assert.ok(service.getFightSnapshot());
+  assert.strictEqual(service.getFightSnapshot().status, FIGHT_STATUS.WAITING_FOR_REVEAL);
+  assert.strictEqual(service.getFightSnapshot().type, FIGHT_TYPES.TYPE_RUSH);
+  assert.strictEqual(service.getActiveFight(), null);
+  const kb = ctx.replyExtras[0];
+  assert.ok(kb && kb.reply_markup);
+  const button = kb.reply_markup.inline_keyboard[0][0];
+  assert.ok(button.text.includes("Reveal challenge"));
+  assert.strictEqual(button.callback_data, REVEAL_CALLBACK_DATA);
+  assert.ok(!String(button.callback_data).includes("MANGO"));
 });
 
 runTest("2. non-admin cannot start", async () => {
@@ -298,7 +348,7 @@ runTest("3. private cannot start", async () => {
 runTest("4. exact/case-insensitive correct answer wins", () => {
   const file = pointsFile();
   const { service } = createService({ random: () => 0 });
-  service.startFight({ chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
+  startActiveFight(service, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
   const claim = service.tryClaimWinner(USER_A, COMMUNITY_CHAT, "mango");
   assert.strictEqual(claim.claimed, true);
   const award = awardChatFightXp(USER_A, "Kevin", file);
@@ -308,7 +358,7 @@ runTest("4. exact/case-insensitive correct answer wins", () => {
 
 runTest("5. wrong answer silent (no claim)", () => {
   const { service } = createService({ random: () => 0 });
-  service.startFight({ chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
+  startActiveFight(service, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
   const claim = service.tryClaimWinner(USER_A, COMMUNITY_CHAT, "WRONG");
   assert.strictEqual(claim.claimed, false);
   assert.strictEqual(claim.reason, "wrong-answer");
@@ -317,7 +367,7 @@ runTest("5. wrong answer silent (no claim)", () => {
 
 runTest("6. substring answer fails", () => {
   const { service } = createService({ random: () => 0 });
-  service.startFight({ chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
+  startActiveFight(service, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
   // Word is MANGO — substring / extra punctuation must fail
   assert.strictEqual(
     service.tryClaimWinner(USER_A, COMMUNITY_CHAT, "MANG").claimed,
@@ -336,7 +386,7 @@ runTest("6. substring answer fails", () => {
 runTest("7. bot cannot win", () => {
   const file = pointsFile();
   const { service } = createService({ random: () => 0 });
-  service.startFight({ chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
+  startActiveFight(service, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
 
   const handlers = [];
   registerChatFightListener(createTextBot(handlers), {
@@ -363,7 +413,7 @@ runTest("8. generated math challenge has valid integer solution", () => {
     const { service } = createService({
       random: () => Math.random(),
     });
-    const started = service.startFight({
+    const started = startActiveFight(service, {
       chatId: COMMUNITY_CHAT,
       type: FIGHT_TYPES.MATH_RUSH,
     });
@@ -391,7 +441,7 @@ runTest("9. correct math answer wins", () => {
       return v;
     },
   });
-  svc.startFight({ chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.MATH_RUSH });
+  startActiveFight(svc, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.MATH_RUSH });
   const fight = svc.getActiveFight();
   const answer = fight.acceptedAnswers[0];
   const claim = svc.tryClaimWinner(USER_A, COMMUNITY_CHAT, answer);
@@ -403,7 +453,7 @@ runTest("9. correct math answer wins", () => {
 runTest("10. wrong math answer no XP", () => {
   const file = pointsFile();
   const { service } = createService({ random: () => 0 });
-  service.startFight({ chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.MATH_RUSH });
+  startActiveFight(service, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.MATH_RUSH });
   const wrong = service.tryClaimWinner(USER_A, COMMUNITY_CHAT, "99999");
   assert.strictEqual(wrong.claimed, false);
   assert.strictEqual(loadPoints(file).users[String(USER_A)], undefined);
@@ -415,7 +465,7 @@ runTest("10. wrong math answer no XP", () => {
 
 runTest("11. accepted synonym wins", () => {
   const { service } = createService({ random: () => 0 }); // first emoji 😂
-  service.startFight({ chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.EMOJI_GUESS });
+  startActiveFight(service, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.EMOJI_GUESS });
   const fight = service.getActiveFight();
   assert.strictEqual(fight.meta.emoji, "😂");
   assert.strictEqual(
@@ -426,7 +476,7 @@ runTest("11. accepted synonym wins", () => {
 
 runTest("12. unknown emoji answer fails", () => {
   const { service } = createService({ random: () => 0 });
-  service.startFight({ chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.EMOJI_GUESS });
+  startActiveFight(service, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.EMOJI_GUESS });
   assert.strictEqual(
     service.tryClaimWinner(USER_A, COMMUNITY_CHAT, "happy").claimed,
     false
@@ -440,7 +490,7 @@ runTest("12. unknown emoji answer fails", () => {
 runTest("13-16. first correct +2; second +0; lifetime+weekly", () => {
   const file = pointsFile();
   const { service } = createService({ random: () => 0 });
-  service.startFight({ chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
+  startActiveFight(service, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
 
   const first = service.tryClaimWinner(USER_A, COMMUNITY_CHAT, "MANGO");
   assert.strictEqual(first.claimed, true);
@@ -471,7 +521,7 @@ runTest("17. rank-up works", () => {
 runTest("18. two near-simultaneous correct messages → one winner", () => {
   const file = pointsFile();
   const { service } = createService({ random: () => 0 });
-  service.startFight({ chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
+  startActiveFight(service, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
 
   const handlers = [];
   registerChatFightListener(createTextBot(handlers), {
@@ -499,7 +549,7 @@ runTest("18. two near-simultaneous correct messages → one winner", () => {
 runTest("19-20. first daily message that wins → activity + ChatFight XP", () => {
   const file = pointsFile();
   const { service } = createService({ random: () => 0 });
-  service.startFight({ chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
+  startActiveFight(service, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
 
   // Simulate event order: chat-fight then points-trigger awards
   const claim = service.tryClaimWinner(USER_A, COMMUNITY_CHAT, "MANGO");
@@ -559,7 +609,7 @@ runTest("22-24. timeout ends fight; one message; no XP after", () => {
     random: () => 0,
     durationMs: 60_000,
   });
-  service.startFight({ chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
+  startActiveFight(service, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
   assert.ok(service.getActiveFight());
 
   clock.advance(60_000);
@@ -582,7 +632,7 @@ runTest("25. timer cleared after winner", () => {
     random: () => 0,
     durationMs: 60_000,
   });
-  service.startFight({ chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
+  startActiveFight(service, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
   assert.strictEqual(clock.pendingCount(), 1);
   service.tryClaimWinner(USER_A, COMMUNITY_CHAT, "MANGO");
   assert.strictEqual(clock.pendingCount(), 0);
@@ -596,7 +646,7 @@ runTest("25. timer cleared after winner", () => {
 
 runTest("26. cannot start second fight before 60 min", () => {
   const { service, clock } = createService({ random: () => 0 });
-  const first = service.startFight({
+  const first = startActiveFight(service, {
     chatId: COMMUNITY_CHAT,
     type: FIGHT_TYPES.TYPE_RUSH,
   });
@@ -615,7 +665,7 @@ runTest("26. cannot start second fight before 60 min", () => {
 
 runTest("27. can start after cooldown", () => {
   const { service, clock } = createService({ random: () => 0 });
-  service.startFight({ chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
+  startActiveFight(service, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
   service.tryClaimWinner(USER_A, COMMUNITY_CHAT, "MANGO");
   clock.advance(CHAT_FIGHT_COOLDOWN_MS);
   const next = service.startFight({
@@ -627,7 +677,7 @@ runTest("27. can start after cooldown", () => {
 
 runTest("28. cooldown survives fight completion in memory", () => {
   const { service, clock } = createService({ random: () => 0 });
-  service.startFight({ chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
+  startActiveFight(service, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
   service.tryClaimWinner(USER_A, COMMUNITY_CHAT, "MANGO");
   assert.ok(service.isOnCooldown());
   clock.advance(30 * 60 * 1000);
@@ -641,6 +691,7 @@ runTest("29. displayed remaining minutes sensible", async () => {
     startFightFn: (p) => service.startFight(p),
     isAdminFn: () => true,
   });
+  service.forceTimeout();
   clock.advance(10 * 60 * 1000);
   const ctx2 = createMockCtx({ userId: ADMIN_ID, text: "/chatfight" });
   await handleChatFight(ctx2, {
@@ -667,7 +718,7 @@ runTest("30. wrong group cannot participate", () => {
   assert.strictEqual(started.reason, "wrong-chat");
 
   // Even if fight somehow in community, wrong chat cannot claim
-  service.startFight({ chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
+  startActiveFight(service, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
   const claim = service.tryClaimWinner(USER_A, OTHER_CHAT, "MANGO");
   assert.strictEqual(claim.claimed, false);
 });
@@ -689,7 +740,7 @@ runTest("31. configured community group works", () => {
 
 runTest("32. commands don't count as answer", () => {
   const { service } = createService({ random: () => 0 });
-  service.startFight({ chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
+  startActiveFight(service, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
 
   const handlers = [];
   registerChatFightListener(createTextBot(handlers), {
@@ -797,8 +848,9 @@ runTest("auth1. ADMIN_USER_ID mag starten", async () => {
   await handleChatFight(ctx, {
     startFightFn: (p) => service.startFight(p),
   });
-  assert.ok(ctx.replies[0].includes("Type this exactly:"));
-  assert.ok(service.getActiveFight());
+  assert.ok(ctx.replies[0].includes("A new challenge is ready"));
+  assert.ok(service.getFightSnapshot());
+  assert.strictEqual(service.getActiveFight(), null);
 });
 
 runTest("auth2. creator mag starten", async () => {
@@ -813,8 +865,9 @@ runTest("auth2. creator mag starten", async () => {
   await handleChatFight(ctx, {
     startFightFn: (p) => service.startFight(p),
   });
-  assert.ok(ctx.replies[0].includes("CHAT FIGHT"));
-  assert.ok(service.getActiveFight());
+  assert.ok(ctx.replies[0].includes("A new challenge is ready"));
+  assert.ok(service.getFightSnapshot());
+  assert.strictEqual(service.getActiveFight(), null);
   resetEnv();
 });
 
@@ -830,8 +883,9 @@ runTest("auth3. administrator mag starten", async () => {
   await handleChatFight(ctx, {
     startFightFn: (p) => service.startFight(p),
   });
-  assert.ok(ctx.replies[0].includes("Solve:"));
-  assert.strictEqual(service.getActiveFight().type, FIGHT_TYPES.MATH_RUSH);
+  assert.ok(ctx.replies[0].includes("A new challenge is ready"));
+  assert.strictEqual(service.getFightSnapshot().type, FIGHT_TYPES.MATH_RUSH);
+  assert.strictEqual(service.getActiveFight(), null);
   resetEnv();
 });
 
@@ -898,8 +952,9 @@ runTest("auth8. getChatMember error + ADMIN_USER_ID match → toegestaan", async
   await handleChatFight(ctx, {
     startFightFn: (p) => service.startFight(p),
   });
-  assert.ok(ctx.replies[0].includes("CHAT FIGHT"));
-  assert.ok(service.getActiveFight());
+  assert.ok(ctx.replies[0].includes("A new challenge is ready"));
+  assert.ok(service.getFightSnapshot());
+  assert.strictEqual(service.getActiveFight(), null);
 });
 
 runTest("auth9. getChatMember error zonder ADMIN_USER_ID → geweigerd", async () => {
@@ -967,8 +1022,9 @@ runTest("auth12. Telegram-admin start ChatFight core correct", async () => {
   await handleChatFight(ctx, {
     startFightFn: (p) => service.startFight(p),
   });
-  const fight = service.getActiveFight();
+  const fight = service.getFightSnapshot();
   assert.ok(fight);
+  assert.strictEqual(fight.status, FIGHT_STATUS.WAITING_FOR_REVEAL);
   assert.strictEqual(fight.type, FIGHT_TYPES.TYPE_RUSH);
   assert.deepStrictEqual(fight.acceptedAnswers, ["mango"]);
   resetEnv();
@@ -990,6 +1046,169 @@ runTest("auth13. non-admin /chatfight awards geen XP", async () => {
   assert.strictEqual(service.getActiveFight(), null);
   assert.strictEqual(loadPoints(file).users[String(USER_A)], undefined);
   resetEnv();
+});
+
+
+// ---------------------------------------------------------------------------
+// Reveal flow
+// ---------------------------------------------------------------------------
+
+runTest("reveal11. fight starts hidden (waiting_for_reveal)", () => {
+  const { service } = createService({ random: () => 0 });
+  const started = service.startFight({
+    chatId: COMMUNITY_CHAT,
+    type: FIGHT_TYPES.TYPE_RUSH,
+  });
+  assert.ok(started.ok);
+  assert.ok(started.teaser.includes("A new challenge is ready"));
+  assert.ok(!started.teaser.includes("MANGO"));
+  assert.strictEqual(service.getActiveFight(), null);
+  assert.strictEqual(
+    service.getFightSnapshot().status,
+    FIGHT_STATUS.WAITING_FOR_REVEAL
+  );
+});
+
+runTest("reveal12-14. teaser has opaque reveal button, no answer in callback", async () => {
+  const { service } = createService({ random: () => 0 });
+  const ctx = createMockCtx({ userId: ADMIN_ID, text: "/chatfight type" });
+  await handleChatFight(ctx, {
+    startFightFn: (p) => service.startFight(p),
+    isAdminFn: () => true,
+  });
+  assert.ok(!ctx.replies[0].includes("Type this exactly:"));
+  assert.ok(!ctx.replies[0].includes("MANGO"));
+  const button = ctx.replyExtras[0].reply_markup.inline_keyboard[0][0];
+  assert.strictEqual(button.callback_data, "cfight:reveal");
+  assert.ok(!button.callback_data.includes("mango"));
+  assert.ok(!JSON.stringify(button).toLowerCase().includes("mango"));
+});
+
+runTest("reveal15. answer before reveal does nothing", () => {
+  const file = pointsFile();
+  const { service } = createService({ random: () => 0 });
+  service.startFight({ chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
+  const claim = service.tryClaimWinner(USER_A, COMMUNITY_CHAT, "MANGO");
+  assert.strictEqual(claim.claimed, false);
+  assert.strictEqual(claim.reason, "inactive");
+  assert.strictEqual(loadPoints(file).users[String(USER_A)], undefined);
+});
+
+runTest("reveal16-17. first reveal shows challenge; second does not duplicate", async () => {
+  const { service, clock } = createService({
+    random: () => 0,
+    revealWaitMs: 300_000,
+    durationMs: 60_000,
+  });
+  service.startFight({ chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
+  assert.strictEqual(clock.pendingCount(), 1);
+
+  const ctx1 = createMockCtx({ userId: USER_A });
+  await handleChatFightReveal(ctx1, {
+    revealFightFn: (cid) => service.revealFight(cid),
+  });
+  assert.ok(ctx1.edited[0].includes("TYPE RUSH"));
+  assert.ok(ctx1.edited[0].includes("MANGO"));
+  assert.ok(service.getActiveFight());
+  assert.strictEqual(clock.pendingCount(), 1);
+
+  const ctx2 = createMockCtx({ userId: USER_B });
+  await handleChatFightReveal(ctx2, {
+    revealFightFn: (cid) => service.revealFight(cid),
+  });
+  assert.strictEqual(ctx2.edited.length, 0);
+  assert.ok(ctx2.cbAnswers[0].includes("already revealed"));
+  assert.strictEqual(clock.pendingCount(), 1);
+});
+
+runTest("reveal18. answer after reveal can win", () => {
+  const { service } = createService({ random: () => 0 });
+  startActiveFight(service, {
+    chatId: COMMUNITY_CHAT,
+    type: FIGHT_TYPES.TYPE_RUSH,
+  });
+  const claim = service.tryClaimWinner(USER_A, COMMUNITY_CHAT, "mango");
+  assert.strictEqual(claim.claimed, true);
+  assert.strictEqual(claim.pointsToAdd, CHAT_FIGHT_XP);
+});
+
+runTest("reveal19. reveal click awards no XP", async () => {
+  const file = pointsFile();
+  const { service } = createService({ random: () => 0 });
+  service.startFight({ chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
+  const ctx = createMockCtx({ userId: USER_A });
+  await handleChatFightReveal(ctx, {
+    revealFightFn: (cid) => service.revealFight(cid),
+  });
+  assert.strictEqual(loadPoints(file).users[String(USER_A)], undefined);
+});
+
+runTest("reveal20. answer can give activity + fight XP", () => {
+  const file = pointsFile();
+  const { service } = createService({ random: () => 0 });
+  startActiveFight(service, {
+    chatId: COMMUNITY_CHAT,
+    type: FIGHT_TYPES.TYPE_RUSH,
+  });
+  const claim = service.tryClaimWinner(USER_A, COMMUNITY_CHAT, "MANGO");
+  assert.ok(claim.claimed);
+  const fightAward = awardChatFightXp(USER_A, "Kevin", file);
+  const activityAward = awardDailyActivityPoint(USER_A, "Kevin", file);
+  assert.strictEqual(fightAward.awarded, true);
+  assert.strictEqual(activityAward.awarded, true);
+  assert.strictEqual(loadPoints(file).users[String(USER_A)].points, 3);
+});
+
+runTest("reveal21. reveal timeout without click", () => {
+  const { service, clock, sent } = createService({
+    random: () => 0,
+    revealWaitMs: 5 * 60 * 1000,
+    durationMs: 60_000,
+  });
+  service.startFight({ chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
+  clock.advance(5 * 60 * 1000);
+  assert.strictEqual(service.getActiveFight(), null);
+  assert.strictEqual(service.getFightSnapshot().status, FIGHT_STATUS.EXPIRED);
+  assert.strictEqual(sent.length, 1);
+  assert.ok(sent[0].text.includes("Nobody revealed"));
+  const claim = service.tryClaimWinner(USER_A, COMMUNITY_CHAT, "MANGO");
+  assert.strictEqual(claim.claimed, false);
+});
+
+runTest("reveal22-23. answer timeout after reveal; timer cleanup", () => {
+  const { service, clock, sent } = createService({
+    random: () => 0,
+    revealWaitMs: 300_000,
+    durationMs: 60_000,
+  });
+  startActiveFight(service, {
+    chatId: COMMUNITY_CHAT,
+    type: FIGHT_TYPES.TYPE_RUSH,
+  });
+  assert.strictEqual(clock.pendingCount(), 1);
+  clock.advance(60_000);
+  assert.strictEqual(service.getActiveFight(), null);
+  assert.strictEqual(sent.length, 1);
+  assert.ok(sent[0].text.includes("ChatFight over"));
+  assert.strictEqual(clock.pendingCount(), 0);
+});
+
+runTest("reveal24. cooldown from fight START not reveal", () => {
+  const { service, clock } = createService({
+    random: () => 0,
+    revealWaitMs: 300_000,
+    durationMs: 60_000,
+  });
+  const t0 = clock.now();
+  service.startFight({ chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
+  clock.advance(2 * 60 * 1000);
+  service.revealFight(COMMUNITY_CHAT);
+  service.tryClaimWinner(USER_A, COMMUNITY_CHAT, "MANGO");
+  assert.ok(service.isOnCooldown());
+  const rem = service.getCooldownRemainingMs();
+  assert.ok(rem > 57 * 60 * 1000 && rem <= 58 * 60 * 1000);
+  clock.setNow(t0 + CHAT_FIGHT_COOLDOWN_MS);
+  assert.strictEqual(service.isOnCooldown(), false);
 });
 
 runTest("canManageGroup: env-admin skips getChatMember", async () => {

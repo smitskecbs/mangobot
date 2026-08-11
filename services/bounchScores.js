@@ -160,13 +160,28 @@ function normalizeLeaderboardEntries(leaderboard) {
       continue;
     }
 
-    if (
+    const preferCandidate =
       candidate.bestLevel > existing.bestLevel ||
       (candidate.bestLevel === existing.bestLevel &&
         new Date(candidate.updatedAt).getTime() >
-          new Date(existing.updatedAt).getTime())
-    ) {
+          new Date(existing.updatedAt).getTime());
+
+    if (preferCandidate) {
+      const winnerUid = normalizeVerifiedTelegramUserId(candidate.telegramUserId);
+      const otherUid = normalizeVerifiedTelegramUserId(existing.telegramUserId);
+      if (!winnerUid && otherUid) {
+        candidate.telegramUserId = otherUid;
+      } else if (winnerUid && otherUid && winnerUid !== otherUid) {
+        candidate.telegramUserId = winnerUid;
+      }
       byKey.set(key, candidate);
+    } else {
+      const winnerUid = normalizeVerifiedTelegramUserId(existing.telegramUserId);
+      const otherUid = normalizeVerifiedTelegramUserId(candidate.telegramUserId);
+      if (!winnerUid && otherUid) {
+        existing.telegramUserId = otherUid;
+      }
+      byKey.set(key, existing);
     }
   }
 

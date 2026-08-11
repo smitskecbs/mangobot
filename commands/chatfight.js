@@ -1,5 +1,5 @@
 /**
- * /chatfight — admin-only manual ChatFight start in the community group.
+ * /chatfight — start (hidden) + reveal callback.
  * Admin = ADMIN_USER_ID allowlist OR Telegram creator/administrator.
  */
 
@@ -10,16 +10,14 @@ const {
   parseFightTypeArg,
   isAllowedChatFightChat,
   startFight,
+  revealFight,
+  setFightMessageId,
+  REVEAL_CALLBACK_DATA,
 } = require("../services/chatFight");
 
 /**
  * @param {object} ctx
  * @param {object} [options]
- * @param {(params: object) => object} [options.startFightFn]
- * @param {(ctx: object, options?: object) => Promise<boolean>|boolean} [options.canManageGroupFn]
- * @param {(userId: *) => boolean} [options.isAdminFn]
- * @param {(chatId: *, userId: *) => Promise<object>|object} [options.getChatMember]
- * @returns {Promise<*>}
  */
 async function handleChatFight(ctx, options = {}) {
   const startFightFn =
@@ -28,6 +26,10 @@ async function handleChatFight(ctx, options = {}) {
     typeof options.canManageGroupFn === "function"
       ? options.canManageGroupFn
       : canManageGroup;
+  const setMessageIdFn =
+    typeof options.setFightMessageIdFn === "function"
+      ? options.setFightMessageIdFn
+      : setFightMessageId;
 
   if (!ctx || !ctx.from) {
     return;
@@ -72,7 +74,6 @@ async function handleChatFight(ctx, options = {}) {
       ? ctx.message.text
       : "") || "";
   const parts = rawText.trim().split(/\s+/);
-  // parts[0] is /chatfight[@bot]; optional type in parts[1]
   const typeArg = parts.length > 1 ? parts[1] : "";
   const parsed = parseFightTypeArg(typeArg);
   if (!parsed.ok) {
@@ -101,13 +102,83 @@ async function handleChatFight(ctx, options = {}) {
     return ctx.reply("⚔️ Could not start ChatFight.");
   }
 
-  return ctx.reply(result.prompt);
+  const sent = await ctx.reply(
+    result.teaser,
+    result.revealKeyboard || undefined
+  );
+  if (sent && sent.message_id != null) {
+    setMessageIdFn(sent.message_id);
+  }
+  return sent;
+}
+
+/**
+ * First click reveals the challenge for the whole group (edit message).
+ * No Daily Activity XP (callback is not text).
+ */
+async function handleChatFightReveal(ctx, options = {}) {
+  const revealFn =
+    typeof options.revealFightFn === "function"
+      ? options.revealFightFn
+      : revealFight;
+
+  if (!ctx || !ctx.from || ctx.from.is_bot) {
+    if (ctx && typeof ctx.answerCbQuery === "function") {
+      await ctx.answerCbQuery().catch(() => undefined);
+    }
+    return;
+  }
+
+  if (!ctx.chat || !isAllowedChatFightChat(ctx.chat.id)) {
+    if (typeof ctx.answerCbQuery === "function") {
+      await ctx.answerCbQuery("Not available here.").catch(() => undefined);
+    }
+    return;
+  }
+
+  // Sync reveal before edit/await boundaries for concurrent clicks.
+  const result = revealFn(ctx.chat.id);
+
+  if (!result.ok && result.reason === "already-revealed") {
+    if (typeof ctx.answerCbQuery === "function") {
+      await ctx
+        .answerCbQuery("Challenge already revealed.")
+        .catch(() => undefined);
+    }
+    return;
+  }
+
+  if (!result.ok) {
+    if (typeof ctx.answerCbQuery === "function") {
+      await ctx.answerCbQuery("No challenge to reveal.").catch(() => undefined);
+    }
+    return;
+  }
+
+  if (typeof ctx.answerCbQuery === "function") {
+    await ctx.answerCbQuery("Challenge revealed!").catch(() => undefined);
+  }
+
+  try {
+    if (typeof ctx.editMessageText === "function") {
+      await ctx.editMessageText(result.prompt);
+    }
+  } catch (_err) {
+    // Fallback: post challenge if edit fails (e.g. message too old).
+    if (typeof ctx.reply === "function") {
+      await ctx.reply(result.prompt);
+    }
+  }
 }
 
 module.exports = (bot) => {
   bot.command("chatfight", (ctx) =>
     Promise.resolve(handleChatFight(ctx)).catch(() => undefined)
   );
+  bot.action(REVEAL_CALLBACK_DATA, (ctx) =>
+    Promise.resolve(handleChatFightReveal(ctx)).catch(() => undefined)
+  );
 };
 
 module.exports.handleChatFight = handleChatFight;
+module.exports.handleChatFightReveal = handleChatFightReveal;

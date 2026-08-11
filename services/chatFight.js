@@ -1,11 +1,25 @@
 /**
- * ChatFight v1 — short group challenges; first correct answer wins XP.
- * In-memory state only (no restore after restart). Telegram formatting stays thin.
+ * ChatFight — short group challenges; first correct answer wins XP.
+ * Flow: waiting_for_reveal → active (60s) → won | expired.
+ * In-memory only (no restore after restart).
  */
 
+const { Markup } = require("telegraf");
+
 const CHAT_FIGHT_DURATION_MS = 60 * 1000;
+const CHAT_FIGHT_REVEAL_WAIT_MS = 5 * 60 * 1000;
 const CHAT_FIGHT_COOLDOWN_MS = 60 * 60 * 1000;
 const CHAT_FIGHT_XP = 2;
+
+/** Opaque callback — never embeds answers or challenge text. */
+const REVEAL_CALLBACK_DATA = "cfight:reveal";
+
+const FIGHT_STATUS = Object.freeze({
+  WAITING_FOR_REVEAL: "waiting_for_reveal",
+  ACTIVE: "active",
+  WON: "won",
+  EXPIRED: "expired",
+});
 
 const FIGHT_TYPES = Object.freeze({
   TYPE_RUSH: "type_rush",
@@ -36,7 +50,6 @@ const TYPE_RUSH_WORDS = Object.freeze([
   "MEME",
 ]);
 
-/** Primary accepted answer is listed first for timeout reveal. */
 const EMOJI_MAP = Object.freeze({
   "😂": Object.freeze(["laugh", "laughing", "funny"]),
   "😍": Object.freeze(["love", "loving", "in love"]),
@@ -53,6 +66,12 @@ const USAGE_TEXT = `⚔️ ChatFight usage:
 /chatfight math — Math Rush
 /chatfight emoji — Emoji Guess`;
 
+const TEASER_TEXT = `⚔️ CHAT FIGHT
+
+A new challenge is ready!
+
+Be the first to solve it and win +${CHAT_FIGHT_XP} XP.`;
+
 function getConfiguredCommunityChatId() {
   const raw = process.env.TELEGRAM_CHAT_ID;
   if (typeof raw !== "string") {
@@ -62,12 +81,6 @@ function getConfiguredCommunityChatId() {
   return trimmed || null;
 }
 
-/**
- * Production: restrict to TELEGRAM_CHAT_ID when set.
- * Development: if unset, any group may run fights.
- * @param {string|number} chatId
- * @returns {boolean}
- */
 function isAllowedChatFightChat(chatId) {
   const configured = getConfiguredCommunityChatId();
   if (!configured) {
@@ -103,7 +116,7 @@ function generateTypeRush(random) {
   const word = pickRandom(TYPE_RUSH_WORDS, random);
   return {
     type: FIGHT_TYPES.TYPE_RUSH,
-    prompt: `⚔️ CHAT FIGHT\n\nType this exactly:\n\n${word}\n\nFirst correct answer wins +${CHAT_FIGHT_XP} XP!`,
+    prompt: `⚔️ CHAT FIGHT — TYPE RUSH\n\nType this exactly:\n\n${word}\n\nFirst correct answer wins +${CHAT_FIGHT_XP} XP!`,
     acceptedAnswers: [word.toLowerCase()],
     revealAnswer: word,
   };
@@ -135,7 +148,7 @@ function generateMathRush(random) {
 
   return {
     type: FIGHT_TYPES.MATH_RUSH,
-    prompt: `⚔️ CHAT FIGHT\n\nSolve:\n\n${expression} = ?\n\nFirst correct answer wins +${CHAT_FIGHT_XP} XP!`,
+    prompt: `⚔️ CHAT FIGHT — MATH RUSH\n\nSolve:\n\n${expression} = ?\n\nFirst correct answer wins +${CHAT_FIGHT_XP} XP!`,
     acceptedAnswers: [String(result)],
     revealAnswer: String(result),
     meta: { a, b, kind, result },
@@ -148,7 +161,7 @@ function generateEmojiGuess(random) {
   const answers = EMOJI_MAP[emoji];
   return {
     type: FIGHT_TYPES.EMOJI_GUESS,
-    prompt: `⚔️ CHAT FIGHT\n\nGuess the emotion:\n\n${emoji}\n\nFirst correct answer wins +${CHAT_FIGHT_XP} XP!`,
+    prompt: `⚔️ CHAT FIGHT — EMOJI GUESS\n\nGuess the emotion:\n\n${emoji}\n\nFirst correct answer wins +${CHAT_FIGHT_XP} XP!`,
     acceptedAnswers: answers.map((a) => a.toLowerCase()),
     revealAnswer: answers[0],
     meta: { emoji },
@@ -168,10 +181,6 @@ function generateChallenge(type, random) {
   throw new Error(`Unknown ChatFight type: ${type}`);
 }
 
-/**
- * Type Rush / emoji: trim + lowercase exact match (no punctuation strip).
- * Math: trim only; must equal String(result).
- */
 function normalizeAnswer(type, text) {
   if (typeof text !== "string") {
     return null;
@@ -187,7 +196,7 @@ function normalizeAnswer(type, text) {
 }
 
 function isCorrectAnswer(fight, text) {
-  if (!fight || !fight.active) {
+  if (!fight || fight.status !== FIGHT_STATUS.ACTIVE) {
     return false;
   }
   const normalized = normalizeAnswer(fight.type, text);
@@ -198,8 +207,7 @@ function isCorrectAnswer(fight, text) {
 }
 
 function formatCooldownMinutes(remainingMs) {
-  const minutes = Math.max(1, Math.ceil(remainingMs / 60_000));
-  return minutes;
+  return Math.max(1, Math.ceil(remainingMs / 60_000));
 }
 
 function buildWinnerReply(userName, awardResult) {
@@ -219,16 +227,16 @@ function buildTimeoutMessage(fight) {
   return "⚔️ ChatFight over!\nNo winner this round.";
 }
 
-/**
- * @param {object} [options]
- * @param {() => number} [options.now]
- * @param {typeof setTimeout} [options.setTimeout]
- * @param {typeof clearTimeout} [options.clearTimeout]
- * @param {() => number} [options.random]
- * @param {number} [options.durationMs]
- * @param {number} [options.cooldownMs]
- * @param {(chatId: string|number, text: string) => void|Promise<void>} [options.sendMessage]
- */
+function buildTeaserText() {
+  return TEASER_TEXT;
+}
+
+function getRevealKeyboard() {
+  return Markup.inlineKeyboard([
+    Markup.button.callback("👀 Reveal challenge", REVEAL_CALLBACK_DATA),
+  ]);
+}
+
 function createChatFightService(options = {}) {
   const now = typeof options.now === "function" ? options.now : () => Date.now();
   const setTimeoutFn =
@@ -242,6 +250,10 @@ function createChatFightService(options = {}) {
     typeof options.durationMs === "number"
       ? options.durationMs
       : CHAT_FIGHT_DURATION_MS;
+  const revealWaitMs =
+    typeof options.revealWaitMs === "number"
+      ? options.revealWaitMs
+      : CHAT_FIGHT_REVEAL_WAIT_MS;
   const cooldownMs =
     typeof options.cooldownMs === "number"
       ? options.cooldownMs
@@ -249,11 +261,8 @@ function createChatFightService(options = {}) {
   const sendMessage =
     typeof options.sendMessage === "function" ? options.sendMessage : null;
 
-  /** @type {null|{active:boolean,chatId:*,type:string,prompt:string,acceptedAnswers:string[],revealAnswer:string,startedAt:number,expiresAt:number,winnerUserId:string|null}} */
   let fight = null;
-  /** @type {number|null} */
   let lastStartedAt = null;
-  /** @type {ReturnType<typeof setTimeout>|null} */
   let timeoutHandle = null;
   let timeoutMessageSent = false;
 
@@ -264,40 +273,42 @@ function createChatFightService(options = {}) {
     }
   }
 
-  function getActiveFight() {
-    if (!(fight && fight.active)) {
-      return null;
-    }
-    return {
-      active: fight.active,
-      chatId: fight.chatId,
-      type: fight.type,
-      prompt: fight.prompt,
-      acceptedAnswers: [...fight.acceptedAnswers],
-      revealAnswer: fight.revealAnswer,
-      startedAt: fight.startedAt,
-      expiresAt: fight.expiresAt,
-      winnerUserId: fight.winnerUserId,
-      meta: fight.meta,
-    };
-  }
-
-  function getFightSnapshot() {
+  function snapshotFight() {
     if (!fight) {
       return null;
     }
     return {
-      active: fight.active,
+      id: fight.id,
+      status: fight.status,
+      active: fight.status === FIGHT_STATUS.ACTIVE,
       chatId: fight.chatId,
       type: fight.type,
       prompt: fight.prompt,
       acceptedAnswers: [...fight.acceptedAnswers],
       revealAnswer: fight.revealAnswer,
       startedAt: fight.startedAt,
+      revealedAt: fight.revealedAt,
       expiresAt: fight.expiresAt,
       winnerUserId: fight.winnerUserId,
       meta: fight.meta,
+      messageId: fight.messageId,
     };
+  }
+
+  function getActiveFight() {
+    return fight && fight.status === FIGHT_STATUS.ACTIVE ? snapshotFight() : null;
+  }
+
+  function getFightSnapshot() {
+    return snapshotFight();
+  }
+
+  function isFightOpen() {
+    return Boolean(
+      fight &&
+        (fight.status === FIGHT_STATUS.WAITING_FOR_REVEAL ||
+          fight.status === FIGHT_STATUS.ACTIVE)
+    );
   }
 
   function getCooldownRemainingMs() {
@@ -312,38 +323,58 @@ function createChatFightService(options = {}) {
     return getCooldownRemainingMs() > 0;
   }
 
-  function scheduleTimeout(active) {
+  function notifyTimeout(text) {
+    const notify =
+      fight && typeof fight.sendMessage === "function"
+        ? fight.sendMessage
+        : sendMessage;
+    if (typeof notify === "function" && fight) {
+      Promise.resolve(notify(fight.chatId, text)).catch(() => {});
+    }
+  }
+
+  function scheduleRevealTimeout(target) {
     clearFightTimer();
     timeoutMessageSent = false;
-    const delay = Math.max(0, active.expiresAt - now());
+    const delay = Math.max(0, target.expiresAt - now());
     timeoutHandle = setTimeoutFn(() => {
       timeoutHandle = null;
-      if (!fight || fight !== active) {
+      if (!fight || fight !== target) {
         return;
       }
-      if (!fight.active || fight.winnerUserId != null) {
+      if (fight.status !== FIGHT_STATUS.WAITING_FOR_REVEAL) {
         return;
       }
-      // Finish before any async send boundary.
-      fight.active = false;
+      fight.status = FIGHT_STATUS.EXPIRED;
       if (timeoutMessageSent) {
         return;
       }
       timeoutMessageSent = true;
-      const text = buildTimeoutMessage(fight);
-      const notify =
-        typeof fight.sendMessage === "function"
-          ? fight.sendMessage
-          : sendMessage;
-      if (typeof notify === "function") {
-        Promise.resolve(notify(fight.chatId, text)).catch(() => {});
-      }
+      notifyTimeout("⚔️ ChatFight expired.\nNobody revealed the challenge.");
     }, delay);
   }
 
-  /**
- * @param {{chatId:string|number,type?:string|null,sendMessage?:Function}} params
- */
+  function scheduleAnswerTimeout(target) {
+    clearFightTimer();
+    timeoutMessageSent = false;
+    const delay = Math.max(0, target.expiresAt - now());
+    timeoutHandle = setTimeoutFn(() => {
+      timeoutHandle = null;
+      if (!fight || fight !== target) {
+        return;
+      }
+      if (fight.status !== FIGHT_STATUS.ACTIVE || fight.winnerUserId != null) {
+        return;
+      }
+      fight.status = FIGHT_STATUS.EXPIRED;
+      if (timeoutMessageSent) {
+        return;
+      }
+      timeoutMessageSent = true;
+      notifyTimeout(buildTimeoutMessage(fight));
+    }, delay);
+  }
+
   function startFight({ chatId, type = null, sendMessage: startSend = null } = {}) {
     if (chatId === undefined || chatId === null || chatId === "") {
       return { ok: false, reason: "missing-chat" };
@@ -353,8 +384,8 @@ function createChatFightService(options = {}) {
       return { ok: false, reason: "wrong-chat" };
     }
 
-    if (fight && fight.active) {
-      return { ok: false, reason: "already-active", fight: getFightSnapshot() };
+    if (isFightOpen()) {
+      return { ok: false, reason: "already-active", fight: snapshotFight() };
     }
 
     const remainingMs = getCooldownRemainingMs();
@@ -377,7 +408,6 @@ function createChatFightService(options = {}) {
 
     const challenge = generateChallenge(resolvedType, random);
     const startedAt = now();
-    const expiresAt = startedAt + durationMs;
     const notify =
       typeof startSend === "function"
         ? startSend
@@ -386,36 +416,69 @@ function createChatFightService(options = {}) {
           : null;
 
     fight = {
-      active: true,
+      id: `cf-${startedAt}`,
+      status: FIGHT_STATUS.WAITING_FOR_REVEAL,
       chatId,
       type: challenge.type,
       prompt: challenge.prompt,
       acceptedAnswers: [...challenge.acceptedAnswers],
       revealAnswer: challenge.revealAnswer,
       startedAt,
-      expiresAt,
+      revealedAt: null,
+      expiresAt: startedAt + revealWaitMs,
       winnerUserId: null,
       meta: challenge.meta || null,
       sendMessage: notify,
+      messageId: null,
     };
     lastStartedAt = startedAt;
-    scheduleTimeout(fight);
+    scheduleRevealTimeout(fight);
 
     return {
       ok: true,
-      fight: getFightSnapshot(),
+      fight: snapshotFight(),
+      teaser: buildTeaserText(),
       prompt: challenge.prompt,
+      revealKeyboard: getRevealKeyboard(),
+      callbackData: REVEAL_CALLBACK_DATA,
     };
   }
 
+  function setFightMessageId(messageId) {
+    if (fight && messageId != null) {
+      fight.messageId = messageId;
+    }
+  }
+
   /**
-   * Atomically claim the first winner. Must run before any await.
-   * @param {string|number} userId
-   * @param {string|number} chatId
-   * @param {string} text
+   * First valid reveal click. Sync before any await/edit.
    */
+  function revealFight(chatId) {
+    if (!fight || fight.status !== FIGHT_STATUS.WAITING_FOR_REVEAL) {
+      if (fight && fight.status === FIGHT_STATUS.ACTIVE) {
+        return { ok: false, reason: "already-revealed", fight: snapshotFight() };
+      }
+      return { ok: false, reason: "inactive" };
+    }
+    if (chatId != null && String(fight.chatId) !== String(chatId)) {
+      return { ok: false, reason: "wrong-chat" };
+    }
+
+    const revealedAt = now();
+    fight.status = FIGHT_STATUS.ACTIVE;
+    fight.revealedAt = revealedAt;
+    fight.expiresAt = revealedAt + durationMs;
+    scheduleAnswerTimeout(fight);
+
+    return {
+      ok: true,
+      prompt: fight.prompt,
+      fight: snapshotFight(),
+    };
+  }
+
   function tryClaimWinner(userId, chatId, text) {
-    if (!fight || !fight.active) {
+    if (!fight || fight.status !== FIGHT_STATUS.ACTIVE) {
       return { claimed: false, reason: "inactive" };
     }
     if (String(fight.chatId) !== String(chatId)) {
@@ -428,36 +491,40 @@ function createChatFightService(options = {}) {
       return { claimed: false, reason: "wrong-answer" };
     }
 
-    // Finish before XP award / reply (sync claim).
-    fight.active = false;
+    fight.status = FIGHT_STATUS.WON;
     fight.winnerUserId = String(userId);
     clearFightTimer();
 
     return {
       claimed: true,
-      fight: getFightSnapshot(),
+      fight: snapshotFight(),
       pointsToAdd: CHAT_FIGHT_XP,
     };
   }
 
-  /** Test/helper: force-expire without waiting. */
   function forceTimeout() {
-    if (!fight || !fight.active || fight.winnerUserId != null) {
+    if (!fight) {
       return { timedOut: false };
     }
-    fight.active = false;
+    if (
+      fight.status !== FIGHT_STATUS.WAITING_FOR_REVEAL &&
+      fight.status !== FIGHT_STATUS.ACTIVE
+    ) {
+      return { timedOut: false };
+    }
+    if (fight.winnerUserId != null) {
+      return { timedOut: false };
+    }
+    const wasWaiting = fight.status === FIGHT_STATUS.WAITING_FOR_REVEAL;
+    fight.status = FIGHT_STATUS.EXPIRED;
     clearFightTimer();
     if (!timeoutMessageSent) {
       timeoutMessageSent = true;
-      const text = buildTimeoutMessage(fight);
-      const notify =
-        typeof fight.sendMessage === "function"
-          ? fight.sendMessage
-          : sendMessage;
-      if (typeof notify === "function") {
-        Promise.resolve(notify(fight.chatId, text)).catch(() => {});
-      }
-      return { timedOut: true, message: text };
+      const text = wasWaiting
+        ? "⚔️ ChatFight expired.\nNobody revealed the challenge."
+        : buildTimeoutMessage(fight);
+      notifyTimeout(text);
+      return { timedOut: true, message: text, phase: wasWaiting ? "reveal" : "answer" };
     }
     return { timedOut: true, message: null };
   }
@@ -469,29 +536,34 @@ function createChatFightService(options = {}) {
     timeoutMessageSent = false;
   }
 
-  /** Test helper: set lastStartedAt without starting a fight. */
   function setLastStartedAt(ts) {
     lastStartedAt = ts;
   }
 
   return {
     CHAT_FIGHT_DURATION_MS: durationMs,
+    CHAT_FIGHT_REVEAL_WAIT_MS: revealWaitMs,
     CHAT_FIGHT_COOLDOWN_MS: cooldownMs,
     CHAT_FIGHT_XP,
-    FIGHT_TYPES,
+    FIGHT_STATUS,
     startFight,
+    revealFight,
     tryClaimWinner,
     getActiveFight,
     getFightSnapshot,
     getCooldownRemainingMs,
     isOnCooldown,
+    isFightOpen,
     isCorrectAnswer,
     forceTimeout,
     reset,
     setLastStartedAt,
+    setFightMessageId,
     clearFightTimer,
     buildWinnerReply,
     buildTimeoutMessage,
+    buildTeaserText,
+    getRevealKeyboard,
     generateChallenge,
   };
 }
@@ -500,12 +572,16 @@ const defaultService = createChatFightService();
 
 module.exports = {
   CHAT_FIGHT_DURATION_MS,
+  CHAT_FIGHT_REVEAL_WAIT_MS,
   CHAT_FIGHT_COOLDOWN_MS,
   CHAT_FIGHT_XP,
+  REVEAL_CALLBACK_DATA,
+  FIGHT_STATUS,
   FIGHT_TYPES,
   TYPE_RUSH_WORDS,
   EMOJI_MAP,
   USAGE_TEXT,
+  TEASER_TEXT,
   getConfiguredCommunityChatId,
   isAllowedChatFightChat,
   parseFightTypeArg,
@@ -514,13 +590,15 @@ module.exports = {
   formatCooldownMinutes,
   buildWinnerReply,
   buildTimeoutMessage,
+  buildTeaserText,
+  getRevealKeyboard,
   generateChallenge,
   generateTypeRush,
   generateMathRush,
   generateEmojiGuess,
   createChatFightService,
-  // Default singleton used by bot commands/events
   startFight: (...args) => defaultService.startFight(...args),
+  revealFight: (...args) => defaultService.revealFight(...args),
   tryClaimWinner: (...args) => defaultService.tryClaimWinner(...args),
   getActiveFight: (...args) => defaultService.getActiveFight(...args),
   getFightSnapshot: (...args) => defaultService.getFightSnapshot(...args),
@@ -529,6 +607,7 @@ module.exports = {
   isOnCooldown: (...args) => defaultService.isOnCooldown(...args),
   forceTimeout: (...args) => defaultService.forceTimeout(...args),
   resetChatFightState: (...args) => defaultService.reset(...args),
+  setFightMessageId: (...args) => defaultService.setFightMessageId(...args),
   buildWinnerReplyDefault: (...args) => defaultService.buildWinnerReply(...args),
   _defaultService: defaultService,
 };

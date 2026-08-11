@@ -436,6 +436,134 @@ runTest("bounch verified uid attach + conflict same as snake", () => {
   assert.strictEqual(data.leaderboard[0].bestLevel, 4);
 });
 
+runTest("15. legacy Snake Kevin visible until owner verified submit links uid", () => {
+  writeScoresFile(snakeFile, {
+    ...createEmptyScores(),
+    globalHighScore: 777,
+    globalHighScoreName: "Kevin",
+    leaderboard: [
+      {
+        name: "Kevin",
+        score: 777,
+        lastScore: 777,
+        gamesPlayed: 3,
+        updatedAt: "2026-08-01T00:00:00.000Z",
+        lastPlayedAt: "2026-08-01T00:00:00.000Z",
+      },
+    ],
+  });
+  assert.strictEqual(getSnakeDisplay(snakeFile, 10)[0].name, "Kevin");
+
+  const { data } = submitScore(snakeFile, "Kevin", 780, {
+    verifiedTelegramUserId: OWNER_ID,
+  });
+  assert.strictEqual(data.leaderboard[0].telegramUserId, OWNER_ID);
+  assert.deepStrictEqual(getSnakeDisplay(snakeFile, 10), []);
+});
+
+runTest("16. legacy Bounch Kevin links then hidden", () => {
+  bounchScores.writeScoresFile(bounchFile, {
+    ...bounchScores.createEmptyScores(),
+    globalBestLevel: 5,
+    globalBestLevelName: "Kevin",
+    leaderboard: [
+      {
+        name: "Kevin",
+        bestLevel: 5,
+        lastLevel: 5,
+        gamesPlayed: 2,
+        updatedAt: "2026-08-01T00:00:00.000Z",
+        lastPlayedAt: "2026-08-01T00:00:00.000Z",
+      },
+    ],
+  });
+  assert.strictEqual(
+    bounchScores.getDisplayLeaderboard(bounchFile, 10)[0].name,
+    "Kevin"
+  );
+  const submitted = bounchScores.submitLevel(bounchFile, "Kevin", 6, {
+    verifiedTelegramUserId: OWNER_ID,
+  });
+  assert.ok(!submitted.error, submitted.error);
+  assert.strictEqual(submitted.data.leaderboard[0].telegramUserId, OWNER_ID);
+  assert.deepStrictEqual(
+    bounchScores.getDisplayLeaderboard(bounchFile, 10),
+    []
+  );
+});
+
+runTest("17. other Kevin with other verified uid stays visible after owner link", () => {
+  writeScoresFile(snakeFile, {
+    ...createEmptyScores(),
+    globalHighScore: 900,
+    globalHighScoreName: "Kevin",
+    leaderboard: [
+      {
+        name: "Kevin",
+        score: 900,
+        lastScore: 900,
+        gamesPlayed: 1,
+        updatedAt: "2026-08-09T12:00:00.000Z",
+        lastPlayedAt: "2026-08-09T12:00:00.000Z",
+        telegramUserId: OTHER_ID,
+      },
+      {
+        name: "OwnerKev",
+        score: 850,
+        lastScore: 850,
+        gamesPlayed: 1,
+        updatedAt: "2026-08-09T11:00:00.000Z",
+        lastPlayedAt: "2026-08-09T11:00:00.000Z",
+        telegramUserId: OWNER_ID,
+      },
+    ],
+  });
+  const display = getSnakeDisplay(snakeFile, 10);
+  assert.deepStrictEqual(
+    display.map((e) => e.name),
+    ["Kevin"]
+  );
+  const stored = readSnakeScores(snakeFile).leaderboard.find(
+    (e) => e.name === "Kevin"
+  );
+  assert.strictEqual(stored.telegramUserId, OTHER_ID);
+  assert.strictEqual(
+    shouldHideScoreLeaderboardEntry(stored),
+    false
+  );
+});
+
+runTest("18. name-dedupe preserves verified uid when higher score is legacy", () => {
+  writeScoresFile(snakeFile, {
+    ...createEmptyScores(),
+    leaderboard: [
+      {
+        name: "Kevin",
+        score: 100,
+        lastScore: 100,
+        gamesPlayed: 1,
+        updatedAt: "2026-08-01T00:00:00.000Z",
+        lastPlayedAt: "2026-08-01T00:00:00.000Z",
+        telegramUserId: OWNER_ID,
+      },
+      {
+        name: "kevin",
+        score: 200,
+        lastScore: 200,
+        gamesPlayed: 1,
+        updatedAt: "2026-08-02T00:00:00.000Z",
+        lastPlayedAt: "2026-08-02T00:00:00.000Z",
+      },
+    ],
+  });
+  // Re-read via submit that triggers normalize, or read+write path
+  const raw = readSnakeScores(snakeFile);
+  assert.strictEqual(raw.leaderboard.length, 1);
+  assert.strictEqual(raw.leaderboard[0].score, 200);
+  assert.strictEqual(raw.leaderboard[0].telegramUserId, OWNER_ID);
+  assert.deepStrictEqual(getSnakeDisplay(snakeFile, 10), []);
+});
+
 restoreAdminEnv();
 fs.rmSync(tempDir, { recursive: true, force: true });
 console.log("\nAll leaderboard-privacy tests passed.");
