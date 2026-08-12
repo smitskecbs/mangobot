@@ -1,4 +1,6 @@
-require("dotenv").config();
+const path = require("path");
+const { loadAppEnv } = require("./utils/loadEnv");
+loadAppEnv({ envPath: path.join(__dirname, ".env") });
 /**
  * ManGo games high-score API — run on the Hetzner bot server.
  *

@@ -25,6 +25,11 @@ const {
   pruneAutoProcessedSlots,
   tryStartAutoChatFight,
 } = require("./autoChatFight");
+const {
+  parseActivityEngineConfig,
+  processCommunityActivitySlot,
+  nextActivitySlotLabel,
+} = require("./communityActivityEngine");
 const { chatFightRuntime } = require("./chatFight");
 
 const DEFAULT_STATE_FILE = path.join(
@@ -214,6 +219,8 @@ function emptyState() {
   return {
     sent: {},
     lastMessageKey: null,
+    lastActivityType: null,
+    recentActivityTypes: [],
     autoChatFight: emptyAutoChatFightState(),
   };
 }
@@ -245,6 +252,13 @@ function loadState(stateFile) {
       sent: parsed.sent,
       lastMessageKey:
         typeof parsed.lastMessageKey === "string" ? parsed.lastMessageKey : null,
+      lastActivityType:
+        typeof parsed.lastActivityType === "string"
+          ? parsed.lastActivityType
+          : null,
+      recentActivityTypes: Array.isArray(parsed.recentActivityTypes)
+        ? parsed.recentActivityTypes.filter((x) => typeof x === "string")
+        : [],
       autoChatFight: normalizeAutoChatFightState(parsed.autoChatFight),
     };
   } catch (err) {
@@ -263,6 +277,10 @@ function pruneState(state, keepDays = 14) {
   return {
     sent,
     lastMessageKey: state.lastMessageKey || null,
+    lastActivityType: state.lastActivityType || null,
+    recentActivityTypes: Array.isArray(state.recentActivityTypes)
+      ? state.recentActivityTypes.slice(-8)
+      : [],
     autoChatFight: pruneAutoProcessedSlots(
       normalizeAutoChatFightState(state.autoChatFight),
       keepDays
@@ -396,6 +414,9 @@ function createCommunityScheduler(options = {}) {
   const autoConfig =
     options.autoChatFightConfig ||
     parseAutoChatFightConfig(process.env, options.autoChatFightOptions || {});
+  const activityConfig =
+    options.activityEngineConfig ||
+    parseActivityEngineConfig(process.env, options.activityEngineOptions || {});
   const chatFight =
     options.chatFight || chatFightRuntime;
   const announceChatFight =
@@ -405,6 +426,10 @@ function createCommunityScheduler(options = {}) {
   const autoRandom =
     typeof options.autoChatFightRandom === "function"
       ? options.autoChatFightRandom
+      : Math.random;
+  const activityRandom =
+    typeof options.activityRandom === "function"
+      ? options.activityRandom
       : Math.random;
 
   let timer = null;
@@ -439,7 +464,43 @@ function createCommunityScheduler(options = {}) {
     }
   }
 
+  async function processActivityEngine(prevClock, nowClock, now) {
+    if (!activityConfig.enabled) {
+      return { enabled: false, results: [] };
+    }
+    if (!chatId) {
+      return { enabled: true, results: [{ reason: "missing-chat-id" }] };
+    }
+    const results = [];
+    const nowMs = now.getTime();
+    for (const slot of activityConfig.slots) {
+      if (!didCrossSlot(prevClock, nowClock, slot)) {
+        continue;
+      }
+      const result = await processCommunityActivitySlot({
+        chatId,
+        slot,
+        dayKey: nowClock.dayKey,
+        config: activityConfig,
+        state,
+        chatFight,
+        sendMessage,
+        announceChatFight,
+        nowMs,
+        random: activityRandom,
+        wasActiveWithinFn: wasActiveFn,
+      });
+      persist();
+      results.push({ slot: slot.id, ...result });
+    }
+    return { enabled: true, results };
+  }
+
   async function processAutoChatFight(prevClock, nowClock, now) {
+    // When unified activity engine is on, it owns ChatFight selection.
+    if (activityConfig.enabled) {
+      return { enabled: false, started: [], skipped: [], deferredToEngine: true };
+    }
     if (!autoConfig.enabled) {
       return { enabled: false, started: [], skipped: [] };
     }
@@ -483,10 +544,11 @@ function createCommunityScheduler(options = {}) {
   }
 
   async function tick() {
-    const remindersWanted = enabled;
-    const autoWanted = autoConfig.enabled;
+    const remindersWanted = enabled && !activityConfig.enabled;
+    const autoWanted = autoConfig.enabled && !activityConfig.enabled;
+    const engineWanted = activityConfig.enabled;
 
-    if (!remindersWanted && !autoWanted) {
+    if (!remindersWanted && !autoWanted && !engineWanted) {
       return { skipped: "disabled" };
     }
     if (!chatId) {
@@ -533,21 +595,24 @@ function createCommunityScheduler(options = {}) {
       }
     }
 
+    const activity = await processActivityEngine(prevClock, nowClock, now);
     const autoFight = await processAutoChatFight(prevClock, nowClock, now);
 
     return {
       dayKey: nowClock.dayKey,
       fired,
       skippedRecent,
+      activity,
       autoFight,
     };
   }
 
   function start() {
-    const autoWanted = autoConfig.enabled;
-    if (!enabled && !autoWanted) {
+    const autoWanted = autoConfig.enabled && !activityConfig.enabled;
+    const engineWanted = activityConfig.enabled;
+    if (!enabled && !autoWanted && !engineWanted) {
       log(
-        "[community-scheduler] Disabled (reminders off, AUTO_CHATFIGHT_ENABLED != true)"
+        "[community-scheduler] Disabled (reminders off, auto-fight off, activity engine off)"
       );
       return;
     }
@@ -555,24 +620,25 @@ function createCommunityScheduler(options = {}) {
       log("[community-scheduler] Disabled (TELEGRAM_CHAT_ID missing)");
       return;
     }
-    if (enabled && !sendMessage) {
-      log("[community-scheduler] Reminder sender missing");
-    }
-    if (autoWanted && !announceChatFight) {
-      log("[auto-chatfight] disabled (no announcer)");
-    }
-    if (enabled && sendMessage) {
+    if (enabled && !activityConfig.enabled && sendMessage) {
       log(
         `[community-scheduler] Enabled — timezone=${timeZone} slots=${slots
           .map((s) => `${s.id}@${String(s.hour).padStart(2, "0")}:${String(s.minute).padStart(2, "0")}`)
           .join(",")}`
       );
     }
-    if (autoWanted && announceChatFight) {
+    if (engineWanted) {
       log(
-        `[auto-chatfight] Enabled — interval=${autoConfig.intervalMinutes}m chance=${autoConfig.chancePercent}% slots=${autoConfig.slots.length}`
+        `[activity-engine] Enabled — 24/7=${activityConfig.twentyFourSeven} interval=${activityConfig.intervalMinutes}m slots=${activityConfig.slots.length} autoFight=${activityConfig.autoFightEnabled} fightGap=${activityConfig.autoFightMinGapMinutes}m`
       );
-    } else if (!autoWanted) {
+    }
+    if (autoWanted && announceChatFight) {
+      const envInterval =
+        process.env.AUTO_CHATFIGHT_INTERVAL_MINUTES || "unset";
+      log(
+        `[auto-chatfight] Enabled — interval=${autoConfig.intervalMinutes}m env=${envInterval} chance=${autoConfig.chancePercent}% slots=${autoConfig.slots.length}`
+      );
+    } else if (!autoConfig.enabled) {
       log("[auto-chatfight] disabled");
     }
 
@@ -612,6 +678,7 @@ function createCommunityScheduler(options = {}) {
     stateFile,
     skipIfRecentMs,
     autoConfig,
+    activityConfig,
     start,
     stop,
     tick,
@@ -627,8 +694,18 @@ function createCommunityScheduler(options = {}) {
 }
 
 function startCommunityScheduler(telegram, options = {}) {
+  const fight = options.chatFight || chatFightRuntime;
+  if (typeof fight.setEditMessageHandler === "function") {
+    fight.setEditMessageHandler(async (chatId, messageId, text) => {
+      await telegram.editMessageText(chatId, messageId, undefined, text, {
+        disable_web_page_preview: true,
+      });
+    });
+  }
+
   const scheduler = createCommunityScheduler({
     ...options,
+    chatFight: fight,
     sendMessage: async (chatId, text) => {
       await telegram.sendMessage(chatId, text, {
         disable_web_page_preview: true,
@@ -646,7 +723,6 @@ function startCommunityScheduler(telegram, options = {}) {
       }
       return telegram.sendMessage(chatId, teaser, extra);
     },
-    chatFight: options.chatFight || chatFightRuntime,
   });
   scheduler.start();
   return scheduler;
@@ -672,4 +748,5 @@ module.exports = {
   loadState,
   saveState,
   emptyState,
+  nextActivitySlotLabel,
 };

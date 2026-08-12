@@ -1,7 +1,8 @@
-require("dotenv").config();
+const path = require("path");
+const { loadAppEnv } = require("./utils/loadEnv");
+loadAppEnv({ envPath: path.join(__dirname, ".env") });
 
 const fs = require("fs");
-const path = require("path");
 const { Telegraf } = require("telegraf");
 const { log } = require("./utils/logger");
 const {

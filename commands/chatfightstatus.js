@@ -12,8 +12,14 @@ const {
   nextAutoSlotLabel,
 } = require("../services/autoChatFight");
 const {
+  parseActivityEngineConfig,
+  nextActivitySlotLabel,
+} = require("../services/communityActivityEngine");
+const {
   getZonedClock,
   DEFAULT_TIMEZONE,
+  loadState,
+  DEFAULT_STATE_FILE,
 } = require("../services/communityScheduler");
 
 function typeListLabel(types) {
@@ -25,6 +31,17 @@ function typeListLabel(types) {
 
 function pad2(n) {
   return String(n).padStart(2, "0");
+}
+
+function formatLastAuto(autoState) {
+  if (!autoState || autoState.lastStartedAt == null) {
+    return "never";
+  }
+  const mins = Math.max(
+    0,
+    Math.floor((Date.now() - autoState.lastStartedAt) / 60_000)
+  );
+  return `${mins} min ago`;
 }
 
 /**
@@ -46,8 +63,10 @@ async function handleChatFightStatus(ctx, options = {}) {
     typeof options.getRuntimeStatusFn === "function"
       ? options.getRuntimeStatusFn
       : getRuntimeStatus;
-  const config =
+  const autoConfig =
     options.autoConfig || parseAutoChatFightConfig(process.env);
+  const activityConfig =
+    options.activityConfig || parseActivityEngineConfig(process.env);
 
   let allowed = false;
   if (isPrivateChat(ctx)) {
@@ -75,11 +94,21 @@ async function handleChatFightStatus(ctx, options = {}) {
     DEFAULT_TIMEZONE;
   const now = options.now ? options.now() : new Date();
   const clock = getZonedClock(now, timeZone);
-  const nextSlot = nextAutoSlotLabel(config, clock);
+  const nextAuto = nextAutoSlotLabel(autoConfig, clock);
+  const nextActivity = nextActivitySlotLabel(activityConfig, clock);
+
+  let state = { autoChatFight: {} };
+  try {
+    state = loadState(options.stateFile || DEFAULT_STATE_FILE);
+  } catch (_err) {
+    state = { autoChatFight: {} };
+  }
 
   let currentLabel = "none";
   if (runtime.currentFight === "waiting") {
     currentLabel = "waiting";
+  } else if (runtime.currentFight === "prepare") {
+    currentLabel = "prepare";
   } else if (runtime.currentFight === "active") {
     currentLabel = "active";
   } else if (runtime.currentFight && runtime.currentFight !== "none") {
@@ -91,15 +120,27 @@ async function handleChatFightStatus(ctx, options = {}) {
       ? `${runtime.cooldownRemainingMinutes} min remaining`
       : "none";
 
+  const envInterval = process.env.AUTO_CHATFIGHT_INTERVAL_MINUTES || "unset";
+  const effectiveInterval = activityConfig.enabled
+    ? activityConfig.intervalMinutes
+    : autoConfig.intervalMinutes;
+
   const text = `⚔️ ChatFight status
 
-Auto enabled: ${config.enabled ? "yes" : "no"}
-Auto interval: ${config.intervalMinutes} min
-Active hours: ${pad2(config.startHour)}:00–${pad2(config.endHour)}:00
+Auto enabled: ${autoConfig.enabled || activityConfig.autoFightEnabled ? "yes" : "no"}
+Configured auto interval: ${envInterval}
+Effective interval: ${effectiveInterval} min
+24/7 activity: ${activityConfig.twentyFourSeven ? "yes" : "no"}
+Activity engine: ${activityConfig.enabled ? "yes" : "no"}
+Activity interval: ${activityConfig.intervalMinutes} min
+Auto fight min gap: ${activityConfig.autoFightMinGapMinutes} min
+Active hours: ${pad2(autoConfig.startHour)}:00–${pad2(autoConfig.endHour)}:00
 Current fight: ${currentLabel}
 Cooldown: ${cooldownText}
-Next auto slot: ${nextSlot || "none today"}
-Enabled types: ${typeListLabel(config.types) || "type, math, emoji"}`;
+Last auto fight: ${formatLastAuto(state.autoChatFight)}
+Next auto slot: ${nextAuto || "none today"}
+Next activity slot: ${nextActivity || "none today"}
+Enabled race types: ${typeListLabel(autoConfig.types) || "type, math, emoji, ..."}`;
 
   return ctx.reply(text);
 }

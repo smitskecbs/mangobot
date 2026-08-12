@@ -15,7 +15,7 @@ const {
 const { log, error: logError } = require("../utils/logger");
 
 const DEFAULT_AUTO_INTERVAL_MINUTES = 120;
-const DEFAULT_AUTO_GAP_MINUTES = 15;
+const DEFAULT_AUTO_GAP_MINUTES = 120;
 const DEFAULT_AUTO_CHANCE_PERCENT = 100;
 const DEFAULT_ACTIVE_START_HOUR = 9;
 const DEFAULT_ACTIVE_END_HOUR = 22;
@@ -31,6 +31,14 @@ const TYPE_ALIAS_TO_FIGHT = Object.freeze({
   emoji: FIGHT_TYPES.EMOJI_GUESS,
   emojiguess: FIGHT_TYPES.EMOJI_GUESS,
   emoji_guess: FIGHT_TYPES.EMOJI_GUESS,
+  unscramble: FIGHT_TYPES.UNSCRAMBLE,
+  missing: FIGHT_TYPES.MISSING_LETTER,
+  missing_letter: FIGHT_TYPES.MISSING_LETTER,
+  missingletter: FIGHT_TYPES.MISSING_LETTER,
+  memory: FIGHT_TYPES.MEMORY,
+  quicktap: FIGHT_TYPES.QUICK_TAP,
+  quick_tap: FIGHT_TYPES.QUICK_TAP,
+  tap: FIGHT_TYPES.QUICK_TAP,
 });
 
 function parseAutoEnabledFlag(raw) {
@@ -153,10 +161,15 @@ function parseAutoChatFightConfig(env = process.env, options = {}) {
       : env.AUTO_CHATFIGHT_INTERVAL_MINUTES,
     DEFAULT_AUTO_INTERVAL_MINUTES
   );
+  const minGapRaw =
+    env.AUTO_CHATFIGHT_MIN_GAP_MINUTES !== undefined &&
+    String(env.AUTO_CHATFIGHT_MIN_GAP_MINUTES).trim() !== ""
+      ? env.AUTO_CHATFIGHT_MIN_GAP_MINUTES
+      : env.AUTO_CHATFIGHT_MIN_ACTIVITY_GAP_MINUTES;
   const minGapMinutes = parsePositiveInt(
     options.minGapMinutes !== undefined
       ? options.minGapMinutes
-      : env.AUTO_CHATFIGHT_MIN_ACTIVITY_GAP_MINUTES,
+      : minGapRaw,
     DEFAULT_AUTO_GAP_MINUTES
   );
   const chancePercent = parseChancePercent(
@@ -246,6 +259,10 @@ function formatTypeLabel(type) {
   if (type === FIGHT_TYPES.TYPE_RUSH) return "type";
   if (type === FIGHT_TYPES.MATH_RUSH) return "math";
   if (type === FIGHT_TYPES.EMOJI_GUESS) return "emoji";
+  if (type === FIGHT_TYPES.UNSCRAMBLE) return "unscramble";
+  if (type === FIGHT_TYPES.MISSING_LETTER) return "missing";
+  if (type === FIGHT_TYPES.MEMORY) return "memory";
+  if (type === FIGHT_TYPES.QUICK_TAP) return "tap";
   return String(type || "");
 }
 

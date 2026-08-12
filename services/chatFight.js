@@ -16,6 +16,8 @@ const REVEAL_CALLBACK_DATA = "cfight:reveal";
 
 const FIGHT_STATUS = Object.freeze({
   WAITING_FOR_REVEAL: "waiting_for_reveal",
+  /** Memory / Quick Tap: shown but answers not accepted yet. */
+  PREPARE: "prepare",
   ACTIVE: "active",
   WON: "won",
   EXPIRED: "expired",
@@ -25,7 +27,24 @@ const FIGHT_TYPES = Object.freeze({
   TYPE_RUSH: "type_rush",
   MATH_RUSH: "math_rush",
   EMOJI_GUESS: "emoji_guess",
+  UNSCRAMBLE: "unscramble",
+  MISSING_LETTER: "missing_letter",
+  MEMORY: "memory",
+  QUICK_TAP: "quick_tap",
 });
+
+/** Race-mode types (PvP board games are separate mode). */
+const RACE_FIGHT_TYPES = Object.freeze([
+  FIGHT_TYPES.TYPE_RUSH,
+  FIGHT_TYPES.MATH_RUSH,
+  FIGHT_TYPES.EMOJI_GUESS,
+  FIGHT_TYPES.UNSCRAMBLE,
+  FIGHT_TYPES.MISSING_LETTER,
+  FIGHT_TYPES.MEMORY,
+  FIGHT_TYPES.QUICK_TAP,
+]);
+
+const ALL_FIGHT_TYPES = RACE_FIGHT_TYPES;
 
 const TYPE_ALIASES = Object.freeze({
   type: FIGHT_TYPES.TYPE_RUSH,
@@ -35,6 +54,13 @@ const TYPE_ALIASES = Object.freeze({
   mathrush: FIGHT_TYPES.MATH_RUSH,
   emoji: FIGHT_TYPES.EMOJI_GUESS,
   emojiguess: FIGHT_TYPES.EMOJI_GUESS,
+  unscramble: FIGHT_TYPES.UNSCRAMBLE,
+  scramble: FIGHT_TYPES.UNSCRAMBLE,
+  missing: FIGHT_TYPES.MISSING_LETTER,
+  missingletter: FIGHT_TYPES.MISSING_LETTER,
+  memory: FIGHT_TYPES.MEMORY,
+  quicktap: FIGHT_TYPES.QUICK_TAP,
+  tap: FIGHT_TYPES.QUICK_TAP,
 });
 
 const TYPE_RUSH_WORDS = Object.freeze([
@@ -64,7 +90,11 @@ const USAGE_TEXT = `⚔️ ChatFight usage:
 /chatfight — random challenge
 /chatfight type — Type Rush
 /chatfight math — Math Rush
-/chatfight emoji — Emoji Guess`;
+/chatfight emoji — Emoji Guess
+/chatfight unscramble — Unscramble
+/chatfight missing — Missing Letter
+/chatfight memory — Memory
+/chatfight tap — Quick Tap`;
 
 const TEASER_TEXT = `⚔️ CHAT FIGHT
 
@@ -105,12 +135,6 @@ function pickRandom(list, random) {
   const index = Math.floor(random() * list.length);
   return list[Math.max(0, Math.min(list.length - 1, index))];
 }
-
-const ALL_FIGHT_TYPES = Object.freeze([
-  FIGHT_TYPES.TYPE_RUSH,
-  FIGHT_TYPES.MATH_RUSH,
-  FIGHT_TYPES.EMOJI_GUESS,
-]);
 
 /**
  * Pick a fight type, avoiding immediate repeat when alternatives exist.
@@ -192,6 +216,76 @@ function generateEmojiGuess(random) {
   };
 }
 
+const UNSCRAMBLE_PAIRS = Object.freeze([
+  Object.freeze({ scrambled: "OGNAM", answer: "MANGO" }),
+  Object.freeze({ scrambled: "EKANS", answer: "SNAKE" }),
+  Object.freeze({ scrambled: "HCNOUB", answer: "BOUNCH" }),
+  Object.freeze({ scrambled: "EMEAMNGOM", answer: "MANGOMEME" }),
+  Object.freeze({ scrambled: "YTINUMMOC", answer: "COMMUNITY" }),
+]);
+
+const MISSING_LETTER_PAIRS = Object.freeze([
+  Object.freeze({ puzzle: "M_NGO", answer: "MANGO" }),
+  Object.freeze({ puzzle: "SN_KE", answer: "SNAKE" }),
+  Object.freeze({ puzzle: "BOU_CH", answer: "BOUNCH" }),
+  Object.freeze({ puzzle: "GM_NGO", answer: "GMANGO" }),
+  Object.freeze({ puzzle: "GN_NGO", answer: "GNANGO" }),
+]);
+
+const MEMORY_WORDS = Object.freeze([
+  "MANGO42",
+  "SNAKE7",
+  "BOUNCH3",
+  "GMANGO",
+  "BUILDER9",
+]);
+
+function generateUnscramble(random) {
+  const pair = pickRandom(UNSCRAMBLE_PAIRS, random);
+  return {
+    type: FIGHT_TYPES.UNSCRAMBLE,
+    prompt: `⚔️ CHAT FIGHT — UNSCRAMBLE\n\nUnscramble:\n\n${pair.scrambled}\n\nFirst correct answer wins +${CHAT_FIGHT_XP} XP!`,
+    acceptedAnswers: [pair.answer.toLowerCase()],
+    revealAnswer: pair.answer,
+    meta: { scrambled: pair.scrambled },
+  };
+}
+
+function generateMissingLetter(random) {
+  const pair = pickRandom(MISSING_LETTER_PAIRS, random);
+  return {
+    type: FIGHT_TYPES.MISSING_LETTER,
+    prompt: `⚔️ CHAT FIGHT — MISSING LETTER\n\nFill the blank:\n\n${pair.puzzle}\n\nFirst correct answer wins +${CHAT_FIGHT_XP} XP!`,
+    acceptedAnswers: [pair.answer.toLowerCase()],
+    revealAnswer: pair.answer,
+    meta: { puzzle: pair.puzzle },
+  };
+}
+
+function generateMemory(random) {
+  const word = pickRandom(MEMORY_WORDS, random);
+  return {
+    type: FIGHT_TYPES.MEMORY,
+    prompt: `⚔️ CHAT FIGHT — MEMORY\n\nRemember:\n\n${word}\n\n(Memorize — the question comes next!)`,
+    answerPrompt: `⚔️ CHAT FIGHT — MEMORY\n\nWhat was the word?\n\nFirst correct answer wins +${CHAT_FIGHT_XP} XP!`,
+    acceptedAnswers: [word.toLowerCase()],
+    revealAnswer: word,
+    meta: { prepareMs: 5000, mode: "race" },
+  };
+}
+
+function generateQuickTap(random) {
+  const delayMs = randomIntInclusive(2000, 5000, random);
+  return {
+    type: FIGHT_TYPES.QUICK_TAP,
+    prompt: `⚔️ CHAT FIGHT — QUICK TAP\n\nGet ready...`,
+    answerPrompt: `⚔️ CHAT FIGHT — QUICK TAP\n\n⚡ TAP NOW!\n\nType TAP first to win +${CHAT_FIGHT_XP} XP!`,
+    acceptedAnswers: ["tap"],
+    revealAnswer: "TAP",
+    meta: { prepareMs: delayMs, mode: "race" },
+  };
+}
+
 function generateChallenge(type, random) {
   if (type === FIGHT_TYPES.TYPE_RUSH) {
     return generateTypeRush(random);
@@ -201,6 +295,18 @@ function generateChallenge(type, random) {
   }
   if (type === FIGHT_TYPES.EMOJI_GUESS) {
     return generateEmojiGuess(random);
+  }
+  if (type === FIGHT_TYPES.UNSCRAMBLE) {
+    return generateUnscramble(random);
+  }
+  if (type === FIGHT_TYPES.MISSING_LETTER) {
+    return generateMissingLetter(random);
+  }
+  if (type === FIGHT_TYPES.MEMORY) {
+    return generateMemory(random);
+  }
+  if (type === FIGHT_TYPES.QUICK_TAP) {
+    return generateQuickTap(random);
   }
   throw new Error(`Unknown ChatFight type: ${type}`);
 }
@@ -284,6 +390,8 @@ function createChatFightService(options = {}) {
       : CHAT_FIGHT_COOLDOWN_MS;
   const sendMessage =
     typeof options.sendMessage === "function" ? options.sendMessage : null;
+  let editMessage =
+    typeof options.editMessage === "function" ? options.editMessage : null;
 
   let fight = null;
   let lastStartedAt = null;
@@ -332,6 +440,7 @@ function createChatFightService(options = {}) {
     return Boolean(
       fight &&
         (fight.status === FIGHT_STATUS.WAITING_FOR_REVEAL ||
+          fight.status === FIGHT_STATUS.PREPARE ||
           fight.status === FIGHT_STATUS.ACTIVE)
     );
   }
@@ -452,6 +561,7 @@ function createChatFightService(options = {}) {
       type: challenge.type,
       source: source === "auto" ? "auto" : "manual",
       prompt: challenge.prompt,
+      answerPrompt: challenge.answerPrompt || null,
       acceptedAnswers: [...challenge.acceptedAnswers],
       revealAnswer: challenge.revealAnswer,
       startedAt,
@@ -507,6 +617,8 @@ function createChatFightService(options = {}) {
     if (snap) {
       if (snap.status === FIGHT_STATUS.WAITING_FOR_REVEAL) {
         currentFight = "waiting";
+      } else if (snap.status === FIGHT_STATUS.PREPARE) {
+        currentFight = "prepare";
       } else if (snap.status === FIGHT_STATUS.ACTIVE) {
         currentFight = "active";
       } else {
@@ -514,20 +626,15 @@ function createChatFightService(options = {}) {
       }
     }
     const remainingMs = getCooldownRemainingMs();
+    const openish =
+      snap &&
+      (snap.status === FIGHT_STATUS.WAITING_FOR_REVEAL ||
+        snap.status === FIGHT_STATUS.PREPARE ||
+        snap.status === FIGHT_STATUS.ACTIVE);
     return {
       currentFight,
-      type:
-        snap &&
-        (snap.status === FIGHT_STATUS.WAITING_FOR_REVEAL ||
-          snap.status === FIGHT_STATUS.ACTIVE)
-          ? snap.type
-          : null,
-      source:
-        snap &&
-        (snap.status === FIGHT_STATUS.WAITING_FOR_REVEAL ||
-          snap.status === FIGHT_STATUS.ACTIVE)
-          ? snap.source
-          : null,
+      type: openish ? snap.type : null,
+      source: openish ? snap.source : null,
       cooldownRemainingMs: remainingMs,
       cooldownRemainingMinutes: formatCooldownMinutes(remainingMs),
       isFightOpen: isFightOpen(),
@@ -537,10 +644,15 @@ function createChatFightService(options = {}) {
 
   /**
    * First valid reveal click. Sync before any await/edit.
+   * Memory / Quick Tap enter PREPARE then become ACTIVE after delay.
    */
   function revealFight(chatId) {
     if (!fight || fight.status !== FIGHT_STATUS.WAITING_FOR_REVEAL) {
-      if (fight && fight.status === FIGHT_STATUS.ACTIVE) {
+      if (
+        fight &&
+        (fight.status === FIGHT_STATUS.ACTIVE ||
+          fight.status === FIGHT_STATUS.PREPARE)
+      ) {
         return { ok: false, reason: "already-revealed", fight: snapshotFight() };
       }
       return { ok: false, reason: "inactive" };
@@ -550,8 +662,55 @@ function createChatFightService(options = {}) {
     }
 
     const revealedAt = now();
-    fight.status = FIGHT_STATUS.ACTIVE;
     fight.revealedAt = revealedAt;
+
+    const needsPrepare =
+      fight.type === FIGHT_TYPES.MEMORY || fight.type === FIGHT_TYPES.QUICK_TAP;
+
+    if (needsPrepare) {
+      fight.status = FIGHT_STATUS.PREPARE;
+      const prepareMs =
+        fight.meta && typeof fight.meta.prepareMs === "number"
+          ? fight.meta.prepareMs
+          : 5000;
+      // Keep reveal-wait timer replaced by prepare → answer window after.
+      clearFightTimer();
+      timeoutMessageSent = false;
+      const target = fight;
+      timeoutHandle = setTimeoutFn(() => {
+        timeoutHandle = null;
+        if (!fight || fight !== target) {
+          return;
+        }
+        if (fight.status !== FIGHT_STATUS.PREPARE) {
+          return;
+        }
+        fight.status = FIGHT_STATUS.ACTIVE;
+        fight.expiresAt = now() + durationMs;
+        scheduleAnswerTimeout(fight);
+        const text = fight.answerPrompt || fight.prompt;
+        const edit =
+          typeof editMessage === "function"
+            ? editMessage
+            : null;
+        if (edit && fight.messageId != null) {
+          Promise.resolve(edit(fight.chatId, fight.messageId, text)).catch(
+            () => {}
+          );
+        } else if (typeof fight.sendMessage === "function") {
+          Promise.resolve(fight.sendMessage(fight.chatId, text)).catch(() => {});
+        }
+      }, Math.max(0, prepareMs));
+
+      return {
+        ok: true,
+        prompt: fight.prompt,
+        fight: snapshotFight(),
+        phase: "prepare",
+      };
+    }
+
+    fight.status = FIGHT_STATUS.ACTIVE;
     fight.expiresAt = revealedAt + durationMs;
     scheduleAnswerTimeout(fight);
 
@@ -559,6 +718,7 @@ function createChatFightService(options = {}) {
       ok: true,
       prompt: fight.prompt,
       fight: snapshotFight(),
+      phase: "active",
     };
   }
 
@@ -593,6 +753,7 @@ function createChatFightService(options = {}) {
     }
     if (
       fight.status !== FIGHT_STATUS.WAITING_FOR_REVEAL &&
+      fight.status !== FIGHT_STATUS.PREPARE &&
       fight.status !== FIGHT_STATUS.ACTIVE
     ) {
       return { timedOut: false };
@@ -609,7 +770,11 @@ function createChatFightService(options = {}) {
         ? "⚔️ ChatFight expired.\nNobody revealed the challenge."
         : buildTimeoutMessage(fight);
       notifyTimeout(text);
-      return { timedOut: true, message: text, phase: wasWaiting ? "reveal" : "answer" };
+      return {
+        timedOut: true,
+        message: text,
+        phase: wasWaiting ? "reveal" : "answer",
+      };
     }
     return { timedOut: true, message: null };
   }
@@ -619,6 +784,10 @@ function createChatFightService(options = {}) {
     fight = null;
     lastStartedAt = null;
     timeoutMessageSent = false;
+  }
+
+  function setEditMessageHandler(fn) {
+    editMessage = typeof fn === "function" ? fn : null;
   }
 
   function setLastStartedAt(ts) {
@@ -644,6 +813,7 @@ function createChatFightService(options = {}) {
     reset,
     setLastStartedAt,
     setFightMessageId,
+    setEditMessageHandler,
     abortUnpublishedFight,
     getRuntimeStatus,
     clearFightTimer,
@@ -665,6 +835,7 @@ module.exports = {
   REVEAL_CALLBACK_DATA,
   FIGHT_STATUS,
   FIGHT_TYPES,
+  RACE_FIGHT_TYPES,
   TYPE_RUSH_WORDS,
   EMOJI_MAP,
   USAGE_TEXT,
@@ -686,6 +857,10 @@ module.exports = {
   createChatFightService,
   selectFightType,
   ALL_FIGHT_TYPES,
+  generateUnscramble,
+  generateMissingLetter,
+  generateMemory,
+  generateQuickTap,
   /** Shared production runtime — manual + auto must use this instance. */
   chatFightRuntime: defaultService,
   startFight: (...args) => defaultService.startFight(...args),
@@ -700,6 +875,8 @@ module.exports = {
   forceTimeout: (...args) => defaultService.forceTimeout(...args),
   resetChatFightState: (...args) => defaultService.reset(...args),
   setFightMessageId: (...args) => defaultService.setFightMessageId(...args),
+  setEditMessageHandler: (...args) =>
+    defaultService.setEditMessageHandler(...args),
   abortUnpublishedFight: (...args) =>
     defaultService.abortUnpublishedFight(...args),
   getRuntimeStatus: (...args) => defaultService.getRuntimeStatus(...args),
