@@ -1110,6 +1110,285 @@ async function main() {
     sched.stop();
   });
 
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  await runTest("REAL setInterval pulses tickCount (production path)", async () => {
+    const {
+      parseActivityEngineConfig,
+    } = require("../services/communityActivityEngine");
+    const {
+      getLiveCommunityScheduler,
+      startCommunityScheduler,
+    } = require("../services/communityScheduler");
+    const file = stateFile();
+    const cfg = parseActivityEngineConfig(
+      {},
+      {
+        enabled: true,
+        twentyFourSeven: true,
+        intervalMinutes: 30,
+        autoFightEnabled: false,
+      }
+    );
+    const fakeTelegram = {
+      sendMessage: async () => ({ message_id: 1 }),
+      editMessageText: async () => true,
+    };
+    const sched = startCommunityScheduler(fakeTelegram, {
+      enabled: false,
+      chatId: "1",
+      timeZone: "UTC",
+      stateFile: file,
+      tickMs: 25,
+      activityEngineConfig: cfg,
+      autoChatFightConfig: {
+        enabled: false,
+        intervalMinutes: 120,
+        chancePercent: 0,
+        slots: [],
+        types: [],
+        startHour: 9,
+        endHour: 22,
+        minActivityGapMs: 0,
+      },
+    });
+    assert.strictEqual(getLiveCommunityScheduler(), sched);
+    const diag0 = sched.getDiagnostics();
+    assert.strictEqual(diag0.timerRunning, true);
+    assert.strictEqual(diag0.timerIntervalMs, 25);
+    if (diag0.timerReferenced != null) {
+      assert.strictEqual(diag0.timerReferenced, true);
+    }
+    await sleep(120);
+    const ticks = sched.getTickCount();
+    assert.ok(ticks >= 3, `expected >=3 ticks, got ${ticks}`);
+    assert.ok(sched.getLastTickAt());
+    const frozen = sched.getTickCount();
+    sched.stop();
+    await sleep(80);
+    assert.strictEqual(sched.getTickCount(), frozen);
+    assert.strictEqual(sched.isTimerRunning(), false);
+  });
+
+  await runTest("second start() does not create a second timer", async () => {
+    const {
+      parseActivityEngineConfig,
+    } = require("../services/communityActivityEngine");
+    const cfg = parseActivityEngineConfig(
+      {},
+      { enabled: true, twentyFourSeven: true, autoFightEnabled: false }
+    );
+    let created = 0;
+    const sched = createCommunityScheduler({
+      enabled: false,
+      chatId: "1",
+      stateFile: stateFile(),
+      tickMs: 60_000,
+      activityEngineConfig: cfg,
+      autoChatFightConfig: {
+        enabled: false,
+        intervalMinutes: 120,
+        chancePercent: 0,
+        slots: [],
+        types: [],
+        startHour: 9,
+        endHour: 22,
+        minActivityGapMs: 0,
+      },
+      sendMessage: async () => true,
+      setIntervalFn: (fn, ms) => {
+        created += 1;
+        return { unref() {}, hasRef: () => true };
+      },
+      clearIntervalFn: () => {},
+    });
+    sched.start();
+    sched.start();
+    assert.strictEqual(created, 1);
+    sched.stop();
+  });
+
+  await runTest("REAL timer callback processes crossed slot via nowFn", async () => {
+    const {
+      parseActivityEngineConfig,
+    } = require("../services/communityActivityEngine");
+    const file = stateFile();
+    let now = utcDate("2026-08-12T17:59:50.000Z");
+    const cfg = parseActivityEngineConfig(
+      {},
+      {
+        enabled: true,
+        twentyFourSeven: true,
+        intervalMinutes: 30,
+        autoFightEnabled: false,
+      }
+    );
+    const sent = [];
+    const sched = createCommunityScheduler({
+      enabled: false,
+      chatId: "1",
+      timeZone: "UTC",
+      stateFile: file,
+      tickMs: 20,
+      now: () => now,
+      activityEngineConfig: cfg,
+      autoChatFightConfig: {
+        enabled: false,
+        intervalMinutes: 120,
+        chancePercent: 0,
+        slots: [],
+        types: [],
+        startHour: 9,
+        endHour: 22,
+        minActivityGapMs: 0,
+      },
+      sendMessage: async (_c, t) => {
+        sent.push(t);
+        return true;
+      },
+      activityRandom: () => 0.5,
+    });
+    sched.start();
+    await sleep(30);
+    now = utcDate("2026-08-12T18:00:01.000Z");
+    await sleep(80);
+    const st = sched.getState();
+    assert.ok(st.sent["2026-08-12"] && st.sent["2026-08-12"].includes("act1800"));
+    assert.ok(String(st.lastProcessedActivitySlot).includes("18:00"));
+    assert.ok(sent.length >= 1 || st.lastActivityType === "skip");
+    assert.ok(sched.getTickCount() >= 1);
+    sched.stop();
+  });
+
+  await runTest("callback error does not kill later timer pulses", async () => {
+    const {
+      parseActivityEngineConfig,
+    } = require("../services/communityActivityEngine");
+    const cfg = parseActivityEngineConfig(
+      {},
+      { enabled: true, twentyFourSeven: true, autoFightEnabled: false }
+    );
+    let boom = false;
+    let now = utcDate("2026-08-12T17:00:00.000Z");
+    const sched = createCommunityScheduler({
+      enabled: false,
+      chatId: "1",
+      timeZone: "UTC",
+      stateFile: stateFile(),
+      tickMs: 25,
+      now: () => {
+        if (boom) {
+          throw new Error("simulated tick failure");
+        }
+        return now;
+      },
+      activityEngineConfig: cfg,
+      autoChatFightConfig: {
+        enabled: false,
+        intervalMinutes: 120,
+        chancePercent: 0,
+        slots: [],
+        types: [],
+        startHour: 9,
+        endHour: 22,
+        minActivityGapMs: 0,
+      },
+      sendMessage: async () => true,
+    });
+    sched.start();
+    await sleep(70);
+    const before = sched.getTickCount();
+    assert.ok(before >= 1);
+    boom = true;
+    await sleep(50);
+    boom = false;
+    await sleep(90);
+    assert.ok(
+      sched.getTickCount() > before,
+      "timer pulses must continue after a failed callback"
+    );
+    sched.stop();
+  });
+
+  await runTest("shared live scheduler status sees timer ticks", async () => {
+    const {
+      parseActivityEngineConfig,
+    } = require("../services/communityActivityEngine");
+    const {
+      startCommunityScheduler,
+      getCommunitySchedulerDiagnostics,
+      getLiveCommunityScheduler,
+    } = require("../services/communityScheduler");
+    const { handleChatFightStatus } = require("../commands/chatfightstatus");
+    const cfg = parseActivityEngineConfig(
+      {},
+      { enabled: true, twentyFourSeven: true, autoFightEnabled: false }
+    );
+    const sched = startCommunityScheduler(
+      {
+        sendMessage: async () => ({ message_id: 1 }),
+        editMessageText: async () => true,
+      },
+      {
+        enabled: false,
+        chatId: "1",
+        stateFile: stateFile(),
+        tickMs: 25,
+        activityEngineConfig: cfg,
+        autoChatFightConfig: {
+          enabled: false,
+          intervalMinutes: 120,
+          chancePercent: 0,
+          slots: [],
+          types: [],
+          startHour: 9,
+          endHour: 22,
+          minActivityGapMs: 0,
+        },
+      }
+    );
+    await sleep(100);
+    assert.strictEqual(getLiveCommunityScheduler(), sched);
+    const diag = getCommunitySchedulerDiagnostics();
+    assert.strictEqual(diag.timerRunning, true);
+    assert.ok(diag.timerTicks >= 2);
+
+    let reply = "";
+    await handleChatFightStatus(
+      {
+        from: { id: 1 },
+        chat: { type: "private" },
+        reply: async (text) => {
+          reply = text;
+          return text;
+        },
+      },
+      {
+        isAdminFn: () => true,
+        getRuntimeStatusFn: () => ({
+          currentFight: "none",
+          cooldownRemainingMs: 0,
+          cooldownRemainingMinutes: 0,
+        }),
+        activityConfig: cfg,
+        autoConfig: {
+          enabled: false,
+          intervalMinutes: 120,
+          chancePercent: 0,
+          slots: [],
+          types: [],
+          startHour: 9,
+          endHour: 22,
+        },
+      }
+    );
+    assert.ok(reply.includes("Scheduler timer running: yes"));
+    assert.ok(/Timer ticks: [1-9]/.test(reply));
+    sched.stop();
+  });
+
   fs.rmSync(tempDir, { recursive: true, force: true });
   console.log("\nAll community-scheduler tests passed.");
 }

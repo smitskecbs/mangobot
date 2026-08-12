@@ -146,6 +146,9 @@ Activity engine enabled: ${activityConfig.enabled ? "yes" : "no"}
 Activity interval: ${activityConfig.intervalMinutes} min
 Activity slots: ${activityConfig.slots.length}
 Scheduler timer running: ${diagnostics.timerRunning ? "yes" : "no"}
+Timer interval: ${Math.round((diagnostics.timerIntervalMs || 60000) / 1000)} sec
+Timer ticks: ${diagnostics.timerTicks != null ? diagnostics.timerTicks : 0}
+Last tick: ${diagnostics.lastTick || "none"}
 State persistence: ${diagnostics.statePersistence || "unknown"}
 Last checked: ${diagnostics.lastChecked}
 Last processed activity slot: ${lastProcessed}

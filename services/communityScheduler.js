@@ -231,6 +231,9 @@ function emptyState() {
       startedAt: null,
       lastCheckedAt: null,
       lastProcessedActivitySlot: null,
+      timerStartedAt: null,
+      tickCount: 0,
+      lastTickAt: null,
     },
     autoChatFight: emptyAutoChatFightState(),
   };
@@ -321,6 +324,10 @@ function normalizeRuntime(runtime, parsed) {
         : typeof parsed.lastProcessedActivitySlot === "string"
           ? parsed.lastProcessedActivitySlot
           : null,
+    timerStartedAt:
+      typeof src.timerStartedAt === "number" ? src.timerStartedAt : null,
+    tickCount: typeof src.tickCount === "number" ? src.tickCount : 0,
+    lastTickAt: typeof src.lastTickAt === "number" ? src.lastTickAt : null,
   };
 }
 
@@ -500,11 +507,11 @@ function createCommunityScheduler(options = {}) {
   const setIntervalFn =
     typeof options.setIntervalFn === "function"
       ? options.setIntervalFn
-      : setInterval;
+      : global.setInterval.bind(global);
   const clearIntervalFn =
     typeof options.clearIntervalFn === "function"
       ? options.clearIntervalFn
-      : clearInterval;
+      : global.clearInterval.bind(global);
   const writeStateFn =
     typeof options.writeState === "function"
       ? options.writeState
@@ -513,17 +520,23 @@ function createCommunityScheduler(options = {}) {
   let timer = null;
   let lastCheckedAt = null;
   let startedAt = null;
+  let timerStartedAt = null;
+  let tickCount = 0;
+  let lastTickAt = null;
   /** @type {"ok"|"error"|"unknown"} */
   let persistStatus = "unknown";
   let state = loadState(stateFile);
   if (!state.autoChatFight) {
     state.autoChatFight = emptyAutoChatFightState();
   }
-  if (!state.runtime) {
+  if (!state.runtime || typeof state.runtime !== "object") {
     state.runtime = {
       startedAt: null,
       lastCheckedAt: null,
       lastProcessedActivitySlot: null,
+      timerStartedAt: null,
+      tickCount: 0,
+      lastTickAt: null,
     };
   }
 
@@ -540,10 +553,16 @@ function createCommunityScheduler(options = {}) {
         startedAt: null,
         lastCheckedAt: null,
         lastProcessedActivitySlot: null,
+        timerStartedAt: null,
+        tickCount: 0,
+        lastTickAt: null,
       };
     }
     if (startedAt) {
       state.runtime.startedAt = startedAt.getTime();
+    }
+    if (timerStartedAt) {
+      state.runtime.timerStartedAt = timerStartedAt.getTime();
     }
     if (lastCheckedAt) {
       const ms = lastCheckedAt.getTime();
@@ -552,6 +571,23 @@ function createCommunityScheduler(options = {}) {
     }
     state.runtime.lastProcessedActivitySlot =
       state.lastProcessedActivitySlot || null;
+    state.runtime.tickCount = tickCount;
+    state.runtime.lastTickAt = lastTickAt ? lastTickAt.getTime() : null;
+  }
+
+  function noteTimerPulse() {
+    const pulseNow = getNow();
+    tickCount += 1;
+    lastTickAt = pulseNow;
+    if (state.runtime) {
+      state.runtime.tickCount = tickCount;
+      state.runtime.lastTickAt = pulseNow.getTime();
+    }
+    // Persist heartbeat every 5 timer pulses so disk proves liveness
+    // without writing every minute.
+    if (tickCount % 5 === 0) {
+      persist();
+    }
   }
 
   function persist() {
@@ -786,15 +822,34 @@ function createCommunityScheduler(options = {}) {
       log("[auto-chatfight] deferred to activity engine");
     }
 
-    tick().catch((err) => logError("[community-scheduler] tick error:", err));
-    timer = setIntervalFn(() => {
-      return tick().catch((err) =>
-        logError("[community-scheduler] tick error:", err)
-      );
-    }, tickMs);
-    if (timer && typeof timer.unref === "function") {
-      timer.unref();
+    // One immediate tick (does not count as timer pulse).
+    Promise.resolve()
+      .then(() => tick())
+      .catch((err) => logError("[community-scheduler] tick error:", err));
+
+    timerStartedAt = getNow();
+    tickCount = 0;
+    lastTickAt = null;
+    if (state.runtime) {
+      state.runtime.timerStartedAt = timerStartedAt.getTime();
+      state.runtime.tickCount = 0;
+      state.runtime.lastTickAt = null;
     }
+
+    // Core scheduler must keep the event loop referenced — do NOT unref.
+    timer = setIntervalFn(() => {
+      try {
+        noteTimerPulse();
+      } catch (err) {
+        logError("[community-scheduler] tick error:", err);
+        return undefined;
+      }
+      return Promise.resolve()
+        .then(() => tick())
+        .catch((err) => logError("[community-scheduler] tick error:", err));
+    }, tickMs);
+
+    log(`[community-scheduler] timer started interval=${tickMs}ms`);
   }
 
   function stop() {
@@ -843,6 +898,14 @@ function createCommunityScheduler(options = {}) {
       );
       lastCheckedLabel = `${mins} min ago (persisted)`;
     }
+    let lastTickLabel = "none";
+    if (lastTickAt) {
+      const secs = Math.max(
+        0,
+        Math.floor((now.getTime() - lastTickAt.getTime()) / 1000)
+      );
+      lastTickLabel = `${secs} sec ago`;
+    }
     const lastSlot = state.lastProcessedActivitySlot || "none";
     let statePersistence = "unknown";
     if (persistStatus === "ok") {
@@ -854,12 +917,20 @@ function createCommunityScheduler(options = {}) {
     } else {
       statePersistence = "missing";
     }
+    let timerReferenced = null;
+    if (timer && typeof timer.hasRef === "function") {
+      timerReferenced = Boolean(timer.hasRef());
+    }
     return {
       activityEngineEnabled: Boolean(activityConfig.enabled),
       twentyFourSeven: Boolean(activityConfig.twentyFourSeven),
       activityIntervalMinutes: activityConfig.intervalMinutes,
       activitySlots: activityConfig.slots.length,
       timerRunning: isTimerRunning(),
+      timerIntervalMs: tickMs,
+      timerTicks: tickCount,
+      lastTick: lastTickLabel,
+      timerReferenced,
       lastChecked: lastCheckedLabel,
       lastProcessedActivitySlot: lastSlot,
       stateFile: stateExists ? "available" : "missing",
@@ -867,6 +938,7 @@ function createCommunityScheduler(options = {}) {
       statePersistence,
       nextActivitySlot: nextActivitySlotLabel(activityConfig, nowClock) || "none",
       startedAt: startedAt ? startedAt.toISOString() : null,
+      timerStartedAt: timerStartedAt ? timerStartedAt.toISOString() : null,
       schedulerWanted: schedulerWanted(),
     };
   }
@@ -889,6 +961,8 @@ function createCommunityScheduler(options = {}) {
     setLastChecked,
     isTimerRunning,
     getLastCheckedAt,
+    getTickCount: () => tickCount,
+    getLastTickAt: () => lastTickAt,
     getDiagnostics,
     didCrossSlot,
     getZonedClock,
@@ -956,6 +1030,10 @@ function getCommunitySchedulerDiagnostics(now) {
     activityIntervalMinutes: activityConfig.intervalMinutes,
     activitySlots: activityConfig.slots.length,
     timerRunning: false,
+    timerIntervalMs: DEFAULT_TICK_MS,
+    timerTicks: 0,
+    lastTick: "none",
+    timerReferenced: null,
     lastChecked: state.lastCheckedAt
       ? `${Math.max(0, Math.floor(((now || new Date()).getTime() - state.lastCheckedAt) / 60_000))} min ago (persisted)`
       : "none",
@@ -965,6 +1043,7 @@ function getCommunitySchedulerDiagnostics(now) {
     statePersistence: stateExists ? "ok" : "missing",
     nextActivitySlot: nextActivitySlotLabel(activityConfig, clock) || "none",
     startedAt: null,
+    timerStartedAt: null,
     schedulerWanted:
       parseEnabledFlag(process.env.COMMUNITY_AUTO_MESSAGES_ENABLED) ||
       parseEnabledFlag(process.env.AUTO_CHATFIGHT_ENABLED) ||
