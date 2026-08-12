@@ -221,8 +221,24 @@ function emptyState() {
     lastMessageKey: null,
     lastActivityType: null,
     recentActivityTypes: [],
+    lastProcessedActivitySlot: null,
+    lastProcessedActivityAt: null,
+    lastCheckedAt: null,
     autoChatFight: emptyAutoChatFightState(),
   };
+}
+
+/** Production singleton set by startCommunityScheduler (for /chatfightstatus). */
+let liveCommunityScheduler = null;
+
+function getLiveCommunityScheduler() {
+  return liveCommunityScheduler;
+}
+
+function clearLiveCommunityScheduler(scheduler) {
+  if (liveCommunityScheduler === scheduler) {
+    liveCommunityScheduler = null;
+  }
 }
 
 function ensureParentDir(filePath) {
@@ -259,6 +275,16 @@ function loadState(stateFile) {
       recentActivityTypes: Array.isArray(parsed.recentActivityTypes)
         ? parsed.recentActivityTypes.filter((x) => typeof x === "string")
         : [],
+      lastProcessedActivitySlot:
+        typeof parsed.lastProcessedActivitySlot === "string"
+          ? parsed.lastProcessedActivitySlot
+          : null,
+      lastProcessedActivityAt:
+        typeof parsed.lastProcessedActivityAt === "number"
+          ? parsed.lastProcessedActivityAt
+          : null,
+      lastCheckedAt:
+        typeof parsed.lastCheckedAt === "number" ? parsed.lastCheckedAt : null,
       autoChatFight: normalizeAutoChatFightState(parsed.autoChatFight),
     };
   } catch (err) {
@@ -281,6 +307,13 @@ function pruneState(state, keepDays = 14) {
     recentActivityTypes: Array.isArray(state.recentActivityTypes)
       ? state.recentActivityTypes.slice(-8)
       : [],
+    lastProcessedActivitySlot: state.lastProcessedActivitySlot || null,
+    lastProcessedActivityAt:
+      typeof state.lastProcessedActivityAt === "number"
+        ? state.lastProcessedActivityAt
+        : null,
+    lastCheckedAt:
+      typeof state.lastCheckedAt === "number" ? state.lastCheckedAt : null,
     autoChatFight: pruneAutoProcessedSlots(
       normalizeAutoChatFightState(state.autoChatFight),
       keepDays
@@ -431,12 +464,28 @@ function createCommunityScheduler(options = {}) {
     typeof options.activityRandom === "function"
       ? options.activityRandom
       : Math.random;
+  const setIntervalFn =
+    typeof options.setIntervalFn === "function"
+      ? options.setIntervalFn
+      : setInterval;
+  const clearIntervalFn =
+    typeof options.clearIntervalFn === "function"
+      ? options.clearIntervalFn
+      : clearInterval;
 
   let timer = null;
   let lastCheckedAt = null;
+  let startedAt = null;
   let state = loadState(stateFile);
   if (!state.autoChatFight) {
     state.autoChatFight = emptyAutoChatFightState();
+  }
+
+  function schedulerWanted() {
+    const remindersWanted = enabled && !activityConfig.enabled;
+    const autoWanted = autoConfig.enabled && !activityConfig.enabled;
+    const engineWanted = activityConfig.enabled;
+    return remindersWanted || autoWanted || engineWanted;
   }
 
   function persist() {
@@ -560,11 +609,16 @@ function createCommunityScheduler(options = {}) {
 
     if (lastCheckedAt === null) {
       lastCheckedAt = now;
+      state.lastCheckedAt = now.getTime();
+      // Persist immediately so production can verify the scheduler is alive
+      // even before the first crossed slot.
+      persist();
       return { skipped: "startup-seed", dayKey: nowClock.dayKey };
     }
 
     const prevClock = getZonedClock(lastCheckedAt, timeZone);
     lastCheckedAt = now;
+    state.lastCheckedAt = now.getTime();
 
     const fired = [];
     const skippedRecent = [];
@@ -598,6 +652,16 @@ function createCommunityScheduler(options = {}) {
     const activity = await processActivityEngine(prevClock, nowClock, now);
     const autoFight = await processAutoChatFight(prevClock, nowClock, now);
 
+    // Keep lastChecked durable even when no slot crossed.
+    if (
+      (!activity.results || activity.results.length === 0) &&
+      (!autoFight.started || autoFight.started.length === 0) &&
+      fired.length === 0 &&
+      skippedRecent.length === 0
+    ) {
+      persist();
+    }
+
     return {
       dayKey: nowClock.dayKey,
       fired,
@@ -610,15 +674,25 @@ function createCommunityScheduler(options = {}) {
   function start() {
     const autoWanted = autoConfig.enabled && !activityConfig.enabled;
     const engineWanted = activityConfig.enabled;
-    if (!enabled && !autoWanted && !engineWanted) {
+    if (!schedulerWanted()) {
       log(
         "[community-scheduler] Disabled (reminders off, auto-fight off, activity engine off)"
       );
+      log("[activity-engine] disabled");
       return;
     }
     if (!chatId) {
       log("[community-scheduler] Disabled (TELEGRAM_CHAT_ID missing)");
       return;
+    }
+    if (timer) {
+      return;
+    }
+    startedAt = getNow();
+    if (lastCheckedAt === null) {
+      lastCheckedAt = startedAt;
+      state.lastCheckedAt = startedAt.getTime();
+      persist();
     }
     if (enabled && !activityConfig.enabled && sendMessage) {
       log(
@@ -629,8 +703,10 @@ function createCommunityScheduler(options = {}) {
     }
     if (engineWanted) {
       log(
-        `[activity-engine] Enabled — 24/7=${activityConfig.twentyFourSeven} interval=${activityConfig.intervalMinutes}m slots=${activityConfig.slots.length} autoFight=${activityConfig.autoFightEnabled} fightGap=${activityConfig.autoFightMinGapMinutes}m`
+        `[activity-engine] Enabled — 24/7=${activityConfig.twentyFourSeven} interval=${activityConfig.intervalMinutes}m slots=${activityConfig.slots.length}`
       );
+    } else {
+      log("[activity-engine] disabled");
     }
     if (autoWanted && announceChatFight) {
       const envInterval =
@@ -640,22 +716,25 @@ function createCommunityScheduler(options = {}) {
       );
     } else if (!autoConfig.enabled) {
       log("[auto-chatfight] disabled");
+    } else if (activityConfig.enabled) {
+      log("[auto-chatfight] deferred to activity engine");
     }
 
     tick().catch((err) => logError("[community-scheduler] tick error:", err));
-    timer = setInterval(() => {
+    timer = setIntervalFn(() => {
       tick().catch((err) => logError("[community-scheduler] tick error:", err));
     }, tickMs);
-    if (typeof timer.unref === "function") {
+    if (timer && typeof timer.unref === "function") {
       timer.unref();
     }
   }
 
   function stop() {
     if (timer) {
-      clearInterval(timer);
+      clearIntervalFn(timer);
       timer = null;
     }
+    clearLiveCommunityScheduler(api);
   }
 
   function getState() {
@@ -670,12 +749,58 @@ function createCommunityScheduler(options = {}) {
     lastCheckedAt = date;
   }
 
-  return {
+  function isTimerRunning() {
+    return timer != null;
+  }
+
+  function getLastCheckedAt() {
+    return lastCheckedAt;
+  }
+
+  function getDiagnostics(nowInput) {
+    const now = nowInput || getNow();
+    const nowClock = getZonedClock(now, timeZone);
+    const stateExists = fs.existsSync(stateFile);
+    let lastCheckedLabel = "none";
+    if (lastCheckedAt) {
+      const mins = Math.max(
+        0,
+        Math.floor((now.getTime() - lastCheckedAt.getTime()) / 60_000)
+      );
+      lastCheckedLabel = `${mins} min ago`;
+    } else if (state.lastCheckedAt) {
+      const mins = Math.max(
+        0,
+        Math.floor((now.getTime() - state.lastCheckedAt) / 60_000)
+      );
+      lastCheckedLabel = `${mins} min ago (persisted)`;
+    }
+    const lastSlot =
+      state.lastProcessedActivitySlot ||
+      (stateExists ? "none" : "none");
+    return {
+      activityEngineEnabled: Boolean(activityConfig.enabled),
+      twentyFourSeven: Boolean(activityConfig.twentyFourSeven),
+      activityIntervalMinutes: activityConfig.intervalMinutes,
+      activitySlots: activityConfig.slots.length,
+      timerRunning: isTimerRunning(),
+      lastChecked: lastCheckedLabel,
+      lastProcessedActivitySlot: lastSlot,
+      stateFile: stateExists ? "available" : "missing",
+      stateFilePath: stateFile,
+      nextActivitySlot: nextActivitySlotLabel(activityConfig, nowClock) || "none",
+      startedAt: startedAt ? startedAt.toISOString() : null,
+      schedulerWanted: schedulerWanted(),
+    };
+  }
+
+  const api = {
     enabled,
     chatId,
     timeZone,
     slots,
     stateFile,
+    tickMs,
     skipIfRecentMs,
     autoConfig,
     activityConfig,
@@ -685,12 +810,16 @@ function createCommunityScheduler(options = {}) {
     getState,
     resetLastChecked,
     setLastChecked,
+    isTimerRunning,
+    getLastCheckedAt,
+    getDiagnostics,
     didCrossSlot,
     getZonedClock,
     pickMessage,
     wasSent,
     MESSAGE_POOLS,
   };
+  return api;
 }
 
 function startCommunityScheduler(telegram, options = {}) {
@@ -725,7 +854,44 @@ function startCommunityScheduler(telegram, options = {}) {
     },
   });
   scheduler.start();
+  liveCommunityScheduler = scheduler;
   return scheduler;
+}
+
+function getCommunitySchedulerDiagnostics(now) {
+  if (liveCommunityScheduler && typeof liveCommunityScheduler.getDiagnostics === "function") {
+    return liveCommunityScheduler.getDiagnostics(now);
+  }
+  const activityConfig = parseActivityEngineConfig(process.env);
+  const timeZone =
+    (process.env.COMMUNITY_TIMEZONE || DEFAULT_TIMEZONE).trim() ||
+    DEFAULT_TIMEZONE;
+  const clock = getZonedClock(now || new Date(), timeZone);
+  const stateFile = DEFAULT_STATE_FILE;
+  const stateExists = fs.existsSync(stateFile);
+  let state = emptyState();
+  if (stateExists) {
+    state = loadState(stateFile);
+  }
+  return {
+    activityEngineEnabled: Boolean(activityConfig.enabled),
+    twentyFourSeven: Boolean(activityConfig.twentyFourSeven),
+    activityIntervalMinutes: activityConfig.intervalMinutes,
+    activitySlots: activityConfig.slots.length,
+    timerRunning: false,
+    lastChecked: state.lastCheckedAt
+      ? `${Math.max(0, Math.floor(((now || new Date()).getTime() - state.lastCheckedAt) / 60_000))} min ago (persisted)`
+      : "none",
+    lastProcessedActivitySlot: state.lastProcessedActivitySlot || "none",
+    stateFile: stateExists ? "available" : "missing",
+    stateFilePath: stateFile,
+    nextActivitySlot: nextActivitySlotLabel(activityConfig, clock) || "none",
+    startedAt: null,
+    schedulerWanted:
+      parseEnabledFlag(process.env.COMMUNITY_AUTO_MESSAGES_ENABLED) ||
+      parseEnabledFlag(process.env.AUTO_CHATFIGHT_ENABLED) ||
+      activityConfig.enabled,
+  };
 }
 
 module.exports = {
@@ -734,6 +900,7 @@ module.exports = {
   DEFAULT_SLOTS,
   DEFAULT_ACTIVE_START_HOUR,
   DEFAULT_ACTIVE_END_HOUR,
+  DEFAULT_TICK_MS,
   MESSAGE_POOLS,
   ACTIVITY_MESSAGES,
   parseEnabledFlag,
@@ -742,6 +909,8 @@ module.exports = {
   resolveSlotsFromEnv,
   createCommunityScheduler,
   startCommunityScheduler,
+  getLiveCommunityScheduler,
+  getCommunitySchedulerDiagnostics,
   getZonedClock,
   didCrossSlot,
   pickMessage,

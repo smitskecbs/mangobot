@@ -20,6 +20,7 @@ const {
   DEFAULT_TIMEZONE,
   loadState,
   DEFAULT_STATE_FILE,
+  getCommunitySchedulerDiagnostics,
 } = require("../services/communityScheduler");
 
 function typeListLabel(types) {
@@ -97,6 +98,11 @@ async function handleChatFightStatus(ctx, options = {}) {
   const nextAuto = nextAutoSlotLabel(autoConfig, clock);
   const nextActivity = nextActivitySlotLabel(activityConfig, clock);
 
+  const diagnostics =
+    typeof options.getDiagnosticsFn === "function"
+      ? options.getDiagnosticsFn(now)
+      : getCommunitySchedulerDiagnostics(now);
+
   let state = { autoChatFight: {} };
   try {
     state = loadState(options.stateFile || DEFAULT_STATE_FILE);
@@ -125,21 +131,31 @@ async function handleChatFightStatus(ctx, options = {}) {
     ? activityConfig.intervalMinutes
     : autoConfig.intervalMinutes;
 
+  const lastProcessed =
+    diagnostics.lastProcessedActivitySlot ||
+    state.lastProcessedActivitySlot ||
+    "none";
+
   const text = `⚔️ ChatFight status
 
 Auto enabled: ${autoConfig.enabled || activityConfig.autoFightEnabled ? "yes" : "no"}
 Configured auto interval: ${envInterval}
 Effective interval: ${effectiveInterval} min
-24/7 activity: ${activityConfig.twentyFourSeven ? "yes" : "no"}
-Activity engine: ${activityConfig.enabled ? "yes" : "no"}
+Activity engine enabled: ${activityConfig.enabled ? "yes" : "no"}
+24/7: ${activityConfig.twentyFourSeven ? "yes" : "no"}
 Activity interval: ${activityConfig.intervalMinutes} min
+Activity slots: ${activityConfig.slots.length}
+Scheduler timer running: ${diagnostics.timerRunning ? "yes" : "no"}
+Last checked: ${diagnostics.lastChecked}
+Last processed activity slot: ${lastProcessed}
+State file: ${diagnostics.stateFile}
+Next activity slot: ${diagnostics.nextActivitySlot || nextActivity || "none"}
 Auto fight min gap: ${activityConfig.autoFightMinGapMinutes} min
 Active hours: ${pad2(autoConfig.startHour)}:00–${pad2(autoConfig.endHour)}:00
 Current fight: ${currentLabel}
 Cooldown: ${cooldownText}
 Last auto fight: ${formatLastAuto(state.autoChatFight)}
 Next auto slot: ${nextAuto || "none today"}
-Next activity slot: ${nextActivity || "none today"}
 Enabled race types: ${typeListLabel(autoConfig.types) || "type, math, emoji, ..."}`;
 
   return ctx.reply(text);

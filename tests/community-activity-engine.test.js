@@ -268,6 +268,50 @@ async function main() {
     sched.stop();
   });
 
+  await runTest("chatfight announce fail → prompt fallback", async () => {
+    const service = createService();
+    const state = {
+      sent: {},
+      lastMessageKey: null,
+      recentActivityTypes: [],
+      autoChatFight: { processedSlots: {}, lastStartedAt: null, lastType: null },
+    };
+    const cfg = parseActivityEngineConfig(
+      {},
+      {
+        enabled: true,
+        twentyFourSeven: true,
+        autoFightEnabled: true,
+        intervalMinutes: 30,
+      }
+    );
+    const sent = [];
+    const slot = { id: "act1830", label: "18:30", hour: 18, minute: 30 };
+    const result = await processCommunityActivitySlot({
+      chatId: CHAT,
+      slot,
+      dayKey: "2026-08-12",
+      config: cfg,
+      state,
+      chatFight: service,
+      sendMessage: async (_c, t) => {
+        sent.push(t);
+        return true;
+      },
+      announceChatFight: async () => {
+        throw new Error("announce failed");
+      },
+      random: () => 0,
+      wasActiveWithinFn: () => false,
+      nowMs: Date.now(),
+    });
+    assert.notStrictEqual(result.action, ACTION_IDS.CHATFIGHT);
+    assert.ok(result.fallback && String(result.fallback).includes("chatfight"));
+    assert.strictEqual(result.sent, true);
+    assert.strictEqual(sent.length, 1);
+    assert.ok(state.sent["2026-08-12"].includes("act1830"));
+  });
+
   fs.rmSync(tempDir, { recursive: true, force: true });
   console.log("\nAll community-activity-engine tests passed.");
 }

@@ -527,47 +527,49 @@ async function processCommunityActivitySlot({
     recentActivityTypes: state.recentActivityTypes,
   };
 
-  const action = chooseAction(config, context, random);
+  let action = chooseAction(config, context, random);
+  let fallbackFrom = null;
 
   // Always mark processed to prevent restart spam / catch-up.
   markSlotProcessed(state, dayKey, slot.id);
+  state.lastProcessedActivitySlot = `${dayKey} ${slot.label}`;
+  state.lastProcessedActivityAt = nowMs;
 
-  if (action === ACTION_IDS.SKIP) {
-    state.lastActivityType = ACTION_IDS.SKIP;
-    return { action: ACTION_IDS.SKIP, sent: false, reason: "skip" };
+  async function sendPrompt(actionId) {
+    const text = pickPoolMessage(actionId, state.lastMessageKey, random);
+    if (!text) {
+      return { action: actionId, sent: false, reason: "empty-pool" };
+    }
+    if (typeof sendMessage !== "function") {
+      return { action: actionId, sent: false, reason: "missing-sender" };
+    }
+    try {
+      const ok = await sendMessage(chatId, text);
+      if (!ok) {
+        return { action: actionId, sent: false, reason: "send-failed" };
+      }
+    } catch (_err) {
+      logError("[activity-engine] send failed");
+      return { action: actionId, sent: false, reason: "send-failed" };
+    }
+    state.lastMessageKey = text.slice(0, 80);
+    state.lastActivityType = actionId;
+    state.recentActivityTypes = [
+      ...state.recentActivityTypes.slice(-4),
+      actionId,
+    ];
+    return { action: actionId, sent: true, reason: "sent" };
   }
 
-  if (action === ACTION_IDS.CHATFIGHT) {
-    const fakeSlot = {
-      id: slot.id,
-      label: slot.label,
-      hour: slot.hour,
-      minute: slot.minute,
-    };
-    // Reuse tryStartAutoChatFight but slot already marked — bypass its processed check
-    // by using a dedicated path:
-    if (chatFight.isFightOpen()) {
-      return { action: ACTION_IDS.CHATFIGHT, sent: false, reason: "active-fight" };
-    }
-    if (chatFight.isOnCooldown()) {
-      return { action: ACTION_IDS.CHATFIGHT, sent: false, reason: "cooldown" };
-    }
-    const last = state.autoChatFight.lastStartedAt;
-    if (
-      last != null &&
-      config.autoFightMinGapMs > 0 &&
-      nowMs - last < config.autoFightMinGapMs
-    ) {
-      return { action: ACTION_IDS.CHATFIGHT, sent: false, reason: "min-gap" };
+  async function tryChatFight() {
+    if (!isActionEligible(ACTION_IDS.CHATFIGHT, context)) {
+      if (chatFight.isFightOpen()) return { ok: false, reason: "active-fight" };
+      if (chatFight.isOnCooldown()) return { ok: false, reason: "cooldown" };
+      return { ok: false, reason: "min-gap" };
     }
     if (typeof announceChatFight !== "function") {
-      return {
-        action: ACTION_IDS.CHATFIGHT,
-        sent: false,
-        reason: "missing-announcer",
-      };
+      return { ok: false, reason: "missing-announcer" };
     }
-
     const started = chatFight.startFight({
       chatId,
       type: null,
@@ -576,11 +578,7 @@ async function processCommunityActivitySlot({
       source: "auto",
     });
     if (!started.ok) {
-      return {
-        action: ACTION_IDS.CHATFIGHT,
-        sent: false,
-        reason: started.reason || "start-failed",
-      };
+      return { ok: false, reason: started.reason || "start-failed" };
     }
     try {
       const sentMsg = await announceChatFight(
@@ -597,11 +595,7 @@ async function processCommunityActivitySlot({
     } catch (_err) {
       logError("[activity-engine] chatfight announce failed");
       chatFight.abortUnpublishedFight();
-      return {
-        action: ACTION_IDS.CHATFIGHT,
-        sent: false,
-        reason: "send-failed",
-      };
+      return { ok: false, reason: "send-failed" };
     }
     state.autoChatFight.lastStartedAt = nowMs;
     state.autoChatFight.lastType = started.fight && started.fight.type;
@@ -611,37 +605,56 @@ async function processCommunityActivitySlot({
       ...state.recentActivityTypes.slice(-4),
       ACTION_IDS.CHATFIGHT,
     ];
-    log(
-      `[activity-engine] action=chatfight slot=${slot.label} type=${state.autoChatFight.lastType}`
-    );
-    return { action: ACTION_IDS.CHATFIGHT, sent: true, reason: "started" };
+    return { ok: true, reason: "started" };
   }
 
-  const text = pickPoolMessage(action, state.lastMessageKey, random);
-  if (!text) {
-    return { action, sent: false, reason: "empty-pool" };
+  if (action === ACTION_IDS.SKIP) {
+    state.lastActivityType = ACTION_IDS.SKIP;
+    log(`[activity-engine] skipped slot=${slot.label} reason=skip`);
+    return { action: ACTION_IDS.SKIP, sent: false, reason: "skip" };
   }
-  if (typeof sendMessage !== "function") {
-    return { action, sent: false, reason: "missing-sender" };
-  }
-  try {
-    const ok = await sendMessage(chatId, text);
-    if (!ok) {
-      return { action, sent: false, reason: "send-failed" };
+
+  if (action === ACTION_IDS.CHATFIGHT) {
+    const fightResult = await tryChatFight();
+    if (fightResult.ok) {
+      log(
+        `[activity-engine] action=chatfight slot=${slot.label} type=${state.autoChatFight.lastType}`
+      );
+      return { action: ACTION_IDS.CHATFIGHT, sent: true, reason: "started" };
     }
-  } catch (_err) {
-    logError("[activity-engine] send failed");
-    return { action, sent: false, reason: "send-failed" };
+    fallbackFrom = `chatfight-${fightResult.reason}`;
+    const weights = buildWeights(config, context);
+    weights[ACTION_IDS.CHATFIGHT] = 0;
+    action = pickWeightedAction(weights, random);
+    if (action === ACTION_IDS.CHATFIGHT || action === ACTION_IDS.SKIP) {
+      // Force a prompt category if still fight/skip.
+      const promptIds = [
+        ACTION_IDS.SNAKE,
+        ACTION_IDS.BOUNCH,
+        ACTION_IDS.WEEKLY,
+        ACTION_IDS.LEADERBOARD,
+        ACTION_IDS.GAME,
+        ACTION_IDS.COMMUNITY,
+      ];
+      action = promptIds[Math.floor(random() * promptIds.length)];
+    }
   }
 
-  state.lastMessageKey = text.slice(0, 80);
-  state.lastActivityType = action;
-  state.recentActivityTypes = [
-    ...state.recentActivityTypes.slice(-4),
-    action,
-  ];
-  log(`[activity-engine] action=${action} slot=${slot.label}`);
-  return { action, sent: true, reason: "sent" };
+  const promptResult = await sendPrompt(action);
+  if (promptResult.sent) {
+    if (fallbackFrom) {
+      log(
+        `[activity-engine] action=${action} slot=${slot.label} fallback=${fallbackFrom}`
+      );
+      return { ...promptResult, fallback: fallbackFrom };
+    }
+    log(`[activity-engine] action=${action} slot=${slot.label}`);
+    return promptResult;
+  }
+  log(
+    `[activity-engine] skipped slot=${slot.label} reason=${promptResult.reason}`
+  );
+  return promptResult;
 }
 
 function nextActivitySlotLabel(config, nowClock) {

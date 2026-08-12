@@ -62,6 +62,27 @@ async function main() {
       enabled: false,
       chatId: "123",
       stateFile: stateFile(),
+      activityEngineConfig: {
+        enabled: false,
+        twentyFourSeven: false,
+        intervalMinutes: 30,
+        slots: [],
+        autoFightEnabled: false,
+        autoFightMinGapMinutes: 120,
+        autoFightMinGapMs: 120 * 60_000,
+        skipRecentMs: 0,
+        fightTypes: [],
+      },
+      autoChatFightConfig: {
+        enabled: false,
+        intervalMinutes: 120,
+        chancePercent: 0,
+        slots: [],
+        types: [],
+        startHour: 9,
+        endHour: 22,
+        minActivityGapMs: 0,
+      },
       sendMessage: async (chatId, text) => {
         sent.push({ chatId, text });
         return true;
@@ -583,6 +604,330 @@ async function main() {
     } else {
       process.env.COMMUNITY_ACTIVITY_INTERVAL_MINUTES = prev;
     }
+  });
+
+  await runTest("PROD BUG: 18:12 seed → 18:31 processes 18:30 once", async () => {
+    const {
+      parseActivityEngineConfig,
+    } = require("../services/communityActivityEngine");
+    const {
+      createChatFightService,
+      CHAT_FIGHT_COOLDOWN_MS,
+    } = require("../services/chatFight");
+    const file = stateFile();
+    const sent = [];
+    const announced = [];
+    // 18:12 / 18:31 Europe/Amsterdam (CEST = UTC+2)
+    let now = utcDate("2026-08-12T16:12:00.000Z");
+    const cfg = parseActivityEngineConfig(
+      {
+        COMMUNITY_ACTIVITY_ENGINE_ENABLED: "true",
+        COMMUNITY_ACTIVITY_24_7: "true",
+        COMMUNITY_ACTIVITY_INTERVAL_MINUTES: "30",
+        AUTO_CHATFIGHT_ENABLED: "true",
+        TELEGRAM_CHAT_ID: "-1003916996602",
+      },
+      {}
+    );
+    const service = createChatFightService({
+      random: () => 0,
+      durationMs: 60_000,
+      revealWaitMs: 300_000,
+      cooldownMs: CHAT_FIGHT_COOLDOWN_MS,
+    });
+    const sched = createCommunityScheduler({
+      enabled: false,
+      chatId: "-1003916996602",
+      timeZone: "Europe/Amsterdam",
+      stateFile: file,
+      now: () => now,
+      activityEngineConfig: cfg,
+      autoChatFightConfig: {
+        enabled: true,
+        intervalMinutes: 30,
+        chancePercent: 100,
+        slots: cfg.slots,
+        types: cfg.fightTypes,
+        startHour: 0,
+        endHour: 24,
+        minActivityGapMs: 0,
+      },
+      chatFight: service,
+      sendMessage: async (_c, text) => {
+        sent.push(text);
+        return true;
+      },
+      announceChatFight: async (_c, teaser) => {
+        announced.push(teaser);
+        return { message_id: 99 };
+      },
+      // Prefer prompt action so we don't depend on fight start.
+      activityRandom: () => 0.4,
+    });
+
+    const seed = await sched.tick();
+    assert.strictEqual(seed.skipped, "startup-seed");
+    assert.ok(fs.existsSync(file), "state file must exist after startup seed");
+
+    now = utcDate("2026-08-12T16:31:00.000Z");
+    const result = await sched.tick();
+    assert.ok(result.activity && result.activity.enabled);
+    assert.strictEqual(result.activity.results.length, 1);
+    assert.strictEqual(result.activity.results[0].slot, "act1830");
+    assert.ok(
+      result.activity.results[0].sent === true ||
+        result.activity.results[0].reason === "skip" ||
+        result.activity.results[0].fallback,
+      "slot must send, skip, or fallback explicitly"
+    );
+    const st = sched.getState();
+    assert.ok(st.sent["2026-08-12"].includes("act1830"));
+    assert.ok(String(st.lastProcessedActivitySlot).includes("18:30"));
+    assert.ok(fs.existsSync(file));
+
+    // Same slot must not fire twice.
+    now = utcDate("2026-08-12T16:32:00.000Z");
+    const again = await sched.tick();
+    const dup = (again.activity.results || []).filter((r) => r.slot === "act1830");
+    assert.ok(dup.every((r) => r.reason === "already-processed" || !r.sent));
+    sched.stop();
+  });
+
+  await runTest("engine-only: reminders+auto off still processes slot", async () => {
+    const {
+      parseActivityEngineConfig,
+    } = require("../services/communityActivityEngine");
+    const {
+      createChatFightService,
+      CHAT_FIGHT_COOLDOWN_MS,
+    } = require("../services/chatFight");
+    const file = stateFile();
+    const sent = [];
+    let now = utcDate("2026-08-12T16:12:00.000Z");
+    const cfg = parseActivityEngineConfig(
+      {},
+      {
+        enabled: true,
+        twentyFourSeven: true,
+        intervalMinutes: 30,
+        autoFightEnabled: false,
+      }
+    );
+    const sched = createCommunityScheduler({
+      enabled: false,
+      chatId: "1",
+      timeZone: "Europe/Amsterdam",
+      stateFile: file,
+      now: () => now,
+      activityEngineConfig: cfg,
+      autoChatFightConfig: {
+        enabled: false,
+        intervalMinutes: 120,
+        chancePercent: 0,
+        slots: [],
+        types: [],
+        startHour: 9,
+        endHour: 22,
+        minActivityGapMs: 0,
+      },
+      chatFight: createChatFightService({
+        random: () => 0,
+        durationMs: 60_000,
+        revealWaitMs: 300_000,
+        cooldownMs: CHAT_FIGHT_COOLDOWN_MS,
+      }),
+      sendMessage: async (_c, t) => {
+        sent.push(t);
+        return true;
+      },
+      activityRandom: () => 0.5,
+    });
+    await sched.tick();
+    now = utcDate("2026-08-12T16:31:00.000Z");
+    const result = await sched.tick();
+    assert.strictEqual(result.activity.results.length, 1);
+    assert.strictEqual(result.activity.results[0].slot, "act1830");
+    assert.ok(sent.length === 1 || result.activity.results[0].reason === "skip");
+    sched.stop();
+  });
+
+  await runTest("start() schedules timer when activity engine only", async () => {
+    const {
+      parseActivityEngineConfig,
+    } = require("../services/communityActivityEngine");
+    const { DEFAULT_TICK_MS: tickDefault } = require("../services/communityScheduler");
+    const cfg = parseActivityEngineConfig(
+      {},
+      {
+        enabled: true,
+        twentyFourSeven: true,
+        intervalMinutes: 30,
+        autoFightEnabled: false,
+      }
+    );
+    const scheduled = [];
+    let cleared = 0;
+    let now = utcDate("2026-08-12T16:12:00.000Z");
+    const file = stateFile();
+    const sched = createCommunityScheduler({
+      enabled: false,
+      chatId: "1",
+      timeZone: "Europe/Amsterdam",
+      stateFile: file,
+      tickMs: tickDefault,
+      now: () => now,
+      activityEngineConfig: cfg,
+      autoChatFightConfig: {
+        enabled: false,
+        intervalMinutes: 120,
+        chancePercent: 0,
+        slots: [],
+        types: [],
+        startHour: 9,
+        endHour: 22,
+        minActivityGapMs: 0,
+      },
+      sendMessage: async () => true,
+      setIntervalFn: (fn, ms) => {
+        scheduled.push({ fn, ms });
+        return { unref() {}, id: scheduled.length };
+      },
+      clearIntervalFn: () => {
+        cleared += 1;
+      },
+    });
+    sched.start();
+    assert.strictEqual(scheduled.length, 1);
+    assert.strictEqual(scheduled[0].ms, 60_000);
+    assert.strictEqual(sched.isTimerRunning(), true);
+    assert.ok(fs.existsSync(file));
+    // Let the immediate post-start tick finish while still at 18:12.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    now = utcDate("2026-08-12T16:31:00.000Z");
+    await scheduled[0].fn();
+    const st = sched.getState();
+    assert.ok(st.sent["2026-08-12"] && st.sent["2026-08-12"].includes("act1830"));
+
+    sched.stop();
+    assert.strictEqual(cleared, 1);
+    assert.strictEqual(sched.isTimerRunning(), false);
+  });
+
+  await runTest("engine ON suppresses legacy reminder + standalone auto", async () => {
+    const {
+      parseActivityEngineConfig,
+    } = require("../services/communityActivityEngine");
+    const {
+      createChatFightService,
+      CHAT_FIGHT_COOLDOWN_MS,
+      FIGHT_TYPES,
+    } = require("../services/chatFight");
+    const file = stateFile();
+    const sent = [];
+    const announced = [];
+    let now = utcDate("2026-08-12T16:12:00.000Z");
+    const cfg = parseActivityEngineConfig(
+      {},
+      {
+        enabled: true,
+        twentyFourSeven: true,
+        intervalMinutes: 30,
+        autoFightEnabled: true,
+      }
+    );
+    const legacySlots = [
+      { id: "evening", hour: 18, minute: 30, pool: "evening" },
+    ];
+    const sched = createCommunityScheduler({
+      enabled: true,
+      chatId: "1",
+      timeZone: "Europe/Amsterdam",
+      slots: legacySlots,
+      stateFile: file,
+      now: () => now,
+      activityEngineConfig: cfg,
+      autoChatFightConfig: {
+        enabled: true,
+        intervalMinutes: 30,
+        chancePercent: 100,
+        slots: [{ id: "acf1830", hour: 18, minute: 30 }],
+        types: [FIGHT_TYPES.TYPE_RUSH],
+        startHour: 0,
+        endHour: 24,
+        minActivityGapMs: 0,
+      },
+      chatFight: createChatFightService({
+        random: () => 0,
+        durationMs: 60_000,
+        revealWaitMs: 300_000,
+        cooldownMs: CHAT_FIGHT_COOLDOWN_MS,
+      }),
+      sendMessage: async (_c, t) => {
+        sent.push(t);
+        return true;
+      },
+      announceChatFight: async (_c, t) => {
+        announced.push(t);
+        return { message_id: 1 };
+      },
+      activityRandom: () => 0.5,
+      autoChatFightRandom: () => 0,
+    });
+    await sched.tick();
+    now = utcDate("2026-08-12T16:31:00.000Z");
+    const result = await sched.tick();
+    assert.deepStrictEqual(result.fired, []);
+    assert.ok(result.autoFight.deferredToEngine);
+    assert.strictEqual(result.activity.results.length, 1);
+    // At most one outbound action from engine path.
+    assert.ok(sent.length + announced.length <= 1);
+    sched.stop();
+  });
+
+  await runTest("engine OFF + legacy reminders ON still works", async () => {
+    const sent = [];
+    let now = utcDate("2026-08-10T06:59:00.000Z");
+    const sched = createCommunityScheduler({
+      enabled: true,
+      chatId: "1",
+      timeZone: "Europe/Amsterdam",
+      slots: DEFAULT_SLOTS,
+      stateFile: stateFile(),
+      now: () => now,
+      activityEngineConfig: {
+        enabled: false,
+        twentyFourSeven: false,
+        intervalMinutes: 30,
+        slots: [],
+        autoFightEnabled: false,
+        autoFightMinGapMinutes: 120,
+        autoFightMinGapMs: 0,
+        skipRecentMs: 0,
+        fightTypes: [],
+      },
+      autoChatFightConfig: {
+        enabled: false,
+        intervalMinutes: 120,
+        chancePercent: 0,
+        slots: [],
+        types: [],
+        startHour: 9,
+        endHour: 22,
+        minActivityGapMs: 0,
+      },
+      sendMessage: async (_c, t) => {
+        sent.push(t);
+        return true;
+      },
+    });
+    await sched.tick();
+    now = utcDate("2026-08-10T07:00:00.000Z");
+    const result = await sched.tick();
+    assert.deepStrictEqual(result.fired, ["morning"]);
+    assert.strictEqual(sent.length, 1);
+    sched.stop();
   });
 
   fs.rmSync(tempDir, { recursive: true, force: true });

@@ -34,7 +34,14 @@ bot
   .launch()
   .then(() => {
     log("🥭 ManGo Bot running...");
-    communityScheduler = startCommunityScheduler(bot.telegram);
+    try {
+      communityScheduler = startCommunityScheduler(bot.telegram);
+    } catch (err) {
+      log(
+        "Failed to start community scheduler:",
+        err && err.message ? err.message : err
+      );
+    }
   })
   .catch((err) => {
     log("Failed to launch ManGo Bot:", err && err.message ? err.message : err);
