@@ -19,6 +19,9 @@ const {
   DEFAULT_SLOTS,
   buildIntervalSlots,
   resolveSlotsFromEnv,
+  resolveDefaultStateFile,
+  DEFAULT_STATE_FILE,
+  loadState,
 } = require("../services/communityScheduler");
 const {
   noteCommunityActivity,
@@ -927,6 +930,183 @@ async function main() {
     const result = await sched.tick();
     assert.deepStrictEqual(result.fired, ["morning"]);
     assert.strictEqual(sent.length, 1);
+    sched.stop();
+  });
+
+  await runTest("resolveDefaultStateFile is absolute …/data/community-scheduler.json", () => {
+    const resolved = resolveDefaultStateFile();
+    assert.strictEqual(resolved, DEFAULT_STATE_FILE);
+    assert.ok(path.isAbsolute(resolved));
+    assert.ok(resolved.replace(/\\/g, "/").endsWith("/data/community-scheduler.json"));
+  });
+
+  await runTest("start() creates state file with runtime alive fields", async () => {
+    const {
+      parseActivityEngineConfig,
+    } = require("../services/communityActivityEngine");
+    const file = stateFile();
+    assert.ok(!fs.existsSync(file));
+    let now = utcDate("2026-08-12T16:12:00.000Z");
+    const cfg = parseActivityEngineConfig(
+      {},
+      {
+        enabled: true,
+        twentyFourSeven: true,
+        intervalMinutes: 30,
+        autoFightEnabled: false,
+      }
+    );
+    const scheduled = [];
+    const sched = createCommunityScheduler({
+      enabled: false,
+      chatId: "1",
+      timeZone: "Europe/Amsterdam",
+      stateFile: file,
+      now: () => now,
+      activityEngineConfig: cfg,
+      autoChatFightConfig: {
+        enabled: false,
+        intervalMinutes: 120,
+        chancePercent: 0,
+        slots: [],
+        types: [],
+        startHour: 9,
+        endHour: 22,
+        minActivityGapMs: 0,
+      },
+      sendMessage: async () => true,
+      setIntervalFn: (fn, ms) => {
+        scheduled.push({ fn, ms });
+        return { unref() {} };
+      },
+      clearIntervalFn: () => {},
+    });
+    sched.start();
+    assert.ok(fs.existsSync(file), "state file must exist immediately after start");
+    const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.ok(raw.runtime);
+    assert.strictEqual(typeof raw.runtime.startedAt, "number");
+    assert.strictEqual(typeof raw.runtime.lastCheckedAt, "number");
+    assert.strictEqual(raw.runtime.lastProcessedActivitySlot, null);
+    assert.strictEqual(typeof raw.lastCheckedAt, "number");
+    assert.strictEqual(sched.getDiagnostics().statePersistence, "ok");
+    assert.strictEqual(sched.getDiagnostics().stateFile, "available");
+    assert.strictEqual(scheduled.length, 1);
+    sched.stop();
+  });
+
+  await runTest("saveState creates missing parent directory", () => {
+    const nested = path.join(tempDir, "nested-missing", "deep", "state.json");
+    assert.ok(!fs.existsSync(path.dirname(nested)));
+    const { saveState, emptyState } = require("../services/communityScheduler");
+    saveState(nested, emptyState());
+    assert.ok(fs.existsSync(nested));
+    const parsed = JSON.parse(fs.readFileSync(nested, "utf8"));
+    assert.ok(parsed.sent);
+  });
+
+  await runTest("write failure does not crash; persistence error reported", async () => {
+    const {
+      parseActivityEngineConfig,
+    } = require("../services/communityActivityEngine");
+    const file = stateFile();
+    const cfg = parseActivityEngineConfig(
+      {},
+      {
+        enabled: true,
+        twentyFourSeven: true,
+        intervalMinutes: 30,
+        autoFightEnabled: false,
+      }
+    );
+    const scheduled = [];
+    const sched = createCommunityScheduler({
+      enabled: false,
+      chatId: "1",
+      timeZone: "Europe/Amsterdam",
+      stateFile: file,
+      now: () => utcDate("2026-08-12T16:12:00.000Z"),
+      activityEngineConfig: cfg,
+      autoChatFightConfig: {
+        enabled: false,
+        intervalMinutes: 120,
+        chancePercent: 0,
+        slots: [],
+        types: [],
+        startHour: 9,
+        endHour: 22,
+        minActivityGapMs: 0,
+      },
+      sendMessage: async () => true,
+      writeState: () => {
+        throw new Error("disk full");
+      },
+      setIntervalFn: (fn, ms) => {
+        scheduled.push({ fn, ms });
+        return { unref() {} };
+      },
+      clearIntervalFn: () => {},
+    });
+    assert.doesNotThrow(() => sched.start());
+    assert.strictEqual(sched.isTimerRunning(), true);
+    assert.strictEqual(sched.getDiagnostics().statePersistence, "error");
+    assert.strictEqual(sched.getDiagnostics().timerRunning, true);
+    sched.stop();
+  });
+
+  await runTest("timer callback after slot cross persists lastProcessed", async () => {
+    const {
+      parseActivityEngineConfig,
+    } = require("../services/communityActivityEngine");
+    const file = stateFile();
+    let now = utcDate("2026-08-12T16:12:00.000Z");
+    const cfg = parseActivityEngineConfig(
+      {},
+      {
+        enabled: true,
+        twentyFourSeven: true,
+        intervalMinutes: 30,
+        autoFightEnabled: false,
+      }
+    );
+    const scheduled = [];
+    const sched = createCommunityScheduler({
+      enabled: false,
+      chatId: "1",
+      timeZone: "Europe/Amsterdam",
+      stateFile: file,
+      now: () => now,
+      activityEngineConfig: cfg,
+      autoChatFightConfig: {
+        enabled: false,
+        intervalMinutes: 120,
+        chancePercent: 0,
+        slots: [],
+        types: [],
+        startHour: 9,
+        endHour: 22,
+        minActivityGapMs: 0,
+      },
+      sendMessage: async () => true,
+      activityRandom: () => 0.5,
+      setIntervalFn: (fn, ms) => {
+        scheduled.push({ fn, ms });
+        return { unref() {} };
+      },
+      clearIntervalFn: () => {},
+    });
+    sched.start();
+    assert.ok(fs.existsSync(file));
+    await Promise.resolve();
+    await Promise.resolve();
+    now = utcDate("2026-08-12T16:31:00.000Z");
+    await scheduled[0].fn();
+    const disk = loadState(file);
+    assert.ok(disk.sent && disk.sent["2026-08-12"]);
+    assert.ok(disk.sent["2026-08-12"].includes("act1830"));
+    assert.ok(String(disk.lastProcessedActivitySlot).includes("18:30"));
+    assert.ok(disk.runtime && disk.runtime.lastProcessedActivitySlot);
+    assert.strictEqual(sched.getDiagnostics().statePersistence, "ok");
     sched.stop();
   });
 

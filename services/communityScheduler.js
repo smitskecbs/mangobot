@@ -32,12 +32,15 @@ const {
 } = require("./communityActivityEngine");
 const { chatFightRuntime } = require("./chatFight");
 
-const DEFAULT_STATE_FILE = path.join(
-  __dirname,
-  "..",
-  "data",
-  "community-scheduler.json"
-);
+/**
+ * Absolute path to production scheduler state.
+ * Deterministic from this module's location (not process.cwd()).
+ */
+function resolveDefaultStateFile() {
+  return path.resolve(__dirname, "..", "data", "community-scheduler.json");
+}
+
+const DEFAULT_STATE_FILE = resolveDefaultStateFile();
 
 const DEFAULT_TIMEZONE = "Europe/Amsterdam";
 const DEFAULT_TICK_MS = 60_000;
@@ -224,6 +227,11 @@ function emptyState() {
     lastProcessedActivitySlot: null,
     lastProcessedActivityAt: null,
     lastCheckedAt: null,
+    runtime: {
+      startedAt: null,
+      lastCheckedAt: null,
+      lastProcessedActivitySlot: null,
+    },
     autoChatFight: emptyAutoChatFightState(),
   };
 }
@@ -285,12 +293,35 @@ function loadState(stateFile) {
           : null,
       lastCheckedAt:
         typeof parsed.lastCheckedAt === "number" ? parsed.lastCheckedAt : null,
+      runtime: normalizeRuntime(parsed.runtime, parsed),
       autoChatFight: normalizeAutoChatFightState(parsed.autoChatFight),
     };
   } catch (err) {
     logError("[community-scheduler] Failed to read state:", err);
     return emptyState();
   }
+}
+
+function normalizeRuntime(runtime, parsed) {
+  const src =
+    runtime && typeof runtime === "object" && !Array.isArray(runtime)
+      ? runtime
+      : {};
+  return {
+    startedAt: typeof src.startedAt === "number" ? src.startedAt : null,
+    lastCheckedAt:
+      typeof src.lastCheckedAt === "number"
+        ? src.lastCheckedAt
+        : typeof parsed.lastCheckedAt === "number"
+          ? parsed.lastCheckedAt
+          : null,
+    lastProcessedActivitySlot:
+      typeof src.lastProcessedActivitySlot === "string"
+        ? src.lastProcessedActivitySlot
+        : typeof parsed.lastProcessedActivitySlot === "string"
+          ? parsed.lastProcessedActivitySlot
+          : null,
+  };
 }
 
 function pruneState(state, keepDays = 14) {
@@ -300,6 +331,7 @@ function pruneState(state, keepDays = 14) {
     entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
     sent = Object.fromEntries(entries.slice(-keepDays));
   }
+  const runtime = normalizeRuntime(state.runtime, state);
   return {
     sent,
     lastMessageKey: state.lastMessageKey || null,
@@ -314,6 +346,7 @@ function pruneState(state, keepDays = 14) {
         : null,
     lastCheckedAt:
       typeof state.lastCheckedAt === "number" ? state.lastCheckedAt : null,
+    runtime,
     autoChatFight: pruneAutoProcessedSlots(
       normalizeAutoChatFightState(state.autoChatFight),
       keepDays
@@ -472,13 +505,26 @@ function createCommunityScheduler(options = {}) {
     typeof options.clearIntervalFn === "function"
       ? options.clearIntervalFn
       : clearInterval;
+  const writeStateFn =
+    typeof options.writeState === "function"
+      ? options.writeState
+      : (file, st) => saveState(file, st);
 
   let timer = null;
   let lastCheckedAt = null;
   let startedAt = null;
+  /** @type {"ok"|"error"|"unknown"} */
+  let persistStatus = "unknown";
   let state = loadState(stateFile);
   if (!state.autoChatFight) {
     state.autoChatFight = emptyAutoChatFightState();
+  }
+  if (!state.runtime) {
+    state.runtime = {
+      startedAt: null,
+      lastCheckedAt: null,
+      lastProcessedActivitySlot: null,
+    };
   }
 
   function schedulerWanted() {
@@ -488,11 +534,39 @@ function createCommunityScheduler(options = {}) {
     return remindersWanted || autoWanted || engineWanted;
   }
 
+  function syncRuntimeFields() {
+    if (!state.runtime || typeof state.runtime !== "object") {
+      state.runtime = {
+        startedAt: null,
+        lastCheckedAt: null,
+        lastProcessedActivitySlot: null,
+      };
+    }
+    if (startedAt) {
+      state.runtime.startedAt = startedAt.getTime();
+    }
+    if (lastCheckedAt) {
+      const ms = lastCheckedAt.getTime();
+      state.lastCheckedAt = ms;
+      state.runtime.lastCheckedAt = ms;
+    }
+    state.runtime.lastProcessedActivitySlot =
+      state.lastProcessedActivitySlot || null;
+  }
+
   function persist() {
     try {
-      saveState(stateFile, state);
-    } catch (err) {
-      logError("[community-scheduler] Failed to persist state:", err);
+      syncRuntimeFields();
+      writeStateFn(stateFile, state);
+      if (!fs.existsSync(stateFile)) {
+        throw new Error("state-file-missing-after-write");
+      }
+      persistStatus = "ok";
+      return true;
+    } catch (_err) {
+      persistStatus = "error";
+      logError("[community-scheduler] state persist failed");
+      return false;
     }
   }
 
@@ -610,8 +684,6 @@ function createCommunityScheduler(options = {}) {
     if (lastCheckedAt === null) {
       lastCheckedAt = now;
       state.lastCheckedAt = now.getTime();
-      // Persist immediately so production can verify the scheduler is alive
-      // even before the first crossed slot.
       persist();
       return { skipped: "startup-seed", dayKey: nowClock.dayKey };
     }
@@ -619,6 +691,9 @@ function createCommunityScheduler(options = {}) {
     const prevClock = getZonedClock(lastCheckedAt, timeZone);
     lastCheckedAt = now;
     state.lastCheckedAt = now.getTime();
+    if (state.runtime) {
+      state.runtime.lastCheckedAt = now.getTime();
+    }
 
     const fired = [];
     const skippedRecent = [];
@@ -652,16 +727,6 @@ function createCommunityScheduler(options = {}) {
     const activity = await processActivityEngine(prevClock, nowClock, now);
     const autoFight = await processAutoChatFight(prevClock, nowClock, now);
 
-    // Keep lastChecked durable even when no slot crossed.
-    if (
-      (!activity.results || activity.results.length === 0) &&
-      (!autoFight.started || autoFight.started.length === 0) &&
-      fired.length === 0 &&
-      skippedRecent.length === 0
-    ) {
-      persist();
-    }
-
     return {
       dayKey: nowClock.dayKey,
       fired,
@@ -689,11 +754,12 @@ function createCommunityScheduler(options = {}) {
       return;
     }
     startedAt = getNow();
-    if (lastCheckedAt === null) {
-      lastCheckedAt = startedAt;
-      state.lastCheckedAt = startedAt.getTime();
-      persist();
-    }
+    // Guaranteed startup seed + disk write BEFORE the timer starts.
+    lastCheckedAt = startedAt;
+    state.lastCheckedAt = startedAt.getTime();
+    persist();
+    log(`[activity-engine] state-file=${path.resolve(stateFile)}`);
+
     if (enabled && !activityConfig.enabled && sendMessage) {
       log(
         `[community-scheduler] Enabled — timezone=${timeZone} slots=${slots
@@ -722,7 +788,9 @@ function createCommunityScheduler(options = {}) {
 
     tick().catch((err) => logError("[community-scheduler] tick error:", err));
     timer = setIntervalFn(() => {
-      tick().catch((err) => logError("[community-scheduler] tick error:", err));
+      return tick().catch((err) =>
+        logError("[community-scheduler] tick error:", err)
+      );
     }, tickMs);
     if (timer && typeof timer.unref === "function") {
       timer.unref();
@@ -775,9 +843,17 @@ function createCommunityScheduler(options = {}) {
       );
       lastCheckedLabel = `${mins} min ago (persisted)`;
     }
-    const lastSlot =
-      state.lastProcessedActivitySlot ||
-      (stateExists ? "none" : "none");
+    const lastSlot = state.lastProcessedActivitySlot || "none";
+    let statePersistence = "unknown";
+    if (persistStatus === "ok") {
+      statePersistence = "ok";
+    } else if (persistStatus === "error") {
+      statePersistence = "error";
+    } else if (stateExists) {
+      statePersistence = "ok";
+    } else {
+      statePersistence = "missing";
+    }
     return {
       activityEngineEnabled: Boolean(activityConfig.enabled),
       twentyFourSeven: Boolean(activityConfig.twentyFourSeven),
@@ -787,7 +863,8 @@ function createCommunityScheduler(options = {}) {
       lastChecked: lastCheckedLabel,
       lastProcessedActivitySlot: lastSlot,
       stateFile: stateExists ? "available" : "missing",
-      stateFilePath: stateFile,
+      stateFilePath: path.resolve(stateFile),
+      statePersistence,
       nextActivitySlot: nextActivitySlotLabel(activityConfig, nowClock) || "none",
       startedAt: startedAt ? startedAt.toISOString() : null,
       schedulerWanted: schedulerWanted(),
@@ -884,7 +961,8 @@ function getCommunitySchedulerDiagnostics(now) {
       : "none",
     lastProcessedActivitySlot: state.lastProcessedActivitySlot || "none",
     stateFile: stateExists ? "available" : "missing",
-    stateFilePath: stateFile,
+    stateFilePath: path.resolve(stateFile),
+    statePersistence: stateExists ? "ok" : "missing",
     nextActivitySlot: nextActivitySlotLabel(activityConfig, clock) || "none",
     startedAt: null,
     schedulerWanted:
@@ -907,6 +985,7 @@ module.exports = {
   parsePositiveInt,
   buildIntervalSlots,
   resolveSlotsFromEnv,
+  resolveDefaultStateFile,
   createCommunityScheduler,
   startCommunityScheduler,
   getLiveCommunityScheduler,
