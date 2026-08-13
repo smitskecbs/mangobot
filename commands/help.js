@@ -15,6 +15,7 @@ const HELP_MESSAGE = `🥭 Commands
 /leaderboard
 /weekly
 /chatfight
+/tictactoe — Start a PvP Tic-Tac-Toe challenge
 
 🐍 Snake
 /snake

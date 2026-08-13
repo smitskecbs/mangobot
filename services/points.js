@@ -319,6 +319,9 @@ function formatClaimedTodayLines(user) {
 
   lines.push(hasClaimedSnakeToday(user) ? "✅ Snake" : "⬜ Snake");
   lines.push(hasClaimedBounchToday(user) ? "✅ Bounch" : "⬜ Bounch");
+  lines.push(
+    `🎮 PvP wins today: ${getPvpRewardedWinsToday(user)} / ${PVP_DAILY_WIN_CAP}`
+  );
 
   return lines.join("\n");
 }
@@ -669,6 +672,108 @@ function awardChatFightXp(userId, userName, pointsFile = POINTS_FILE) {
   }, pointsFile);
 }
 
+/** PvP board-game win XP (Tic-Tac-Toe, later Connect Four). */
+const PVP_WIN_XP = 3;
+/** Max rewarded PvP wins per UTC day per user. */
+const PVP_DAILY_WIN_CAP = 3;
+
+/**
+ * Ensure optional pvp XP state exists (backward compatible).
+ * @param {object} user
+ * @returns {{ date: string|null, rewardedWins: number }}
+ */
+function ensurePvpState(user) {
+  if (!user.pvp || typeof user.pvp !== "object") {
+    user.pvp = {
+      date: null,
+      rewardedWins: 0,
+    };
+  }
+  if (!Object.prototype.hasOwnProperty.call(user.pvp, "date")) {
+    user.pvp.date = null;
+  }
+  let wins = user.pvp.rewardedWins;
+  if (typeof wins !== "number" || !Number.isInteger(wins) || wins < 0) {
+    wins = 0;
+  }
+  user.pvp.rewardedWins = wins;
+  return user.pvp;
+}
+
+function resetPvpIfNewDay(user) {
+  const today = getTodayDate();
+  ensurePvpState(user);
+  if (user.pvp.date !== today) {
+    user.pvp.date = today;
+    user.pvp.rewardedWins = 0;
+  }
+}
+
+/**
+ * Read-only: rewarded PvP wins today (UTC). Missing/legacy → 0.
+ */
+function getPvpRewardedWinsToday(user) {
+  if (!user || typeof user !== "object" || !user.pvp || typeof user.pvp !== "object") {
+    return 0;
+  }
+  if (user.pvp.date !== getTodayDate()) {
+    return 0;
+  }
+  const wins = user.pvp.rewardedWins;
+  if (typeof wins !== "number" || !Number.isInteger(wins) || wins < 0) {
+    return 0;
+  }
+  return wins;
+}
+
+/**
+ * PvP win XP with per-UTC-day cap. Call only after sync winner claim.
+ */
+function awardPvpWinXp(userId, userName, pointsFile = POINTS_FILE) {
+  const pointsToAdd = PVP_WIN_XP;
+
+  return mutatePoints((data) => {
+    const id = String(userId);
+    const user = ensureUserRecord(data, id, userName);
+    user.name = userName;
+    resetWeeklyIfNewWeek(user);
+    resetPvpIfNewDay(user);
+
+    if (user.pvp.rewardedWins >= PVP_DAILY_WIN_CAP) {
+      return {
+        awarded: false,
+        reason: "daily-cap",
+        points: user.points,
+        pointsToAdd: 0,
+        rewardedWinsToday: user.pvp.rewardedWins,
+        dailyCap: PVP_DAILY_WIN_CAP,
+        rankUp: false,
+        rank: getRank(user.points),
+      };
+    }
+
+    const pointsBefore = user.points;
+    user.points += pointsToAdd;
+    user.weeklyPoints += pointsToAdd;
+    user.pvp.rewardedWins += 1;
+
+    const previousRank = getRank(pointsBefore);
+    const rank = getRank(user.points);
+    const rankUp = previousRank.title !== rank.title;
+
+    return {
+      awarded: true,
+      points: user.points,
+      pointsToAdd,
+      rewardedWinsToday: user.pvp.rewardedWins,
+      dailyCap: PVP_DAILY_WIN_CAP,
+      rankUp,
+      rank,
+      previousRank,
+    };
+  }, pointsFile);
+}
+
 function resetWeeklyForAll(pointsFile = POINTS_FILE) {
   mutatePoints((data) => {
     const currentWeek = getWeekId();
@@ -708,6 +813,11 @@ module.exports = {
   awardDailyActivityPoint,
   awardTriggerPoints,
   awardChatFightXp,
+  awardPvpWinXp,
+  PVP_WIN_XP,
+  PVP_DAILY_WIN_CAP,
+  ensurePvpState,
+  getPvpRewardedWinsToday,
   awardSnakeGameXp,
   awardBounchGameXp,
   ensureGameState,

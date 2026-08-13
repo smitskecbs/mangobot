@@ -126,11 +126,13 @@ const ACTION_REGISTRY = Object.freeze({
     id: "tictactoe",
     mode: "pvp",
     category: "pvp",
+    enabledForAuto: false,
   }),
   connect4: Object.freeze({
     id: "connect4",
     mode: "pvp",
     category: "pvp",
+    enabledForAuto: false,
   }),
 });
 
@@ -403,6 +405,14 @@ function isActionEligible(actionId, context) {
     }
     if (context.chatFight.isFightOpen()) {
       return false;
+    }
+    try {
+      const { isTicTacToeBusy } = require("./communityGameState");
+      if (isTicTacToeBusy()) {
+        return false;
+      }
+    } catch (_err) {
+      /* ignore */
     }
     if (context.chatFight.isOnCooldown()) {
       return false;

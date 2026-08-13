@@ -14,6 +14,10 @@ const {
   setFightMessageId,
   REVEAL_CALLBACK_DATA,
 } = require("../services/chatFight");
+const {
+  isCommunityChallengeBusy,
+  getCommunityBusyReason,
+} = require("../services/communityGameState");
 
 /**
  * @param {object} ctx
@@ -67,6 +71,35 @@ async function handleChatFight(ctx, options = {}) {
     return ctx.reply(
       "⚔️ ChatFight can currently only be started by an admin."
     );
+  }
+
+  if (
+    typeof options.skipBusyCheck !== "boolean" ||
+    options.skipBusyCheck !== true
+  ) {
+    const busyFn =
+      typeof options.isBusyFn === "function"
+        ? options.isBusyFn
+        : isCommunityChallengeBusy;
+    if (
+      busyFn({
+        isChatFightOpenFn: options.isChatFightOpenFn,
+        isTicTacToeOpenFn: options.isTicTacToeOpenFn,
+      })
+    ) {
+      const reasonFn =
+        typeof options.getBusyReasonFn === "function"
+          ? options.getBusyReasonFn
+          : getCommunityBusyReason;
+      const reason = reasonFn({
+        isChatFightOpenFn: options.isChatFightOpenFn,
+        isTicTacToeOpenFn: options.isTicTacToeOpenFn,
+      });
+      if (reason === "tictactoe") {
+        return ctx.reply("🎮 A Tic-Tac-Toe challenge is already open.");
+      }
+      // ChatFight already-active is still handled by startFight below.
+    }
   }
 
   const rawText =

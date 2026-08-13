@@ -318,6 +318,14 @@ async function tryStartAutoChatFight({
   if (typeof chatFight.isFightOpen === "function" && chatFight.isFightOpen()) {
     return finishSkip("active-fight");
   }
+  try {
+    const { isTicTacToeBusy } = require("./communityGameState");
+    if (isTicTacToeBusy()) {
+      return finishSkip("active-pvp");
+    }
+  } catch (_err) {
+    /* ignore */
+  }
   if (typeof chatFight.isOnCooldown === "function" && chatFight.isOnCooldown()) {
     return finishSkip("cooldown");
   }
