@@ -1582,6 +1582,181 @@ async function main() {
     sched.stop();
   });
 
+  await runTest("startCommunityScheduler wrapper real timer + identity", async () => {
+    const {
+      parseActivityEngineConfig,
+    } = require("../services/communityActivityEngine");
+    const {
+      startCommunityScheduler,
+      getLiveCommunityScheduler,
+      getCommunitySchedulerDiagnostics,
+    } = require("../services/communityScheduler");
+    const cfg = parseActivityEngineConfig(
+      {},
+      { enabled: true, twentyFourSeven: true, autoFightEnabled: false }
+    );
+    const sched = startCommunityScheduler(
+      {
+        sendMessage: async () => ({ message_id: 1 }),
+        editMessageText: async () => true,
+      },
+      {
+        enabled: false,
+        chatId: "1",
+        stateFile: stateFile(),
+        tickMs: 100,
+        probeDelayMs: 0,
+        activityEngineConfig: cfg,
+        autoChatFightConfig: {
+          enabled: false,
+          intervalMinutes: 120,
+          chancePercent: 0,
+          slots: [],
+          types: [],
+          startHour: 9,
+          endHour: 22,
+          minActivityGapMs: 0,
+        },
+      }
+    );
+    try {
+      assert.strictEqual(getLiveCommunityScheduler(), sched);
+      const disk = sched.getState();
+      assert.strictEqual(typeof disk.runtime.timerStartedAt, "number");
+      assert.strictEqual(disk.runtime.tickCount, 0);
+      assert.strictEqual(sched.isTimerRunning(), true);
+      await sleep(350);
+      assert.strictEqual(sched.isTimerRunning(), true);
+      assert.ok(sched.getTickCount() >= 3);
+      assert.ok(sched.getLastTickAt());
+      const live = getCommunitySchedulerDiagnostics();
+      assert.strictEqual(live.timerRunning, true);
+      assert.ok(live.timerTicks >= 3);
+      const disk2 = JSON.parse(fs.readFileSync(sched.stateFile, "utf8"));
+      assert.ok(disk2.runtime.tickCount >= 1);
+      assert.ok(disk2.runtime.lastTickAt);
+    } finally {
+      sched.stop("explicit");
+      assert.strictEqual(sched.isTimerRunning(), false);
+      assert.strictEqual(sched.getDiagnostics().lastStopReason, "explicit");
+    }
+  });
+
+  await runTest("no unexpected stop after start", async () => {
+    const {
+      parseActivityEngineConfig,
+    } = require("../services/communityActivityEngine");
+    const cfg = parseActivityEngineConfig(
+      {},
+      { enabled: true, twentyFourSeven: true, autoFightEnabled: false }
+    );
+    const sched = createCommunityScheduler({
+      enabled: false,
+      chatId: "1",
+      stateFile: stateFile(),
+      tickMs: 50,
+      probeDelayMs: 0,
+      activityEngineConfig: cfg,
+      autoChatFightConfig: {
+        enabled: false,
+        intervalMinutes: 120,
+        chancePercent: 0,
+        slots: [],
+        types: [],
+        startHour: 9,
+        endHour: 22,
+        minActivityGapMs: 0,
+      },
+      sendMessage: async () => true,
+    });
+    sched.start();
+    const diag0 = sched.getDiagnostics();
+    assert.strictEqual(diag0.timerRunning, true);
+    assert.strictEqual(diag0.lastStopReason, null);
+    await sleep(80);
+    assert.strictEqual(sched.getDiagnostics().lastStopReason, null);
+    assert.strictEqual(sched.isTimerRunning(), true);
+    sched.stop();
+  });
+
+  await runTest("diagnostic probe timeout fires under same lifecycle", async () => {
+    const {
+      parseActivityEngineConfig,
+    } = require("../services/communityActivityEngine");
+    const {
+      startCommunityScheduler,
+      getLiveCommunityScheduler,
+    } = require("../services/communityScheduler");
+    const cfg = parseActivityEngineConfig(
+      {},
+      { enabled: true, twentyFourSeven: true, autoFightEnabled: false }
+    );
+    const sched = startCommunityScheduler(
+      {
+        sendMessage: async () => ({ message_id: 1 }),
+        editMessageText: async () => true,
+      },
+      {
+        enabled: false,
+        chatId: "1",
+        stateFile: stateFile(),
+        tickMs: 100,
+        probeDelayMs: 40,
+        activityEngineConfig: cfg,
+        autoChatFightConfig: {
+          enabled: false,
+          intervalMinutes: 120,
+          chancePercent: 0,
+          slots: [],
+          types: [],
+          startHour: 9,
+          endHour: 22,
+          minActivityGapMs: 0,
+        },
+      }
+    );
+    try {
+      assert.strictEqual(getLiveCommunityScheduler(), sched);
+      assert.strictEqual(sched.getDiagnostics().probeFired, false);
+      await sleep(120);
+      assert.strictEqual(sched.getDiagnostics().probeFired, true);
+      assert.ok(sched.getTickCount() >= 1);
+    } finally {
+      sched.stop();
+    }
+  });
+
+  await runTest("production sources do not monkey-patch timers or unref scheduler", () => {
+    const root = path.join(__dirname, "..");
+    const schedulerSrc = fs.readFileSync(
+      path.join(root, "services", "communityScheduler.js"),
+      "utf8"
+    );
+    assert.ok(
+      !/timer\.unref\s*\(/.test(schedulerSrc),
+      "scheduler must not unref its interval"
+    );
+    const files = [
+      "index.js",
+      "services/communityScheduler.js",
+      "services/communityActivityEngine.js",
+      "services/autoChatFight.js",
+      "services/chatFight.js",
+      "commands/chatfightstatus.js",
+    ];
+    for (const rel of files) {
+      const src = fs.readFileSync(path.join(root, rel), "utf8");
+      assert.ok(
+        !/global\.setInterval\s*=/.test(src),
+        `${rel} must not overwrite global.setInterval`
+      );
+      assert.ok(
+        !/global\.setTimeout\s*=/.test(src),
+        `${rel} must not overwrite global.setTimeout`
+      );
+    }
+  });
+
   fs.rmSync(tempDir, { recursive: true, force: true });
   console.log("\nAll community-scheduler tests passed.");
 }

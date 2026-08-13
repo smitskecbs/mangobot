@@ -50,7 +50,7 @@ bot
 
 function shutdown(signal) {
   if (communityScheduler) {
-    communityScheduler.stop();
+    communityScheduler.stop("shutdown");
   }
   bot.stop(signal);
 }

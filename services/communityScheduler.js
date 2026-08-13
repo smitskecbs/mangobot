@@ -521,8 +521,29 @@ function createCommunityScheduler(options = {}) {
     typeof options.writeState === "function"
       ? options.writeState
       : (file, st) => saveState(file, st);
+  const setTimeoutFn =
+    typeof options.setTimeoutFn === "function"
+      ? options.setTimeoutFn
+      : function productionSetTimeout(fn, delay) {
+          return setTimeout(fn, delay);
+        };
+  const clearTimeoutFn =
+    typeof options.clearTimeoutFn === "function"
+      ? options.clearTimeoutFn
+      : function productionClearTimeout(id) {
+          clearTimeout(id);
+        };
+  const probeDelayMs =
+    options.probeDelayMs !== undefined
+      ? Number(options.probeDelayMs)
+      : typeof options.setIntervalFn === "function"
+        ? 0
+        : 5000;
 
   let timer = null;
+  let probeTimer = null;
+  let probeFired = false;
+  let lastStopReason = null;
   let lastCheckedAt = null;
   let startedAt = null;
   let timerStartedAt = null;
@@ -587,6 +608,9 @@ function createCommunityScheduler(options = {}) {
     if (state.runtime) {
       state.runtime.tickCount = tickCount;
       state.runtime.lastTickAt = pulseNow.getTime();
+    }
+    if (tickCount === 1) {
+      log("[community-scheduler] first timer pulse");
     }
     // Persist first pulse immediately, then every 5 pulses, plus every slot.
     if (tickCount === 1 || tickCount % 5 === 0) {
@@ -860,8 +884,25 @@ function createCommunityScheduler(options = {}) {
           .catch((err) => logError("[community-scheduler] tick error:", err));
       }, tickMs);
 
+      let referenced = "n/a";
+      if (timer && typeof timer.hasRef === "function") {
+        referenced = timer.hasRef() ? "true" : "false";
+      }
+      log(
+        `[community-scheduler] timer created running=${Boolean(timer)} referenced=${referenced}`
+      );
+      persist();
       log("[community-scheduler] after timer create");
       log(`[community-scheduler] timer started interval=${tickMs}ms`);
+
+      if (engineWanted && probeDelayMs > 0 && typeof setTimeoutFn === "function") {
+        probeFired = false;
+        probeTimer = setTimeoutFn(() => {
+          probeTimer = null;
+          probeFired = true;
+          log("[community-scheduler] timer probe fired");
+        }, probeDelayMs);
+      }
     } catch (err) {
       logError("[community-scheduler] timer create failed");
       return;
@@ -872,10 +913,18 @@ function createCommunityScheduler(options = {}) {
       .catch((err) => logError("[community-scheduler] tick error:", err));
   }
 
-  function stop() {
+  function stop(reason) {
+    const why = reason ? String(reason) : "explicit";
+    lastStopReason = why;
+    log(`[community-scheduler] stop called reason=${why}`);
+    if (probeTimer) {
+      clearTimeoutFn(probeTimer);
+      probeTimer = null;
+    }
     if (timer) {
       clearIntervalFn(timer);
       timer = null;
+      log("[community-scheduler] timer stopped");
     }
     clearLiveCommunityScheduler(api);
   }
@@ -951,6 +1000,8 @@ function createCommunityScheduler(options = {}) {
       timerTicks: tickCount,
       lastTick: lastTickLabel,
       timerReferenced,
+      probeFired,
+      lastStopReason,
       lastChecked: lastCheckedLabel,
       lastProcessedActivitySlot: lastSlot,
       stateFile: stateExists ? "available" : "missing",
@@ -1061,6 +1112,8 @@ function getCommunitySchedulerDiagnostics(now) {
     timerTicks: 0,
     lastTick: "none",
     timerReferenced: null,
+    probeFired: false,
+    lastStopReason: null,
     lastChecked: state.lastCheckedAt
       ? `${Math.max(0, Math.floor(((now || new Date()).getTime() - state.lastCheckedAt) / 60_000))} min ago (persisted)`
       : "none",
