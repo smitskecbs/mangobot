@@ -1389,6 +1389,199 @@ async function main() {
     sched.stop();
   });
 
+  await runTest("production start() without injected timers pulses", async () => {
+    const {
+      parseActivityEngineConfig,
+    } = require("../services/communityActivityEngine");
+    const file = stateFile();
+    const cfg = parseActivityEngineConfig(
+      {},
+      {
+        enabled: true,
+        twentyFourSeven: true,
+        intervalMinutes: 30,
+        autoFightEnabled: false,
+      }
+    );
+    const sched = createCommunityScheduler({
+      enabled: false,
+      chatId: "1",
+      timeZone: "UTC",
+      stateFile: file,
+      tickMs: 25,
+      activityEngineConfig: cfg,
+      autoChatFightConfig: {
+        enabled: false,
+        intervalMinutes: 120,
+        chancePercent: 0,
+        slots: [],
+        types: [],
+        startHour: 9,
+        endHour: 22,
+        minActivityGapMs: 0,
+      },
+      sendMessage: async () => true,
+      // no setIntervalFn / clearIntervalFn — production globals
+    });
+    sched.start();
+    assert.strictEqual(sched.isTimerRunning(), true);
+    await sleep(120);
+    assert.ok(sched.getTickCount() >= 3, `got ${sched.getTickCount()}`);
+    const last = sched.getLastTickAt();
+    const started = new Date(sched.getDiagnostics().startedAt);
+    assert.ok(last && last.getTime() >= started.getTime());
+    const disk = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.ok(disk.runtime.tickCount >= 1);
+    sched.stop();
+  });
+
+  await runTest("exact live env: engine+auto on, reminders off, timer created", async () => {
+    const prev = {
+      COMMUNITY_ACTIVITY_ENGINE_ENABLED: process.env.COMMUNITY_ACTIVITY_ENGINE_ENABLED,
+      COMMUNITY_ACTIVITY_24_7: process.env.COMMUNITY_ACTIVITY_24_7,
+      COMMUNITY_ACTIVITY_INTERVAL_MINUTES: process.env.COMMUNITY_ACTIVITY_INTERVAL_MINUTES,
+      AUTO_CHATFIGHT_ENABLED: process.env.AUTO_CHATFIGHT_ENABLED,
+      AUTO_CHATFIGHT_INTERVAL_MINUTES: process.env.AUTO_CHATFIGHT_INTERVAL_MINUTES,
+      AUTO_CHATFIGHT_MIN_GAP_MINUTES: process.env.AUTO_CHATFIGHT_MIN_GAP_MINUTES,
+      COMMUNITY_AUTO_MESSAGES_ENABLED: process.env.COMMUNITY_AUTO_MESSAGES_ENABLED,
+      TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID,
+    };
+    process.env.COMMUNITY_ACTIVITY_ENGINE_ENABLED = "true";
+    process.env.COMMUNITY_ACTIVITY_24_7 = "true";
+    process.env.COMMUNITY_ACTIVITY_INTERVAL_MINUTES = "30";
+    process.env.AUTO_CHATFIGHT_ENABLED = "true";
+    process.env.AUTO_CHATFIGHT_INTERVAL_MINUTES = "30";
+    process.env.AUTO_CHATFIGHT_MIN_GAP_MINUTES = "120";
+    delete process.env.COMMUNITY_AUTO_MESSAGES_ENABLED;
+    process.env.TELEGRAM_CHAT_ID = "-1003916996602";
+
+    const {
+      startCommunityScheduler,
+    } = require("../services/communityScheduler");
+    const file = stateFile();
+    const sched = startCommunityScheduler(
+      {
+        sendMessage: async () => ({ message_id: 1 }),
+        editMessageText: async () => true,
+      },
+      {
+        stateFile: file,
+        tickMs: 25,
+        timeZone: "Europe/Amsterdam",
+      }
+    );
+    try {
+      assert.strictEqual(sched.activityConfig.enabled, true);
+      assert.strictEqual(sched.isTimerRunning(), true);
+      assert.strictEqual(sched.tickMs, 25);
+      await sleep(80);
+      assert.ok(sched.getTickCount() >= 2);
+    } finally {
+      sched.stop();
+      for (const [key, value] of Object.entries(prev)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    }
+  });
+
+  await runTest("real timer 18:12 → 18:31 processes 18:30 once", async () => {
+    const {
+      parseActivityEngineConfig,
+    } = require("../services/communityActivityEngine");
+    const file = stateFile();
+    let now = utcDate("2026-08-12T16:12:00.000Z");
+    const sent = [];
+    const announced = [];
+    const cfg = parseActivityEngineConfig(
+      {
+        COMMUNITY_ACTIVITY_ENGINE_ENABLED: "true",
+        COMMUNITY_ACTIVITY_24_7: "true",
+        COMMUNITY_ACTIVITY_INTERVAL_MINUTES: "30",
+        AUTO_CHATFIGHT_ENABLED: "true",
+      },
+      {}
+    );
+    const sched = createCommunityScheduler({
+      enabled: false,
+      chatId: "-1003916996602",
+      timeZone: "Europe/Amsterdam",
+      stateFile: file,
+      tickMs: 20,
+      now: () => now,
+      activityEngineConfig: cfg,
+      autoChatFightConfig: {
+        enabled: true,
+        intervalMinutes: 30,
+        chancePercent: 100,
+        slots: cfg.slots,
+        types: cfg.fightTypes,
+        startHour: 0,
+        endHour: 24,
+        minActivityGapMs: 0,
+      },
+      sendMessage: async (_c, t) => {
+        sent.push(t);
+        return true;
+      },
+      announceChatFight: async (_c, t) => {
+        announced.push(t);
+        return { message_id: 7 };
+      },
+      activityRandom: () => 0.4,
+    });
+    sched.start();
+    await sleep(30);
+    now = utcDate("2026-08-12T16:31:00.000Z");
+    await sleep(80);
+    const st = sched.getState();
+    assert.ok(st.sent["2026-08-12"] && st.sent["2026-08-12"].includes("act1830"));
+    assert.ok(String(st.lastProcessedActivitySlot).includes("18:30"));
+    assert.strictEqual(sent.length + announced.length, 1);
+    const before = sent.length + announced.length;
+    now = utcDate("2026-08-12T16:32:00.000Z");
+    await sleep(50);
+    assert.strictEqual(sent.length + announced.length, before);
+    sched.stop();
+  });
+
+  await runTest("setInterval throw is caught; start does not crash", async () => {
+    const {
+      parseActivityEngineConfig,
+    } = require("../services/communityActivityEngine");
+    const cfg = parseActivityEngineConfig(
+      {},
+      { enabled: true, twentyFourSeven: true, autoFightEnabled: false }
+    );
+    const sched = createCommunityScheduler({
+      enabled: false,
+      chatId: "1",
+      stateFile: stateFile(),
+      activityEngineConfig: cfg,
+      autoChatFightConfig: {
+        enabled: false,
+        intervalMinutes: 120,
+        chancePercent: 0,
+        slots: [],
+        types: [],
+        startHour: 9,
+        endHour: 22,
+        minActivityGapMs: 0,
+      },
+      sendMessage: async () => true,
+      setIntervalFn: () => {
+        throw new Error("interval broken");
+      },
+      clearIntervalFn: () => {},
+    });
+    assert.doesNotThrow(() => sched.start());
+    assert.strictEqual(sched.isTimerRunning(), false);
+    sched.stop();
+  });
+
   fs.rmSync(tempDir, { recursive: true, force: true });
   console.log("\nAll community-scheduler tests passed.");
 }

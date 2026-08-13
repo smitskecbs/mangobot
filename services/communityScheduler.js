@@ -504,14 +504,19 @@ function createCommunityScheduler(options = {}) {
     typeof options.activityRandom === "function"
       ? options.activityRandom
       : Math.random;
+  // Bare identifiers — do not .bind(global). Production timer is core work.
   const setIntervalFn =
     typeof options.setIntervalFn === "function"
       ? options.setIntervalFn
-      : global.setInterval.bind(global);
+      : function productionSetInterval(fn, delay) {
+          return setInterval(fn, delay);
+        };
   const clearIntervalFn =
     typeof options.clearIntervalFn === "function"
       ? options.clearIntervalFn
-      : global.clearInterval.bind(global);
+      : function productionClearInterval(id) {
+          clearInterval(id);
+        };
   const writeStateFn =
     typeof options.writeState === "function"
       ? options.writeState
@@ -583,9 +588,8 @@ function createCommunityScheduler(options = {}) {
       state.runtime.tickCount = tickCount;
       state.runtime.lastTickAt = pulseNow.getTime();
     }
-    // Persist heartbeat every 5 timer pulses so disk proves liveness
-    // without writing every minute.
-    if (tickCount % 5 === 0) {
+    // Persist first pulse immediately, then every 5 pulses, plus every slot.
+    if (tickCount === 1 || tickCount % 5 === 0) {
       persist();
     }
   }
@@ -822,34 +826,50 @@ function createCommunityScheduler(options = {}) {
       log("[auto-chatfight] deferred to activity engine");
     }
 
-    // One immediate tick (does not count as timer pulse).
+    // Timer creation must not depend on the initial tick succeeding.
+    if (typeof setIntervalFn !== "function") {
+      logError("[community-scheduler] timer function unavailable");
+      return;
+    }
+
+    log(
+      `[community-scheduler] before timer create interval=${tickMs} typeof=${typeof setIntervalFn}`
+    );
+    try {
+      timerStartedAt = getNow();
+      tickCount = 0;
+      lastTickAt = null;
+      if (state.runtime) {
+        const startedMs =
+          timerStartedAt && typeof timerStartedAt.getTime === "function"
+            ? timerStartedAt.getTime()
+            : Date.now();
+        state.runtime.timerStartedAt = startedMs;
+        state.runtime.tickCount = 0;
+        state.runtime.lastTickAt = null;
+      }
+
+      timer = setIntervalFn(() => {
+        try {
+          noteTimerPulse();
+        } catch (err) {
+          logError("[community-scheduler] tick error:", err);
+        }
+        return Promise.resolve()
+          .then(() => tick())
+          .catch((err) => logError("[community-scheduler] tick error:", err));
+      }, tickMs);
+
+      log("[community-scheduler] after timer create");
+      log(`[community-scheduler] timer started interval=${tickMs}ms`);
+    } catch (err) {
+      logError("[community-scheduler] timer create failed");
+      return;
+    }
+
     Promise.resolve()
       .then(() => tick())
       .catch((err) => logError("[community-scheduler] tick error:", err));
-
-    timerStartedAt = getNow();
-    tickCount = 0;
-    lastTickAt = null;
-    if (state.runtime) {
-      state.runtime.timerStartedAt = timerStartedAt.getTime();
-      state.runtime.tickCount = 0;
-      state.runtime.lastTickAt = null;
-    }
-
-    // Core scheduler must keep the event loop referenced — do NOT unref.
-    timer = setIntervalFn(() => {
-      try {
-        noteTimerPulse();
-      } catch (err) {
-        logError("[community-scheduler] tick error:", err);
-        return undefined;
-      }
-      return Promise.resolve()
-        .then(() => tick())
-        .catch((err) => logError("[community-scheduler] tick error:", err));
-    }, tickMs);
-
-    log(`[community-scheduler] timer started interval=${tickMs}ms`);
   }
 
   function stop() {
@@ -1004,8 +1024,15 @@ function startCommunityScheduler(telegram, options = {}) {
       return telegram.sendMessage(chatId, teaser, extra);
     },
   });
-  scheduler.start();
   liveCommunityScheduler = scheduler;
+  try {
+    scheduler.start();
+  } catch (err) {
+    logError(
+      "[community-scheduler] Failed to start:",
+      err && err.message ? err.message : err
+    );
+  }
   return scheduler;
 }
 

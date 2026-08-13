@@ -38,7 +38,7 @@ bot
       communityScheduler = startCommunityScheduler(bot.telegram);
     } catch (err) {
       log(
-        "Failed to start community scheduler:",
+        "[community-scheduler] Failed to start:",
         err && err.message ? err.message : err
       );
     }

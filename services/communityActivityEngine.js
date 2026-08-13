@@ -498,12 +498,23 @@ async function processCommunityActivitySlot({
   wasActiveWithinFn = wasActiveWithin,
 } = {}) {
   if (!config || !config.enabled) {
+    if (slot && slot.label) {
+      log(`[activity-engine] skipped slot=${slot.label} reason=disabled`);
+    }
     return { action: ACTION_IDS.SKIP, sent: false, reason: "disabled" };
   }
   if (!chatId) {
+    if (slot && slot.label) {
+      log(`[activity-engine] skipped slot=${slot.label} reason=missing-chat-id`);
+    }
     return { action: ACTION_IDS.SKIP, sent: false, reason: "missing-chat-id" };
   }
   if (!slot || wasSlotProcessed(state, dayKey, slot.id)) {
+    if (slot && slot.label) {
+      log(
+        `[activity-engine] skipped slot=${slot.label} reason=already-processed`
+      );
+    }
     return { action: ACTION_IDS.SKIP, sent: false, reason: "already-processed" };
   }
 
