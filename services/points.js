@@ -169,6 +169,40 @@ function applyDailyActivityStreak(user, today = getTodayDate()) {
   return { ...streak, incremented: true };
 }
 
+/**
+ * Legacy same-day activity claimed before streaks existed:
+ * activityDate === today, current === 0, lastActiveDate === null.
+ * Safe to grant streak 1 without extra XP.
+ * @param {object|null|undefined} user
+ * @param {string} [today]
+ * @returns {boolean}
+ */
+function needsSameDayStreakRepair(user, today = getTodayDate()) {
+  if (!user || typeof user !== "object") {
+    return false;
+  }
+  if (user.activityDate !== today) {
+    return false;
+  }
+  const streak = readStreak(user);
+  return streak.current === 0 && streak.lastActiveDate === null;
+}
+
+/**
+ * Repair legacy same-day activity onto streak 1. No XP. Mutates user.streak.
+ * @param {object} user
+ * @param {string} [today]
+ */
+function applySameDayStreakRepair(user, today = getTodayDate()) {
+  const streak = ensureStreak(user);
+  streak.current = 1;
+  if (streak.longest < 1) {
+    streak.longest = 1;
+  }
+  streak.lastActiveDate = today;
+  return { ...streak, repaired: true };
+}
+
 function excludedAwardResult(userId, pointsFile, extra = {}) {
   const data = readPointsSnapshot(pointsFile);
   const user = data.users[String(userId)];
@@ -726,6 +760,10 @@ function awardDailyActivityPoint(userId, userName, pointsFile = POINTS_FILE, tod
     resetWeeklyIfNewWeek(user);
 
     if (user.activityDate === today) {
+      const repaired = needsSameDayStreakRepair(user, today);
+      if (repaired) {
+        applySameDayStreakRepair(user, today);
+      }
       return {
         awarded: false,
         points: user.points,
@@ -733,6 +771,7 @@ function awardDailyActivityPoint(userId, userName, pointsFile = POINTS_FILE, tod
         rankUp: false,
         rank: getRank(user.points),
         streak: { ...readStreak(user) },
+        streakRepaired: repaired,
       };
     }
 
@@ -818,6 +857,45 @@ function awardTriggerPoints(userId, userName, trigger, pointsFile = POINTS_FILE)
  */
 function awardChatFightXp(userId, userName, pointsFile = POINTS_FILE) {
   const pointsToAdd = 2;
+
+  if (isCommunityCompetitionExcluded(userId)) {
+    return excludedAwardResult(userId, pointsFile, { pointsToAdd: 0 });
+  }
+
+  return mutatePoints((data) => {
+    const id = String(userId);
+    const user = ensureUserRecord(data, id, userName);
+    user.name = userName;
+    resetWeeklyIfNewWeek(user);
+
+    const pointsBefore = user.points;
+    user.points += pointsToAdd;
+    user.weeklyPoints += pointsToAdd;
+
+    const previousRank = getRank(pointsBefore);
+    const rank = getRank(user.points);
+    const rankUp = previousRank.title !== rank.title;
+
+    return {
+      awarded: true,
+      points: user.points,
+      pointsToAdd,
+      rankUp,
+      rank,
+      previousRank,
+    };
+  }, pointsFile);
+}
+
+/** Trivia race win XP. */
+const TRIVIA_WIN_XP = 2;
+
+/**
+ * Trivia win: +2 lifetime XP and +2 weeklyPoints.
+ * Call only after a sync winner claim. Does not claim daily activity.
+ */
+function awardTriviaWinXp(userId, userName, pointsFile = POINTS_FILE) {
+  const pointsToAdd = TRIVIA_WIN_XP;
 
   if (isCommunityCompetitionExcluded(userId)) {
     return excludedAwardResult(userId, pointsFile, { pointsToAdd: 0 });
@@ -1004,6 +1082,8 @@ module.exports = {
   awardDailyActivityPoint,
   awardTriggerPoints,
   awardChatFightXp,
+  awardTriviaWinXp,
+  TRIVIA_WIN_XP,
   awardPvpWinXp,
   PVP_WIN_XP,
   PVP_DAILY_WIN_CAP,
@@ -1017,5 +1097,7 @@ module.exports = {
   readStreak,
   ensureStreak,
   applyDailyActivityStreak,
+  needsSameDayStreakRepair,
+  applySameDayStreakRepair,
   emptyStreak,
 };

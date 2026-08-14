@@ -1,5 +1,5 @@
 /**
- * Shared community challenge busy flag (ChatFight + PvP).
+ * Shared community challenge busy flag (ChatFight + PvP + Trivia).
  * Lazy requires avoid circular init issues.
  */
 
@@ -36,6 +36,17 @@ function isConnectFourBusy() {
   }
 }
 
+function isTriviaBusy() {
+  try {
+    const trivia = require("./trivia");
+    return typeof trivia.isTriviaOpen === "function"
+      ? Boolean(trivia.isTriviaOpen())
+      : false;
+  } catch (_err) {
+    return false;
+  }
+}
+
 function isPvpBusy(options = {}) {
   const tttOpen =
     typeof options.isTicTacToeOpenFn === "function"
@@ -53,17 +64,22 @@ function isPvpBusy(options = {}) {
  * @param {() => boolean} [options.isChatFightOpenFn]
  * @param {() => boolean} [options.isTicTacToeOpenFn]
  * @param {() => boolean} [options.isConnectFourOpenFn]
+ * @param {() => boolean} [options.isTriviaOpenFn]
  */
 function isCommunityChallengeBusy(options = {}) {
   const fightOpen =
     typeof options.isChatFightOpenFn === "function"
       ? options.isChatFightOpenFn()
       : isChatFightBusy();
-  return Boolean(fightOpen || isPvpBusy(options));
+  const triviaOpen =
+    typeof options.isTriviaOpenFn === "function"
+      ? options.isTriviaOpenFn()
+      : isTriviaBusy();
+  return Boolean(fightOpen || isPvpBusy(options) || triviaOpen);
 }
 
 /**
- * @returns {"chatfight"|"tictactoe"|"connect4"|null}
+ * @returns {"chatfight"|"tictactoe"|"connect4"|"trivia"|null}
  */
 function getCommunityBusyReason(options = {}) {
   const fightOpen =
@@ -87,6 +103,13 @@ function getCommunityBusyReason(options = {}) {
   if (c4Open) {
     return "connect4";
   }
+  const triviaOpen =
+    typeof options.isTriviaOpenFn === "function"
+      ? options.isTriviaOpenFn()
+      : isTriviaBusy();
+  if (triviaOpen) {
+    return "trivia";
+  }
   return null;
 }
 
@@ -100,6 +123,9 @@ function formatCommunityBusyReply(reason) {
   if (reason === "connect4") {
     return "🟡 A Connect Four challenge is already open.";
   }
+  if (reason === "trivia") {
+    return "🧠 A Trivia challenge is already open.";
+  }
   return "🎮 A PvP challenge is already open.";
 }
 
@@ -110,5 +136,6 @@ module.exports = {
   isChatFightBusy,
   isTicTacToeBusy,
   isConnectFourBusy,
+  isTriviaBusy,
   isPvpBusy,
 };

@@ -134,6 +134,12 @@ const ACTION_REGISTRY = Object.freeze({
     category: "pvp",
     enabledForAuto: false,
   }),
+  trivia: Object.freeze({
+    id: "trivia",
+    mode: "race",
+    category: "trivia",
+    enabledForAuto: false,
+  }),
 });
 
 const MESSAGE_POOLS = Object.freeze({
@@ -407,8 +413,11 @@ function isActionEligible(actionId, context) {
       return false;
     }
     try {
-      const { isPvpBusy } = require("./communityGameState");
+      const { isPvpBusy, isTriviaBusy } = require("./communityGameState");
       if (isPvpBusy()) {
+        return false;
+      }
+      if (isTriviaBusy()) {
         return false;
       }
     } catch (_err) {

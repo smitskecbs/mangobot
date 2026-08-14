@@ -72,18 +72,23 @@ async function handleConnectFour(ctx, options = {}) {
       isChatFightOpenFn: options.isChatFightOpenFn,
       isTicTacToeOpenFn: options.isTicTacToeOpenFn,
       isConnectFourOpenFn: options.isConnectFourOpenFn,
+      isTriviaOpenFn: options.isTriviaOpenFn,
     })
   ) {
     const reason = busyReasonFn({
       isChatFightOpenFn: options.isChatFightOpenFn,
       isTicTacToeOpenFn: options.isTicTacToeOpenFn,
       isConnectFourOpenFn: options.isConnectFourOpenFn,
+      isTriviaOpenFn: options.isTriviaOpenFn,
     });
     if (reason === "chatfight") {
       return ctx.reply("⚔️ A ChatFight is already running.");
     }
     if (reason === "tictactoe") {
       return ctx.reply("🎮 A Tic-Tac-Toe challenge is already open.");
+    }
+    if (reason === "trivia") {
+      return ctx.reply("🧠 A Trivia challenge is already open.");
     }
     return ctx.reply("🟡 A Connect Four challenge is already open.");
   }

@@ -319,9 +319,12 @@ async function tryStartAutoChatFight({
     return finishSkip("active-fight");
   }
   try {
-    const { isPvpBusy } = require("./communityGameState");
+    const { isPvpBusy, isTriviaBusy } = require("./communityGameState");
     if (isPvpBusy()) {
       return finishSkip("active-pvp");
+    }
+    if (isTriviaBusy()) {
+      return finishSkip("active-trivia");
     }
   } catch (_err) {
     /* ignore */

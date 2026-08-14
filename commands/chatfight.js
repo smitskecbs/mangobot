@@ -86,6 +86,7 @@ async function handleChatFight(ctx, options = {}) {
         isChatFightOpenFn: options.isChatFightOpenFn,
         isTicTacToeOpenFn: options.isTicTacToeOpenFn,
         isConnectFourOpenFn: options.isConnectFourOpenFn,
+        isTriviaOpenFn: options.isTriviaOpenFn,
       })
     ) {
       const reasonFn =
@@ -96,12 +97,16 @@ async function handleChatFight(ctx, options = {}) {
         isChatFightOpenFn: options.isChatFightOpenFn,
         isTicTacToeOpenFn: options.isTicTacToeOpenFn,
         isConnectFourOpenFn: options.isConnectFourOpenFn,
+        isTriviaOpenFn: options.isTriviaOpenFn,
       });
       if (reason === "tictactoe") {
         return ctx.reply("🎮 A Tic-Tac-Toe challenge is already open.");
       }
       if (reason === "connect4") {
         return ctx.reply("🟡 A Connect Four challenge is already open.");
+      }
+      if (reason === "trivia") {
+        return ctx.reply("🧠 A Trivia challenge is already open.");
       }
       // ChatFight already-active is still handled by startFight below.
     }

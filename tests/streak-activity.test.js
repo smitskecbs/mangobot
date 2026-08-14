@@ -18,6 +18,7 @@ const {
   savePoints,
   readStreak,
   applyDailyActivityStreak,
+  needsSameDayStreakRepair,
   utcYesterday,
   getTodayDate,
   getCombinedRankUpReply,
@@ -627,6 +628,282 @@ runTest("streak sort: current desc then longest then XP; ranks renumbered", () =
     getCurrentStreakTop(users).map((u) => u.name),
     ["C", "B", "A"]
   );
+});
+
+function seedLegacySameDayActivity(file, userId, name, extras = {}) {
+  const today = extras.activityDate || getTodayDate();
+  savePoints(
+    {
+      users: {
+        [String(userId)]: {
+          points: extras.points != null ? extras.points : 5,
+          weeklyPoints: extras.weeklyPoints != null ? extras.weeklyPoints : 2,
+          weekId: extras.weekId || getWeekIdForTest(),
+          name,
+          triggerDate: null,
+          triggersUsed: [],
+          activityDate: today,
+        },
+      },
+    },
+    file
+  );
+}
+
+runTest("legacy same-day activityDate without streak needs repair", () => {
+  const today = getTodayDate();
+  const user = {
+    points: 5,
+    weeklyPoints: 2,
+    activityDate: today,
+  };
+  assert.strictEqual(needsSameDayStreakRepair(user, today), true);
+  assert.deepStrictEqual(readStreak(user), {
+    current: 0,
+    longest: 0,
+    lastActiveDate: null,
+  });
+});
+
+runTest("legacy: activityDate=today, streak missing → next group activity repairs without XP", () => {
+  const file = pointsFile();
+  seedLegacySameDayActivity(file, ALICE, "Alice", { points: 5, weeklyPoints: 2 });
+  const before = loadPoints(file).users[String(ALICE)];
+  assert.strictEqual(needsSameDayStreakRepair(before, getTodayDate()), true);
+  const result = processCommunityMessage(groupCtx({ message: { text: "hello again" } }), {
+    pointsFile: file,
+  });
+  assert.strictEqual(result.activityResult.awarded, false);
+  assert.strictEqual(result.activityResult.streakRepaired, true);
+  const user = loadPoints(file).users[String(ALICE)];
+  assert.strictEqual(user.points, 5);
+  assert.strictEqual(user.weeklyPoints, 2);
+  assert.strictEqual(user.activityDate, getTodayDate());
+  assert.deepStrictEqual(readStreak(user), {
+    current: 1,
+    longest: 1,
+    lastActiveDate: getTodayDate(),
+  });
+});
+
+runTest("legacy: streak 0/0/null repairs once", () => {
+  const file = pointsFile();
+  const today = getTodayDate();
+  savePoints(
+    {
+      users: {
+        [String(ALICE)]: {
+          points: 8,
+          weeklyPoints: 3,
+          weekId: getWeekIdForTest(),
+          name: "Alice",
+          triggerDate: null,
+          triggersUsed: [],
+          activityDate: today,
+          streak: { current: 0, longest: 0, lastActiveDate: null },
+        },
+      },
+    },
+    file
+  );
+  const first = awardDailyActivityPoint(ALICE, "Alice", file, today);
+  assert.strictEqual(first.awarded, false);
+  assert.strictEqual(first.streakRepaired, true);
+  assert.strictEqual(first.streak.current, 1);
+  const second = awardDailyActivityPoint(ALICE, "Alice", file, today);
+  assert.strictEqual(second.awarded, false);
+  assert.strictEqual(second.streakRepaired, false);
+  assert.strictEqual(second.streak.current, 1);
+  const user = loadPoints(file).users[String(ALICE)];
+  assert.strictEqual(user.points, 8);
+  assert.strictEqual(user.weeklyPoints, 3);
+  assert.strictEqual(readStreak(user).current, 1);
+});
+
+runTest("legacy: second message today keeps streak 1 and no extra XP", () => {
+  const file = pointsFile();
+  seedLegacySameDayActivity(file, ALICE, "Alice", { points: 5, weeklyPoints: 2 });
+  processCommunityMessage(groupCtx({ message: { text: "first" } }), { pointsFile: file });
+  const second = processCommunityMessage(groupCtx({ message: { text: "second" } }), {
+    pointsFile: file,
+  });
+  assert.strictEqual(second.activityResult.awarded, false);
+  assert.strictEqual(second.activityResult.streakRepaired, false);
+  const user = loadPoints(file).users[String(ALICE)];
+  assert.strictEqual(user.points, 5);
+  assert.strictEqual(readStreak(user).current, 1);
+  assert.strictEqual(readStreak(user).longest, 1);
+});
+
+runTest("legacy: owner with activityDate today is never repaired", () => {
+  const file = pointsFile();
+  const today = getTodayDate();
+  savePoints(
+    {
+      users: {
+        [OWNER_ID]: {
+          points: 20,
+          weeklyPoints: 4,
+          weekId: getWeekIdForTest(),
+          name: "Kevin",
+          triggerDate: null,
+          triggersUsed: [],
+          activityDate: today,
+        },
+      },
+    },
+    file
+  );
+  const result = processCommunityMessage(
+    groupCtx({ userId: Number(OWNER_ID), firstName: "Kevin", message: { text: "hello" } }),
+    { pointsFile: file }
+  );
+  assert.strictEqual(result.activityResult.awarded, false);
+  assert.strictEqual(result.activityResult.reason, "excluded");
+  const owner = loadPoints(file).users[OWNER_ID];
+  assert.strictEqual(owner.points, 20);
+  assert.strictEqual(owner.weeklyPoints, 4);
+  assert.deepStrictEqual(readStreak(owner), {
+    current: 0,
+    longest: 0,
+    lastActiveDate: null,
+  });
+});
+
+runTest("legacy: private message does not repair", () => {
+  const file = pointsFile();
+  seedLegacySameDayActivity(file, ALICE, "Alice", { points: 5, weeklyPoints: 2 });
+  const ctx = {
+    from: { id: ALICE, first_name: "Alice", is_bot: false },
+    chat: { id: ALICE, type: "private" },
+    message: { text: "hello" },
+  };
+  const result = processCommunityMessage(ctx, { pointsFile: file });
+  assert.strictEqual(result.activityResult, null);
+  const user = loadPoints(file).users[String(ALICE)];
+  assert.strictEqual(needsSameDayStreakRepair(user, getTodayDate()), true);
+  assert.deepStrictEqual(readStreak(user), {
+    current: 0,
+    longest: 0,
+    lastActiveDate: null,
+  });
+  assert.strictEqual(user.points, 5);
+});
+
+runTest("legacy: wrong Telegram group does not repair", () => {
+  const file = pointsFile();
+  seedLegacySameDayActivity(file, ALICE, "Alice", { points: 5, weeklyPoints: 2 });
+  const result = processCommunityMessage(
+    groupCtx({ chatId: OTHER_CHAT, message: { text: "hello" } }),
+    { pointsFile: file }
+  );
+  assert.strictEqual(result.activityResult, null);
+  const user = loadPoints(file).users[String(ALICE)];
+  assert.strictEqual(needsSameDayStreakRepair(user, getTodayDate()), true);
+  assert.strictEqual(readStreak(user).current, 0);
+});
+
+runTest("yesterday activityDate is not treated as today's streak", () => {
+  const file = pointsFile();
+  const yesterday = utcYesterday(getTodayDate());
+  seedLegacySameDayActivity(file, ALICE, "Alice", {
+    points: 5,
+    weeklyPoints: 2,
+    activityDate: yesterday,
+  });
+  const user = loadPoints(file).users[String(ALICE)];
+  assert.strictEqual(needsSameDayStreakRepair(user, getTodayDate()), false);
+  handleStreak(
+    {
+      chat: { type: "group" },
+      from: { id: ALICE, first_name: "Alice" },
+      replies: [],
+      reply(text) {
+        this.replies.push({ text });
+      },
+    },
+    { pointsFile: file }
+  );
+  const afterRead = loadPoints(file).users[String(ALICE)];
+  assert.deepStrictEqual(readStreak(afterRead), {
+    current: 0,
+    longest: 0,
+    lastActiveDate: null,
+  });
+  assert.strictEqual(afterRead.points, 5);
+  assert.strictEqual(afterRead.activityDate, yesterday);
+});
+
+runTest("/streak and /streakrecord see repaired user; boards filter zeros", () => {
+  const file = pointsFile();
+  seedLegacySameDayActivity(file, ALICE, "Alice", { points: 5, weeklyPoints: 2 });
+  savePoints(
+    {
+      users: {
+        ...loadPoints(file).users,
+        [String(BOB)]: {
+          points: 3,
+          weeklyPoints: 1,
+          weekId: getWeekIdForTest(),
+          name: "Bob",
+          activityDate: getTodayDate(),
+          streak: { current: 0, longest: 0, lastActiveDate: null },
+        },
+      },
+    },
+    file
+  );
+  processCommunityMessage(groupCtx({ message: { text: "hi" } }), { pointsFile: file });
+  const users = loadPoints(file).users;
+  assert.deepStrictEqual(getCurrentStreakTop(users).map((u) => u.name), ["Alice"]);
+  assert.deepStrictEqual(getLongestStreakTop(users).map((u) => u.name), ["Alice"]);
+  assert.ok(getCurrentStreakTop(users).every((u) => u.currentStreak > 0));
+  assert.ok(getLongestStreakTop(users).every((u) => u.longestStreak > 0));
+
+  const streakCtx = {
+    chat: { type: "group" },
+    from: { id: ALICE, first_name: "Alice" },
+    replies: [],
+    reply(text) {
+      this.replies.push({ text });
+    },
+  };
+  handleStreak(streakCtx, { pointsFile: file });
+  assert.ok(streakCtx.replies[0].text.includes("Alice — 1 days"));
+  assert.ok(!streakCtx.replies[0].text.includes("No active streaks yet"));
+
+  const recordCtx = {
+    ...streakCtx,
+    replies: [],
+  };
+  recordCtx.reply = function (text) {
+    this.replies.push({ text });
+  };
+  handleStreakRecord(recordCtx, { pointsFile: file });
+  assert.ok(recordCtx.replies[0].text.includes("Alice — 1 days"));
+  assert.ok(!recordCtx.replies[0].text.includes("No streak records yet"));
+});
+
+runTest("/streak read does not repair without activity", () => {
+  const file = pointsFile();
+  seedLegacySameDayActivity(file, ALICE, "Alice", { points: 5, weeklyPoints: 2 });
+  const ctx = {
+    chat: { type: "group" },
+    from: { id: ALICE, first_name: "Alice" },
+    replies: [],
+    reply(text) {
+      this.replies.push({ text });
+    },
+  };
+  handleStreak(ctx, { pointsFile: file });
+  assert.ok(ctx.replies[0].text.includes("No active streaks yet"));
+  const user = loadPoints(file).users[String(ALICE)];
+  assert.strictEqual(user.points, 5);
+  assert.deepStrictEqual(readStreak(user), {
+    current: 0,
+    longest: 0,
+    lastActiveDate: null,
+  });
 });
 
 fs.rmSync(tempDir, { recursive: true, force: true });
