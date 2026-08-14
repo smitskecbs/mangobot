@@ -1,10 +1,9 @@
 /**
- * Tic-Tac-Toe PvP — in-memory sessions via generic PvP manager.
- * Not auto-started by Activity Engine in v1 (enabledForAuto: false).
+ * Connect Four / Vier-op-een-rij PvP — in-memory sessions via generic PvP manager.
+ * Not auto-started by Activity Engine (enabledForAuto: false).
  */
 
 const { Markup } = require("telegraf");
-const { logError } = require("../utils/logger");
 const {
   createPvpSessionManager,
   getSharedPvpSessionManager,
@@ -13,11 +12,15 @@ const {
 } = require("./pvpSessionManager");
 const { isAllowedChatFightChat } = require("./chatFight");
 
-const GAME_ID = "tictactoe";
+const GAME_ID = "connect4";
 
 const JOIN_TIMEOUT_MS = 5 * 60 * 1000;
 const TURN_TIMEOUT_MS = 60 * 1000;
 const PAIR_COOLDOWN_MS = DEFAULT_PAIR_COOLDOWN_MS;
+
+const ROWS = 6;
+const COLS = 7;
+const WIN_LENGTH = 4;
 
 const STATUS = Object.freeze({
   WAITING: "waiting",
@@ -27,60 +30,110 @@ const STATUS = Object.freeze({
   EXPIRED: "expired",
 });
 
-const WIN_LINES = Object.freeze([
-  [0, 1, 2],
-  [3, 4, 5],
-  [6, 7, 8],
-  [0, 3, 6],
-  [1, 4, 7],
-  [2, 5, 8],
-  [0, 4, 8],
-  [2, 4, 6],
-]);
-
-const EMPTY_CELL = "⬜";
-const MARK_X = "❌";
-const MARK_O = "⭕";
+const MARK_R = "🔴";
+const MARK_Y = "🟡";
+const EMPTY_CELL = "⚪";
+const COL_HEADERS = "1️⃣ 2️⃣ 3️⃣ 4️⃣ 5️⃣ 6️⃣ 7️⃣";
 
 function emptyBoard() {
-  return [null, null, null, null, null, null, null, null, null];
+  return Array.from({ length: ROWS }, () => Array(COLS).fill(null));
 }
 
-function checkWinner(board) {
-  for (const [a, b, c] of WIN_LINES) {
-    const v = board[a];
-    if (v && v === board[b] && v === board[c]) {
-      return v;
+function cloneBoard(board) {
+  return board.map((row) => row.slice());
+}
+
+/**
+ * Drop a token into the lowest empty cell of a column (0–6).
+ * Mutates board. Row 5 is the bottom.
+ */
+function dropToken(board, column, mark) {
+  if (!Number.isInteger(column) || column < 0 || column >= COLS) {
+    return { ok: false, reason: "bad-cell" };
+  }
+  for (let row = ROWS - 1; row >= 0; row -= 1) {
+    if (board[row][column] == null) {
+      board[row][column] = mark;
+      return { ok: true, row, column };
+    }
+  }
+  return { ok: false, reason: "full" };
+}
+
+function countDir(board, row, col, dRow, dCol, mark) {
+  let n = 0;
+  let r = row + dRow;
+  let c = col + dCol;
+  while (r >= 0 && r < ROWS && c >= 0 && c < COLS && board[r][c] === mark) {
+    n += 1;
+    r += dRow;
+    c += dCol;
+  }
+  return n;
+}
+
+/**
+ * Winner if 4 or more connected horizontally, vertically, or diagonally.
+ * @param {Array<Array<string|null>>} board
+ * @returns {"R"|"Y"|null}
+ */
+function checkConnectFourWinner(board) {
+  const dirs = [
+    [0, 1],
+    [1, 0],
+    [1, 1],
+    [1, -1],
+  ];
+  for (let row = 0; row < ROWS; row += 1) {
+    for (let col = 0; col < COLS; col += 1) {
+      const mark = board[row][col];
+      if (mark !== "R" && mark !== "Y") {
+        continue;
+      }
+      for (const [dRow, dCol] of dirs) {
+        const run =
+          1 +
+          countDir(board, row, col, dRow, dCol, mark) +
+          countDir(board, row, col, -dRow, -dCol, mark);
+        if (run >= WIN_LENGTH) {
+          return mark;
+        }
+      }
     }
   }
   return null;
 }
 
 function isBoardFull(board) {
-  return board.every((cell) => cell === "X" || cell === "O");
+  return board.every((row) => row.every((cell) => cell === "R" || cell === "Y"));
 }
 
-function cellLabel(value) {
-  if (value === "X") return MARK_X;
-  if (value === "O") return MARK_O;
+function cellEmoji(value) {
+  if (value === "R") return MARK_R;
+  if (value === "Y") return MARK_Y;
   return EMPTY_CELL;
 }
 
-function buildJoinCallbackData(sessionId) {
-  return `pvp:ttt:join:${sessionId}`;
+function formatBoard(board) {
+  const lines = board.map((row) => row.map(cellEmoji).join(" "));
+  lines.push(COL_HEADERS);
+  return lines.join("\n");
 }
 
-function buildMoveCallbackData(sessionId, cell) {
-  return `pvp:ttt:move:${sessionId}:${cell}`;
+function buildJoinCallbackData(sessionId) {
+  return `pvp:c4:join:${sessionId}`;
+}
+
+function buildMoveCallbackData(sessionId, column) {
+  return `pvp:c4:move:${sessionId}:${column}`;
 }
 
 function parsePvpCallbackData(data) {
-  if (typeof data !== "string" || !data.startsWith("pvp:ttt:")) {
+  if (typeof data !== "string" || !data.startsWith("pvp:c4:")) {
     return null;
   }
   const parts = data.split(":");
-  // pvp : ttt : join|move : sessionId [ : cell ]
-  if (parts.length < 4 || parts[0] !== "pvp" || parts[1] !== "ttt") {
+  if (parts.length < 4 || parts[0] !== "pvp" || parts[1] !== "c4") {
     return null;
   }
   const action = parts[2];
@@ -94,9 +147,9 @@ function parsePvpCallbackData(data) {
   }
   if (action === "move") {
     if (parts.length !== 5) return null;
-    const cell = Number(parts[4]);
-    if (!Number.isInteger(cell) || cell < 0 || cell > 8) return null;
-    return { action: "move", sessionId, cell, game: GAME_ID };
+    const column = Number(parts[4]);
+    if (!Number.isInteger(column) || column < 0 || column > 6) return null;
+    return { action: "move", sessionId, column, game: GAME_ID };
   }
   return null;
 }
@@ -107,59 +160,60 @@ function buildJoinKeyboard(sessionId) {
   ]);
 }
 
-function buildBoardKeyboard(session, clickable) {
+function buildBoardKeyboard(session) {
   const rows = [];
-  for (let r = 0; r < 3; r += 1) {
-    const row = [];
-    for (let c = 0; c < 3; c += 1) {
-      const i = r * 3 + c;
-      const label = cellLabel(session.board[i]);
-      if (clickable && session.board[i] == null) {
-        row.push(
-          Markup.button.callback(label, buildMoveCallbackData(session.id, i))
-        );
-      } else {
-        // Non-clickable look: still a button but dead session handlers reject.
-        row.push(
-          Markup.button.callback(label, buildMoveCallbackData(session.id, i))
-        );
-      }
-    }
-    rows.push(row);
+  const labels = ["1", "2", "3", "4", "5", "6", "7"];
+  const first = [];
+  for (let col = 0; col < 4; col += 1) {
+    first.push(
+      Markup.button.callback(labels[col], buildMoveCallbackData(session.id, col))
+    );
   }
+  rows.push(first);
+  const second = [];
+  for (let col = 4; col < 7; col += 1) {
+    second.push(
+      Markup.button.callback(labels[col], buildMoveCallbackData(session.id, col))
+    );
+  }
+  rows.push(second);
   return Markup.inlineKeyboard(rows);
 }
 
 function buildWaitingText(session) {
-  const x = session.players.X;
-  if (!x) {
-    return `🎮 TIC-TAC-TOE
+  const r = session.players.R;
+  const y = session.players.Y;
+  const p1 = r ? `🔴 ${r.displayName}` : "🔴";
+  const p2 = y ? `🟡 ${y.displayName}` : "🟡";
+  return `🟡 CONNECT FOUR
 
 A new PvP challenge is open.
 
-First two players can join.`;
-  }
-  return `🎮 TIC-TAC-TOE
+First two players can join.
 
-${MARK_X} ${x.displayName} joined.
+Player 1:
+${p1}
 
-Waiting for an opponent...`;
+Player 2:
+${p2}`;
 }
 
 function buildActiveText(session) {
-  const x = session.players.X;
-  const o = session.players.O;
-  const turnMark = session.currentPlayer === "X" ? MARK_X : MARK_O;
+  const r = session.players.R;
+  const y = session.players.Y;
+  const turnMark = session.currentPlayer === "R" ? MARK_R : MARK_Y;
   const turnName =
-    session.currentPlayer === "X" ? x.displayName : o.displayName;
-  return `🎮 TIC-TAC-TOE
+    session.currentPlayer === "R" ? r.displayName : y.displayName;
+  return `🟡 CONNECT FOUR
 
-${MARK_X} ${x.displayName}
-${MARK_O} ${o.displayName}
+${MARK_R} ${r.displayName}
+${MARK_Y} ${y.displayName}
 
 Turn: ${turnMark} ${turnName}
 
-Klik hieronder om je move te doen.`;
+${formatBoard(session.board)}
+
+Choose a column.`;
 }
 
 function formatXpLine(xpResult, rewardEligible) {
@@ -172,21 +226,24 @@ function formatXpLine(xpResult, rewardEligible) {
   if (xpResult && xpResult.reason === "daily-cap") {
     return "PvP XP: daily cap reached";
   }
+  if (xpResult && xpResult.reason === "excluded") {
+    return "PvP XP: none";
+  }
   return "PvP XP: none";
 }
 
 function buildWonText(session, xpResult) {
   const winnerSeat = session.winnerSeat;
-  const loserSeat = winnerSeat === "X" ? "O" : "X";
+  const loserSeat = winnerSeat === "R" ? "Y" : "R";
   const winner = session.players[winnerSeat];
   const loser = session.players[loserSeat];
-  const wMark = winnerSeat === "X" ? MARK_X : MARK_O;
-  const lMark = loserSeat === "X" ? MARK_X : MARK_O;
+  const wMark = winnerSeat === "R" ? MARK_R : MARK_Y;
+  const lMark = loserSeat === "R" ? MARK_R : MARK_Y;
   const byTimeout = session.endReason === "timeout";
   const xpLine = formatXpLine(xpResult, session.rewardEligible);
 
   if (byTimeout) {
-    return `⏱ TIC-TAC-TOE
+    return `⏱ CONNECT FOUR
 
 ${loser.displayName} ran out of time.
 
@@ -195,7 +252,7 @@ ${loser.displayName} ran out of time.
 ${xpLine} 🥭`;
   }
 
-  return `🏆 TIC-TAC-TOE WINNER
+  return `🏆 CONNECT FOUR WINNER
 
 ${wMark} ${winner.displayName} defeated ${lMark} ${loser.displayName}!
 
@@ -203,21 +260,23 @@ ${
     xpResult && xpResult.awarded
       ? `+${xpResult.pointsToAdd} PvP XP 🥭`
       : `${xpLine} 🥭`
-  }`;
+  }
+
+${formatBoard(session.board)}`;
 }
 
 function buildDrawText(session) {
-  const x = session.players.X;
-  const o = session.players.O;
-  return `🤝 TIC-TAC-TOE DRAW
+  return `🤝 CONNECT FOUR DRAW
 
-${x.displayName} ${MARK_X} vs ${o.displayName} ${MARK_O}
+${session.players.R.displayName} ${MARK_R} vs ${session.players.Y.displayName} ${MARK_Y}
+
+${formatBoard(session.board)}
 
 Good game! 🥭`;
 }
 
 function buildExpiredText() {
-  return `🎮 TIC-TAC-TOE
+  return `🟡 CONNECT FOUR
 
 Challenge expired — nobody joined in time.`;
 }
@@ -232,28 +291,28 @@ function renderMessage(session, xpResult) {
   if (session.status === STATUS.ACTIVE) {
     return {
       text: buildActiveText(session),
-      extra: buildBoardKeyboard(session, true),
+      extra: buildBoardKeyboard(session),
     };
   }
   if (session.status === STATUS.WON) {
     return {
       text: buildWonText(session, xpResult),
-      extra: buildBoardKeyboard(session, false),
+      extra: undefined,
     };
   }
   if (session.status === STATUS.DRAW) {
     return {
       text: buildDrawText(session),
-      extra: buildBoardKeyboard(session, false),
+      extra: undefined,
     };
   }
   if (session.status === STATUS.EXPIRED) {
     return { text: buildExpiredText(), extra: undefined };
   }
-  return { text: "🎮 TIC-TAC-TOE", extra: undefined };
+  return { text: "🟡 CONNECT FOUR", extra: undefined };
 }
 
-function createTicTacToeService(options = {}) {
+function createConnectFourService(options = {}) {
   const joinTimeoutMs =
     typeof options.joinTimeoutMs === "number"
       ? options.joinTimeoutMs
@@ -329,8 +388,8 @@ function createTicTacToeService(options = {}) {
       chatId: String(chatId),
       messageId: null,
       status: STATUS.WAITING,
-      players: { X: null, O: null },
-      currentPlayer: "X",
+      players: { R: null, Y: null },
+      currentPlayer: "R",
       board: emptyBoard(),
       createdAt: manager.now(),
       startedAt: null,
@@ -388,11 +447,11 @@ function createTicTacToeService(options = {}) {
 
   function seatForUser(session, userId) {
     const id = String(userId);
-    if (session.players.X && String(session.players.X.userId) === id) {
-      return "X";
+    if (session.players.R && String(session.players.R.userId) === id) {
+      return "R";
     }
-    if (session.players.O && String(session.players.O.userId) === id) {
-      return "O";
+    if (session.players.Y && String(session.players.Y.userId) === id) {
+      return "Y";
     }
     return null;
   }
@@ -413,7 +472,7 @@ function createTicTacToeService(options = {}) {
         return { ok: false, reason: "already-ended" };
       }
       const loserSeat = session.currentPlayer;
-      const winnerSeat = loserSeat === "X" ? "O" : "X";
+      const winnerSeat = loserSeat === "R" ? "Y" : "R";
       const winner = session.players[winnerSeat];
       session.status = STATUS.WON;
       session.winnerSeat = winnerSeat;
@@ -422,8 +481,8 @@ function createTicTacToeService(options = {}) {
       manager.clearTimers(session);
       manager.clearActiveIndex(session);
       manager.markPairCooldown(
-        session.players.X.userId,
-        session.players.O.userId,
+        session.players.R.userId,
+        session.players.Y.userId,
         GAME_ID
       );
       return {
@@ -465,44 +524,43 @@ function createTicTacToeService(options = {}) {
       const uid = String(userId);
       const name = sanitizePvpDisplayName(displayName);
 
-      if (!session.players.X) {
-        session.players.X = { userId: uid, displayName: name };
+      if (!session.players.R) {
+        session.players.R = { userId: uid, displayName: name };
         return {
           ok: true,
-          role: "X",
+          role: "R",
           started: false,
           session: snapshot(session),
           rendered: renderMessage(session),
         };
       }
 
-      if (String(session.players.X.userId) === uid) {
+      if (String(session.players.R.userId) === uid) {
         return { ok: false, reason: "already-joined" };
       }
 
-      if (session.players.O) {
+      if (session.players.Y) {
         return { ok: false, reason: "full" };
       }
 
-      session.players.O = { userId: uid, displayName: name };
+      session.players.Y = { userId: uid, displayName: name };
       const onCooldown = manager.isPairOnCooldown(
-        session.players.X.userId,
-        session.players.O.userId,
+        session.players.R.userId,
+        session.players.Y.userId,
         GAME_ID
       );
       session.rewardEligible = !onCooldown;
       session.status = STATUS.ACTIVE;
       session.startedAt = manager.now();
       session.lastMoveAt = session.startedAt;
-      session.currentPlayer = "X";
+      session.currentPlayer = "R";
       manager.clearTimers(session);
-      // clear join timer only — start turn timer
       session.timers.joinTimeoutId = null;
       startTurnTimer(session);
 
       return {
         ok: true,
-        role: "O",
+        role: "Y",
         started: true,
         session: snapshot(session),
         rendered: renderMessage(session),
@@ -510,7 +568,7 @@ function createTicTacToeService(options = {}) {
     });
   }
 
-  function move({ sessionId, userId, cell, chatId } = {}) {
+  function move({ sessionId, userId, column, chatId } = {}) {
     return manager.withSessionLock(sessionId, () => {
       const session = manager.getSession(sessionId);
       if (!session) {
@@ -525,9 +583,6 @@ function createTicTacToeService(options = {}) {
       if (session.status !== STATUS.ACTIVE) {
         return { ok: false, reason: "not-active" };
       }
-      if (!Number.isInteger(cell) || cell < 0 || cell > 8) {
-        return { ok: false, reason: "bad-cell" };
-      }
 
       const seat = seatForUser(session, userId);
       if (!seat) {
@@ -536,14 +591,15 @@ function createTicTacToeService(options = {}) {
       if (seat !== session.currentPlayer) {
         return { ok: false, reason: "not-your-turn" };
       }
-      if (session.board[cell] != null) {
-        return { ok: false, reason: "occupied" };
+
+      const dropped = dropToken(session.board, column, seat);
+      if (!dropped.ok) {
+        return { ok: false, reason: dropped.reason };
       }
 
-      session.board[cell] = seat;
       session.lastMoveAt = manager.now();
 
-      const winMark = checkWinner(session.board);
+      const winMark = checkConnectFourWinner(session.board);
       if (winMark) {
         session.status = STATUS.WON;
         session.winnerSeat = winMark;
@@ -552,8 +608,8 @@ function createTicTacToeService(options = {}) {
         manager.clearTimers(session);
         manager.clearActiveIndex(session);
         manager.markPairCooldown(
-          session.players.X.userId,
-          session.players.O.userId,
+          session.players.R.userId,
+          session.players.Y.userId,
           GAME_ID
         );
         return {
@@ -571,8 +627,8 @@ function createTicTacToeService(options = {}) {
         manager.clearTimers(session);
         manager.clearActiveIndex(session);
         manager.markPairCooldown(
-          session.players.X.userId,
-          session.players.O.userId,
+          session.players.R.userId,
+          session.players.Y.userId,
           GAME_ID
         );
         return {
@@ -584,7 +640,7 @@ function createTicTacToeService(options = {}) {
         };
       }
 
-      session.currentPlayer = seat === "X" ? "O" : "X";
+      session.currentPlayer = seat === "R" ? "Y" : "R";
       startTurnTimer(session);
       return {
         ok: true,
@@ -595,9 +651,6 @@ function createTicTacToeService(options = {}) {
     });
   }
 
-  /**
-   * Claim XP award once (sync). Returns whether caller should award XP.
-   */
   function claimXpAward(sessionId) {
     return manager.withSessionLock(sessionId, () => {
       const session = manager.getSession(sessionId);
@@ -676,20 +729,20 @@ function createTicTacToeService(options = {}) {
   };
 }
 
-const ticTacToeRuntime = createTicTacToeService({
+const connectFourRuntime = createConnectFourService({
   manager: getSharedPvpSessionManager(),
 });
 
-function startTicTacToeChallenge(params) {
-  return ticTacToeRuntime.startChallenge(params);
+function startConnectFourChallenge(params) {
+  return connectFourRuntime.startChallenge(params);
 }
 
-function isTicTacToeOpen() {
-  return ticTacToeRuntime.isOpen();
+function isConnectFourOpen() {
+  return connectFourRuntime.isOpen();
 }
 
-function getTicTacToeRuntime() {
-  return ticTacToeRuntime;
+function getConnectFourRuntime() {
+  return connectFourRuntime;
 }
 
 module.exports = {
@@ -698,22 +751,27 @@ module.exports = {
   JOIN_TIMEOUT_MS,
   TURN_TIMEOUT_MS,
   PAIR_COOLDOWN_MS,
-  WIN_LINES,
+  ROWS,
+  COLS,
+  WIN_LENGTH,
   emptyBoard,
-  checkWinner,
+  cloneBoard,
+  dropToken,
+  checkConnectFourWinner,
   isBoardFull,
+  formatBoard,
   buildJoinCallbackData,
   buildMoveCallbackData,
   parsePvpCallbackData,
   sanitizePvpDisplayName,
-  createTicTacToeService,
-  ticTacToeRuntime,
-  startTicTacToeChallenge,
-  isTicTacToeOpen,
-  getTicTacToeRuntime,
+  createConnectFourService,
+  connectFourRuntime,
+  startConnectFourChallenge,
+  isConnectFourOpen,
+  getConnectFourRuntime,
   renderMessage,
-  cellLabel,
-  MARK_X,
-  MARK_O,
+  cellEmoji,
+  MARK_R,
+  MARK_Y,
   EMPTY_CELL,
 };

@@ -11,6 +11,11 @@ const { handleLeaderboard } = require("./leaderboard");
 const { handleWeekly } = require("./weekly");
 const { handleHelp } = require("./help");
 const {
+  handleStreak,
+  handleStreakRecord,
+  handleMyStreak,
+} = require("./streak");
+const {
   MENU_LABELS,
   GROUP_MENU_TEXT,
   PRIVATE_MENU_HINT,
@@ -65,6 +70,12 @@ async function handleGroupMenuCallback(ctx, options = {}) {
   if (data === GROUP_MENU_CALLBACK.WEEKLY) {
     return handleWeekly(ctx, options);
   }
+  if (data === GROUP_MENU_CALLBACK.STREAK) {
+    return handleStreak(ctx, options);
+  }
+  if (data === GROUP_MENU_CALLBACK.STREAK_RECORD) {
+    return handleStreakRecord(ctx, options);
+  }
   if (data === GROUP_MENU_CALLBACK.HELP) {
     return handleHelp(ctx);
   }
@@ -75,7 +86,7 @@ module.exports = (bot) => {
 
   bot.action(
     new RegExp(
-      `^(${GROUP_MENU_CALLBACK.LEADERBOARD}|${GROUP_MENU_CALLBACK.WEEKLY}|${GROUP_MENU_CALLBACK.HELP})$`
+      `^(${GROUP_MENU_CALLBACK.LEADERBOARD}|${GROUP_MENU_CALLBACK.WEEKLY}|${GROUP_MENU_CALLBACK.STREAK}|${GROUP_MENU_CALLBACK.STREAK_RECORD}|${GROUP_MENU_CALLBACK.HELP})$`
     ),
     (ctx) => handleGroupMenuCallback(ctx)
   );
@@ -85,6 +96,13 @@ module.exports = (bot) => {
       return;
     }
     return handlePoints(ctx);
+  });
+
+  bot.hears(MENU_LABELS.MY_STREAK, (ctx) => {
+    if (!isPrivateChat(ctx)) {
+      return;
+    }
+    return handleMyStreak(ctx);
   });
 
   bot.hears(MENU_LABELS.SNAKE, (ctx) => {

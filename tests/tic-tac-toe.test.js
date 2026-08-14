@@ -835,13 +835,18 @@ async function main() {
     assert.ok(lines.includes(`PvP wins today: 0 / ${PVP_DAILY_WIN_CAP}`));
   });
 
-  await runTest("/help lists /tictactoe", () => {
+  await runTest("/help lists /tictactoe and /connect4", () => {
     assert.ok(HELP_MESSAGE.includes("/tictactoe"));
+    assert.ok(HELP_MESSAGE.includes("/connect4"));
+    assert.ok(HELP_MESSAGE.includes("/streak"));
+    assert.ok(HELP_MESSAGE.includes("/streakrecord"));
   });
 
   await runTest("activity engine metadata enabledForAuto false", () => {
     assert.strictEqual(ACTION_REGISTRY.tictactoe.enabledForAuto, false);
     assert.strictEqual(ACTION_REGISTRY.tictactoe.mode, "pvp");
+    assert.strictEqual(ACTION_REGISTRY.connect4.enabledForAuto, false);
+    assert.strictEqual(ACTION_REGISTRY.connect4.mode, "pvp");
   });
 
   await runTest("locking: concurrent awardPvpWinXp safe", () => {

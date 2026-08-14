@@ -25,25 +25,45 @@ function isTicTacToeBusy() {
   }
 }
 
+function isConnectFourBusy() {
+  try {
+    const c4 = require("./connectFour");
+    return typeof c4.isConnectFourOpen === "function"
+      ? Boolean(c4.isConnectFourOpen())
+      : false;
+  } catch (_err) {
+    return false;
+  }
+}
+
+function isPvpBusy(options = {}) {
+  const tttOpen =
+    typeof options.isTicTacToeOpenFn === "function"
+      ? options.isTicTacToeOpenFn()
+      : isTicTacToeBusy();
+  const c4Open =
+    typeof options.isConnectFourOpenFn === "function"
+      ? options.isConnectFourOpenFn()
+      : isConnectFourBusy();
+  return Boolean(tttOpen || c4Open);
+}
+
 /**
  * @param {object} [options]
  * @param {() => boolean} [options.isChatFightOpenFn]
  * @param {() => boolean} [options.isTicTacToeOpenFn]
+ * @param {() => boolean} [options.isConnectFourOpenFn]
  */
 function isCommunityChallengeBusy(options = {}) {
   const fightOpen =
     typeof options.isChatFightOpenFn === "function"
       ? options.isChatFightOpenFn()
       : isChatFightBusy();
-  const pvpOpen =
-    typeof options.isTicTacToeOpenFn === "function"
-      ? options.isTicTacToeOpenFn()
-      : isTicTacToeBusy();
-  return Boolean(fightOpen || pvpOpen);
+  return Boolean(fightOpen || isPvpBusy(options));
 }
 
 /**
- * @returns {"chatfight"|"tictactoe"|null}
+ * @returns {"chatfight"|"tictactoe"|"connect4"|null}
  */
 function getCommunityBusyReason(options = {}) {
   const fightOpen =
@@ -53,19 +73,42 @@ function getCommunityBusyReason(options = {}) {
   if (fightOpen) {
     return "chatfight";
   }
-  const pvpOpen =
+  const tttOpen =
     typeof options.isTicTacToeOpenFn === "function"
       ? options.isTicTacToeOpenFn()
       : isTicTacToeBusy();
-  if (pvpOpen) {
+  if (tttOpen) {
     return "tictactoe";
   }
+  const c4Open =
+    typeof options.isConnectFourOpenFn === "function"
+      ? options.isConnectFourOpenFn()
+      : isConnectFourBusy();
+  if (c4Open) {
+    return "connect4";
+  }
   return null;
+}
+
+function formatCommunityBusyReply(reason) {
+  if (reason === "chatfight") {
+    return "⚔️ A ChatFight is already running.";
+  }
+  if (reason === "tictactoe") {
+    return "🎮 A Tic-Tac-Toe challenge is already open.";
+  }
+  if (reason === "connect4") {
+    return "🟡 A Connect Four challenge is already open.";
+  }
+  return "🎮 A PvP challenge is already open.";
 }
 
 module.exports = {
   isCommunityChallengeBusy,
   getCommunityBusyReason,
+  formatCommunityBusyReply,
   isChatFightBusy,
   isTicTacToeBusy,
+  isConnectFourBusy,
+  isPvpBusy,
 };

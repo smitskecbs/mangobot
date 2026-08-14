@@ -31,9 +31,11 @@ function createPvpSessionManager(options = {}) {
 
   /** @type {Map<string, object>} */
   const sessions = new Map();
-  /** @type {Map<string, string>} chatKey -> sessionId */
+  /** @type {Map<string, string>} chatId:game -> sessionId */
   const activeByChatGame = new Map();
-  /** @type {Map<string, number>} pairKey -> cooldownUntilMs */
+  /** @type {Map<string, string>} chatId -> sessionId (any PvP game) */
+  const activeByChat = new Map();
+  /** @type {Map<string, number>} pairKey -> cooldownUntilMs (cross-game) */
   const pairCooldowns = new Map();
   /** @type {Set<string>} */
   const mutating = new Set();
@@ -71,20 +73,40 @@ function createPvpSessionManager(options = {}) {
     return getSession(id);
   }
 
+  function isOpenStatus(session) {
+    return Boolean(
+      session && (session.status === "waiting" || session.status === "active")
+    );
+  }
+
   function isGameOpen(chatId, game) {
-    const session = getActiveSession(chatId, game);
-    if (!session) {
-      return false;
+    return isOpenStatus(getActiveSession(chatId, game));
+  }
+
+  function getActiveSessionForChat(chatId) {
+    const id = activeByChat.get(String(chatId));
+    if (!id) {
+      return null;
     }
-    return session.status === "waiting" || session.status === "active";
+    return getSession(id);
+  }
+
+  function isChatBusy(chatId) {
+    return isOpenStatus(getActiveSessionForChat(chatId));
   }
 
   function hasAnyOpenGame(game) {
     for (const session of sessions.values()) {
-      if (
-        session.game === game &&
-        (session.status === "waiting" || session.status === "active")
-      ) {
+      if (session.game === game && isOpenStatus(session)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function hasAnyOpenSession() {
+    for (const session of sessions.values()) {
+      if (isOpenStatus(session)) {
         return true;
       }
     }
@@ -94,6 +116,7 @@ function createPvpSessionManager(options = {}) {
   function registerSession(session) {
     sessions.set(session.id, session);
     activeByChatGame.set(chatGameKey(session.chatId, session.game), session.id);
+    activeByChat.set(String(session.chatId), session.id);
     return session;
   }
 
@@ -101,6 +124,10 @@ function createPvpSessionManager(options = {}) {
     const key = chatGameKey(session.chatId, session.game);
     if (activeByChatGame.get(key) === session.id) {
       activeByChatGame.delete(key);
+    }
+    const chatKey = String(session.chatId);
+    if (activeByChat.get(chatKey) === session.id) {
+      activeByChat.delete(chatKey);
     }
   }
 
@@ -149,8 +176,11 @@ function createPvpSessionManager(options = {}) {
     return null;
   }
 
-  function isPairOnCooldown(userIdA, userIdB, game) {
-    const key = `${String(game)}:${makePairKey(userIdA, userIdB)}`;
+  /**
+   * Pair cooldown is cross-game: the unused `game` arg is kept for call-site compat.
+   */
+  function isPairOnCooldown(userIdA, userIdB, _game) {
+    const key = makePairKey(userIdA, userIdB);
     const until = pairCooldowns.get(key);
     if (until == null) {
       return false;
@@ -162,13 +192,13 @@ function createPvpSessionManager(options = {}) {
     return true;
   }
 
-  function markPairCooldown(userIdA, userIdB, game) {
-    const key = `${String(game)}:${makePairKey(userIdA, userIdB)}`;
+  function markPairCooldown(userIdA, userIdB, _game) {
+    const key = makePairKey(userIdA, userIdB);
     pairCooldowns.set(key, nowFn() + pairCooldownMs);
   }
 
-  function getPairCooldownRemainingMs(userIdA, userIdB, game) {
-    const key = `${String(game)}:${makePairKey(userIdA, userIdB)}`;
+  function getPairCooldownRemainingMs(userIdA, userIdB, _game) {
+    const key = makePairKey(userIdA, userIdB);
     const until = pairCooldowns.get(key);
     if (until == null) {
       return 0;
@@ -199,6 +229,7 @@ function createPvpSessionManager(options = {}) {
     }
     sessions.clear();
     activeByChatGame.clear();
+    activeByChat.clear();
     pairCooldowns.clear();
     mutating.clear();
   }
@@ -213,8 +244,11 @@ function createPvpSessionManager(options = {}) {
     generateSessionId,
     getSession,
     getActiveSession,
+    getActiveSessionForChat,
     isGameOpen,
+    isChatBusy,
     hasAnyOpenGame,
+    hasAnyOpenSession,
     registerSession,
     removeSession,
     clearActiveIndex,
@@ -257,8 +291,22 @@ function sanitizePvpDisplayName(fromOrName, maxLen = 24) {
   return name;
 }
 
+let sharedPvpSessionManager = null;
+
+/**
+ * Production singleton so Tic-Tac-Toe and Connect Four share busy state
+ * and pair cooldown. Tests should inject their own manager.
+ */
+function getSharedPvpSessionManager() {
+  if (!sharedPvpSessionManager) {
+    sharedPvpSessionManager = createPvpSessionManager();
+  }
+  return sharedPvpSessionManager;
+}
+
 module.exports = {
   createPvpSessionManager,
+  getSharedPvpSessionManager,
   sanitizePvpDisplayName,
   DEFAULT_PAIR_COOLDOWN_MS,
 };

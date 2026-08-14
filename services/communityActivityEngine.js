@@ -407,8 +407,8 @@ function isActionEligible(actionId, context) {
       return false;
     }
     try {
-      const { isTicTacToeBusy } = require("./communityGameState");
-      if (isTicTacToeBusy()) {
+      const { isPvpBusy } = require("./communityGameState");
+      if (isPvpBusy()) {
         return false;
       }
     } catch (_err) {

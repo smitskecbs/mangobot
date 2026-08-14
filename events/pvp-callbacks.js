@@ -1,16 +1,19 @@
 /**
- * PvP inline callbacks — Tic-Tac-Toe join + move.
- * Callback data: pvp:ttt:join:<sessionId> | pvp:ttt:move:<sessionId>:<cell>
- * Never embeds Telegram user ids.
+ * PvP inline callbacks — Tic-Tac-Toe and Connect Four join + move.
+ * Callback data: pvp:ttt:... | pvp:c4:...  (opaque session ids, never uids)
  */
 
 const { logError } = require("../utils/logger");
 const { awardPvpWinXp } = require("../services/points");
 const {
-  parsePvpCallbackData,
+  parsePvpCallbackData: parseTttCallbackData,
   sanitizePvpDisplayName,
   getTicTacToeRuntime,
 } = require("../services/ticTacToe");
+const {
+  parsePvpCallbackData: parseC4CallbackData,
+  getConnectFourRuntime,
+} = require("../services/connectFour");
 
 function cbAnswer(ctx, text) {
   if (ctx && typeof ctx.answerCbQuery === "function") {
@@ -127,6 +130,10 @@ async function handlePvpCallback(ctx, options = {}) {
     (typeof options.getRuntimeFn === "function"
       ? options.getRuntimeFn()
       : getTicTacToeRuntime());
+  const parseFn =
+    typeof options.parseCallbackData === "function"
+      ? options.parseCallbackData
+      : parseTttCallbackData;
   const awardXpFn =
     typeof options.awardPvpWinXpFn === "function"
       ? options.awardPvpWinXpFn
@@ -138,7 +145,7 @@ async function handlePvpCallback(ctx, options = {}) {
 
   const data =
     typeof ctx.callbackQuery.data === "string" ? ctx.callbackQuery.data : "";
-  const parsed = parsePvpCallbackData(data);
+  const parsed = parseFn(data);
   if (!parsed) {
     return;
   }
@@ -192,6 +199,7 @@ async function handlePvpCallback(ctx, options = {}) {
       sessionId: parsed.sessionId,
       userId,
       cell: parsed.cell,
+      column: parsed.column,
       chatId,
     });
 
@@ -202,6 +210,8 @@ async function handlePvpCallback(ctx, options = {}) {
         await cbAnswer(ctx, "This game belongs to two other players.");
       } else if (result.reason === "occupied") {
         await cbAnswer(ctx, "That square is already taken.");
+      } else if (result.reason === "full") {
+        await cbAnswer(ctx, "That column is full.");
       } else if (
         result.reason === "already-ended" ||
         result.reason === "not-active"
@@ -234,11 +244,16 @@ async function handlePvpCallback(ctx, options = {}) {
 }
 
 function registerPvpCallbacks(bot, options = {}) {
-  const runtime =
+  const tttRuntime =
     options.runtime ||
     (typeof options.getRuntimeFn === "function"
       ? options.getRuntimeFn()
       : getTicTacToeRuntime());
+  const c4Runtime =
+    options.connectFourRuntime ||
+    (typeof options.getConnectFourRuntimeFn === "function"
+      ? options.getConnectFourRuntimeFn()
+      : getConnectFourRuntime());
 
   const awardXpFn =
     typeof options.awardPvpWinXpFn === "function"
@@ -246,11 +261,25 @@ function registerPvpCallbacks(bot, options = {}) {
       : (userId, name) => awardPvpWinXp(userId, name, options.pointsFile);
 
   if (bot && bot.telegram && !options.skipTimeoutHook) {
-    wireTimeoutMessageEdits(runtime, bot.telegram, awardXpFn);
+    wireTimeoutMessageEdits(tttRuntime, bot.telegram, awardXpFn);
+    if (c4Runtime && c4Runtime !== tttRuntime) {
+      wireTimeoutMessageEdits(c4Runtime, bot.telegram, awardXpFn);
+    }
   }
 
   bot.action(/^pvp:ttt:(join|move):/, (ctx) =>
-    handlePvpCallback(ctx, { ...options, runtime })
+    handlePvpCallback(ctx, {
+      ...options,
+      runtime: tttRuntime,
+      parseCallbackData: parseTttCallbackData,
+    })
+  );
+  bot.action(/^pvp:c4:(join|move):/, (ctx) =>
+    handlePvpCallback(ctx, {
+      ...options,
+      runtime: c4Runtime,
+      parseCallbackData: parseC4CallbackData,
+    })
   );
 }
 

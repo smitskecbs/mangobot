@@ -10,6 +10,7 @@ const path = require("path");
 const lockfile = require("proper-lockfile");
 const { writeJsonFileAtomic } = require("../utils/json");
 const { error: logError } = require("../utils/logger");
+const { isCommunityCompetitionExcluded } = require("../utils/competition");
 
 const POINTS_FILE = path.join(__dirname, "..", "points.json");
 
@@ -22,6 +23,13 @@ const TRIGGERS = {
 
 /** Longer triggers first so "gmango" wins over "gm". */
 const TRIGGER_DETECT_ORDER = ["gmango", "gnango", "gm", "gn"];
+
+const TRIGGER_LABELS = Object.freeze({
+  gmango: "GMango",
+  gnango: "GNango",
+  gm: "GM",
+  gn: "GN",
+});
 
 /**
  * Cross-process lock options for points.json.
@@ -80,8 +88,100 @@ function acquirePointsLock(pointsFile) {
   throw new Error(`Failed to acquire points.json lock: ${message}`);
 }
 
-function getTodayDate() {
-  return new Date().toISOString().slice(0, 10);
+function getTodayDate(date = new Date()) {
+  return new Date(date).toISOString().slice(0, 10);
+}
+
+/**
+ * UTC calendar day immediately before `today` (`YYYY-MM-DD`).
+ * @param {string} today
+ * @returns {string}
+ */
+function utcYesterday(today) {
+  const raw = typeof today === "string" ? today : getTodayDate();
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  if (!match) {
+    return getTodayDate();
+  }
+  const dt = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+  dt.setUTCDate(dt.getUTCDate() - 1);
+  return dt.toISOString().slice(0, 10);
+}
+
+function emptyStreak() {
+  return { current: 0, longest: 0, lastActiveDate: null };
+}
+
+/**
+ * Lazy-normalize streak from a points record. Does not mutate.
+ * @param {object|null|undefined} user
+ * @returns {{ current: number, longest: number, lastActiveDate: string|null }}
+ */
+function readStreak(user) {
+  if (!user || typeof user !== "object" || !user.streak || typeof user.streak !== "object") {
+    return emptyStreak();
+  }
+  let current = user.streak.current;
+  let longest = user.streak.longest;
+  if (typeof current !== "number" || !Number.isInteger(current) || current < 0) {
+    current = 0;
+  }
+  if (typeof longest !== "number" || !Number.isInteger(longest) || longest < 0) {
+    longest = 0;
+  }
+  const last = user.streak.lastActiveDate;
+  const lastActiveDate =
+    typeof last === "string" && /^\d{4}-\d{2}-\d{2}$/.test(last) ? last : null;
+  return { current, longest, lastActiveDate };
+}
+
+function ensureStreak(user) {
+  const normalized = readStreak(user);
+  user.streak = {
+    current: normalized.current,
+    longest: normalized.longest,
+    lastActiveDate: normalized.lastActiveDate,
+  };
+  return user.streak;
+}
+
+/**
+ * Apply community-active streak rules for a successful daily-activity claim.
+ * Mutates user.streak. Same-day claims are no-ops.
+ * @param {object} user
+ * @param {string} [today]
+ * @returns {{ current: number, longest: number, lastActiveDate: string|null, incremented: boolean }}
+ */
+function applyDailyActivityStreak(user, today = getTodayDate()) {
+  const streak = ensureStreak(user);
+  if (streak.lastActiveDate === today) {
+    return { ...streak, incremented: false };
+  }
+  if (streak.lastActiveDate && streak.lastActiveDate === utcYesterday(today)) {
+    streak.current += 1;
+  } else {
+    streak.current = 1;
+  }
+  if (streak.current > streak.longest) {
+    streak.longest = streak.current;
+  }
+  streak.lastActiveDate = today;
+  return { ...streak, incremented: true };
+}
+
+function excludedAwardResult(userId, pointsFile, extra = {}) {
+  const data = readPointsSnapshot(pointsFile);
+  const user = data.users[String(userId)];
+  const points = user && typeof user.points === "number" ? user.points : 0;
+  return {
+    awarded: false,
+    reason: "excluded",
+    points,
+    pointsToAdd: 0,
+    rankUp: false,
+    rank: getRank(points),
+    ...extra,
+  };
 }
 
 function getWeekId(date = new Date()) {
@@ -313,8 +413,10 @@ function formatClaimedTodayLines(user) {
     hasClaimedDailyActivity(user) ? "✅ Daily activity" : "⬜ Daily activity",
   ];
 
-  for (const trigger of getTriggersClaimedToday(user)) {
-    lines.push(`✅ ${trigger}`);
+  const claimed = getTriggersClaimedToday(user);
+  for (const trigger of TRIGGER_DETECT_ORDER) {
+    const label = TRIGGER_LABELS[trigger] || trigger;
+    lines.push(claimed.includes(trigger) ? `✅ ${label}` : `⬜ ${label}`);
   }
 
   lines.push(hasClaimedSnakeToday(user) ? "✅ Snake" : "⬜ Snake");
@@ -324,6 +426,62 @@ function formatClaimedTodayLines(user) {
   );
 
   return lines.join("\n");
+}
+
+function formatLastActiveLabel(lastActiveDate, today = getTodayDate()) {
+  if (!lastActiveDate) {
+    return null;
+  }
+  if (lastActiveDate === today) {
+    return "Today ✅";
+  }
+  if (lastActiveDate === utcYesterday(today)) {
+    return "Yesterday";
+  }
+  return lastActiveDate;
+}
+
+function formatPersonalStreakMessage(user) {
+  const streak = readStreak(user);
+  const last = formatLastActiveLabel(streak.lastActiveDate);
+  const lines = [
+    "🔥 Your ManGo Streak",
+    "",
+    `Current streak: ${streak.current} days`,
+    `Longest streak: ${streak.longest} days`,
+  ];
+  if (last) {
+    lines.push(`Last active: ${last}`);
+  }
+  lines.push("");
+  if (streak.current === 0) {
+    lines.push("Send a message in the ManGo community to start one.");
+  } else {
+    lines.push("Keep showing up. 🥭");
+  }
+  return lines.join("\n");
+}
+
+function formatPointsCard(user) {
+  const points = user && typeof user.points === "number" ? user.points : 0;
+  const rank = getRank(points);
+  const weeklyPoints = getEffectiveWeeklyPoints(user || {});
+  const streak = readStreak(user);
+  return [
+    "🥭 Your ManGo Progress",
+    "",
+    `XP: ${points}`,
+    `Weekly XP: ${weeklyPoints}`,
+    `Rank: ${rank.emoji} ${rank.title}`,
+    "",
+    `🔥 Current streak: ${streak.current} days`,
+    `🏆 Longest streak: ${streak.longest} days`,
+    "",
+    "Claimed today:",
+    formatClaimedTodayLines(user),
+    "",
+    formatBounchUnlocksLine(user),
+  ].join("\n");
 }
 
 function getUserRecord(data, userId) {
@@ -336,6 +494,7 @@ function getUserRecord(data, userId) {
       triggerDate: null,
       triggersUsed: [],
       activityDate: null,
+      streak: emptyStreak(),
     }
   );
 }
@@ -414,6 +573,7 @@ function ensureUserRecord(data, id, userName) {
       triggerDate: getTodayDate(),
       triggersUsed: [],
       activityDate: null,
+      streak: emptyStreak(),
     };
   }
   return data.users[id];
@@ -551,10 +711,15 @@ function awardBounchGameXp(userId, userName, level, pointsFile = POINTS_FILE) {
  * Award 1 lifetime/weekly point for the first normal chat message of the UTC day.
  * Silent by design — callers should not announce "+1 activity".
  */
-function awardDailyActivityPoint(userId, userName, pointsFile = POINTS_FILE) {
+function awardDailyActivityPoint(userId, userName, pointsFile = POINTS_FILE, todayDate) {
+  if (isCommunityCompetitionExcluded(userId)) {
+    return excludedAwardResult(userId, pointsFile);
+  }
+
+  const today = todayDate || getTodayDate();
+
   return mutatePoints((data) => {
     const id = String(userId);
-    const today = getTodayDate();
     const user = ensureUserRecord(data, id, userName);
 
     user.name = userName;
@@ -567,6 +732,7 @@ function awardDailyActivityPoint(userId, userName, pointsFile = POINTS_FILE) {
         pointsToAdd: 1,
         rankUp: false,
         rank: getRank(user.points),
+        streak: { ...readStreak(user) },
       };
     }
 
@@ -574,6 +740,7 @@ function awardDailyActivityPoint(userId, userName, pointsFile = POINTS_FILE) {
     user.points += 1;
     user.weeklyPoints += 1;
     user.activityDate = today;
+    const streak = applyDailyActivityStreak(user, today);
 
     const previousRank = getRank(pointsBefore);
     const rank = getRank(user.points);
@@ -586,6 +753,7 @@ function awardDailyActivityPoint(userId, userName, pointsFile = POINTS_FILE) {
       rankUp,
       rank,
       previousRank,
+      streak,
     };
   }, pointsFile);
 }
@@ -601,6 +769,10 @@ function awardTriggerPoints(userId, userName, trigger, pointsFile = POINTS_FILE)
       rankUp: false,
       rank: getRank(0),
     };
+  }
+
+  if (isCommunityCompetitionExcluded(userId)) {
+    return excludedAwardResult(userId, pointsFile, { pointsToAdd: 0 });
   }
 
   return mutatePoints((data) => {
@@ -646,6 +818,10 @@ function awardTriggerPoints(userId, userName, trigger, pointsFile = POINTS_FILE)
  */
 function awardChatFightXp(userId, userName, pointsFile = POINTS_FILE) {
   const pointsToAdd = 2;
+
+  if (isCommunityCompetitionExcluded(userId)) {
+    return excludedAwardResult(userId, pointsFile, { pointsToAdd: 0 });
+  }
 
   return mutatePoints((data) => {
     const id = String(userId);
@@ -732,6 +908,14 @@ function getPvpRewardedWinsToday(user) {
 function awardPvpWinXp(userId, userName, pointsFile = POINTS_FILE) {
   const pointsToAdd = PVP_WIN_XP;
 
+  if (isCommunityCompetitionExcluded(userId)) {
+    return excludedAwardResult(userId, pointsFile, {
+      pointsToAdd: 0,
+      rewardedWinsToday: 0,
+      dailyCap: PVP_DAILY_WIN_CAP,
+    });
+  }
+
   return mutatePoints((data) => {
     const id = String(userId);
     const user = ensureUserRecord(data, id, userName);
@@ -789,6 +973,8 @@ ensurePointsFile();
 
 module.exports = {
   TRIGGERS,
+  TRIGGER_DETECT_ORDER,
+  TRIGGER_LABELS,
   POINTS_LOCK_OPTIONS,
   loadPoints,
   savePoints,
@@ -796,6 +982,8 @@ module.exports = {
   readPointsSnapshot,
   isAdmin,
   getRank,
+  getTodayDate,
+  utcYesterday,
   isCommandText,
   detectTrigger,
   buildRankUpMessage,
@@ -808,6 +996,9 @@ module.exports = {
   getBounchUnlockedMaxForDisplay,
   formatBounchUnlocksLine,
   formatClaimedTodayLines,
+  formatPersonalStreakMessage,
+  formatLastActiveLabel,
+  formatPointsCard,
   getUserRecord,
   getEffectiveWeeklyPoints,
   awardDailyActivityPoint,
@@ -823,4 +1014,8 @@ module.exports = {
   ensureGameState,
   emptyGameXpPayload,
   resetWeeklyForAll,
+  readStreak,
+  ensureStreak,
+  applyDailyActivityStreak,
+  emptyStreak,
 };

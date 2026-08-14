@@ -300,23 +300,25 @@ runTest("menu niet zichtbaar in group /start", () => {
   assert.ok(!extra || !extra.reply_markup || !extra.reply_markup.keyboard);
 });
 
-runTest("menu bevat exact de gewenste 6 opties", () => {
+runTest("menu bevat exact de gewenste 7 opties", () => {
   assert.deepStrictEqual(MENU_LABEL_LIST, [
     MENU_LABELS.POINTS,
+    MENU_LABELS.MY_STREAK,
     MENU_LABELS.SNAKE,
     MENU_LABELS.BOUNCH,
     MENU_LABELS.LEADERBOARD,
     MENU_LABELS.WEEKLY,
     MENU_LABELS.HELP,
   ]);
-  assert.strictEqual(MENU_LABEL_LIST.length, 6);
+  assert.strictEqual(MENU_LABEL_LIST.length, 7);
 
   const kb = getPrivateMenuKeyboard();
   const rows = kb.reply_markup.keyboard;
   assert.deepStrictEqual(rows, [
-    [MENU_LABELS.POINTS, MENU_LABELS.SNAKE],
-    [MENU_LABELS.BOUNCH, MENU_LABELS.LEADERBOARD],
-    [MENU_LABELS.WEEKLY, MENU_LABELS.HELP],
+    [MENU_LABELS.POINTS, MENU_LABELS.MY_STREAK],
+    [MENU_LABELS.SNAKE, MENU_LABELS.BOUNCH],
+    [MENU_LABELS.LEADERBOARD, MENU_LABELS.WEEKLY],
+    [MENU_LABELS.HELP],
   ]);
   assert.strictEqual(kb.reply_markup.resize_keyboard, true);
 });
@@ -356,10 +358,11 @@ runTest("Points menu-button → bestaande points output", () => {
   });
   const ctx = createMockCtx({ chatType: "private", userId: USER_A });
   handlePoints(ctx, { pointsFile: testPointsFile });
-  assert.ok(ctx.replies[0].text.includes("🥭 Ada"));
-  assert.ok(ctx.replies[0].text.includes("Lifetime points: 5 points"));
-  assert.ok(ctx.replies[0].text.includes("Weekly points:"));
+  assert.ok(ctx.replies[0].text.includes("🥭 Your ManGo Progress"));
+  assert.ok(ctx.replies[0].text.includes("XP: 5"));
+  assert.ok(ctx.replies[0].text.includes("Weekly XP:"));
   assert.ok(ctx.replies[0].text.includes("Claimed today:"));
+  assert.ok(ctx.replies[0].text.includes("Current streak:"));
 });
 
 runTest("Leaderboard menu-button → bestaande leaderboard output", () => {
@@ -478,13 +481,13 @@ runTest("menu-labels veroorzaken geen Daily Activity XP in private", () => {
     true
   );
 
-  // Normal non-menu private text still eligible.
+  // Private text is never community daily activity.
   assert.strictEqual(
     shouldSkipCommunityActivity(
       createMockCtx({ chatType: "private" }),
       "hello mango community"
     ),
-    false
+    true
   );
 });
 
@@ -552,9 +555,12 @@ runTest("/menu group toont exact gewenste knoppen", () => {
   assert.deepStrictEqual(labels, [
     "🏆 Leaderboard",
     "📅 Weekly",
+    "🔥 Streak",
+    "🏆 Streak Record",
     "🐍 Snake",
     "🏀 Bounch",
     "🥭 My Points",
+    "🔥 My Streak",
     "ℹ️ Help",
   ]);
 });
@@ -566,9 +572,11 @@ runTest("group menu Snake/Bounch/Points deep-links zijn veilig", () => {
   const snake = buttons.find((b) => b.text === "🐍 Snake");
   const bounch = buttons.find((b) => b.text === "🏀 Bounch");
   const points = buttons.find((b) => b.text === "🥭 My Points");
+  const myStreak = buttons.find((b) => b.text === "🔥 My Streak");
   assert.strictEqual(snake.url, `https://t.me/${BOT_USERNAME}?start=snake`);
   assert.strictEqual(bounch.url, `https://t.me/${BOT_USERNAME}?start=bounch`);
   assert.strictEqual(points.url, `https://t.me/${BOT_USERNAME}?start=points`);
+  assert.strictEqual(myStreak.url, `https://t.me/${BOT_USERNAME}?start=streak`);
   const blob = JSON.stringify(ctx.replies[0]);
   assert.ok(!blob.includes("?t="));
   assert.ok(!blob.includes("uid="));
@@ -602,9 +610,10 @@ runTest("/start points private → persoonlijke points", () => {
     startPayload: "points",
   });
   handleStart(ctx, { pointsFile: testPointsFile });
-  assert.ok(ctx.replies[0].text.includes("🥭 Ada"));
-  assert.ok(ctx.replies[0].text.includes("Lifetime points: 9 points"));
+  assert.ok(ctx.replies[0].text.includes("🥭 Your ManGo Progress"));
+  assert.ok(ctx.replies[0].text.includes("XP: 9"));
   assert.ok(ctx.replies[0].text.includes("Claimed today:"));
+  assert.ok(ctx.replies[0].text.includes("Current streak:"));
 });
 
 runTest("/start points group → geen persoonlijke points", () => {
@@ -625,7 +634,7 @@ runTest("/start points group → geen persoonlijke points", () => {
   });
   handleStart(ctx, { pointsFile: testPointsFile });
   assert.strictEqual(ctx.replies[0].text, WELCOME_MESSAGE);
-  assert.ok(!ctx.replies[0].text.includes("Lifetime points"));
+  assert.ok(!ctx.replies[0].text.includes("Your ManGo Progress"));
 });
 
 runTest("Weekly callback gebruikt bestaande weekly logic", async () => {
@@ -654,6 +663,48 @@ runTest("Help callback toont bestaande help", async () => {
   });
   await handleGroupMenuCallback(ctx);
   assert.strictEqual(ctx.replies[0].text, HELP_MESSAGE);
+});
+
+runTest("Streak callback toont publieke current streak board", async () => {
+  const ctx = createMockCtx({
+    chatType: "group",
+    callbackData: GROUP_MENU_CALLBACK.STREAK,
+  });
+  await handleGroupMenuCallback(ctx, { pointsFile: testPointsFile });
+  assert.strictEqual(ctx.answered.length, 1);
+  assert.ok(ctx.replies[0].text.includes("ManGo Active Streaks"));
+});
+
+runTest("Streak Record callback toont longest board", async () => {
+  const ctx = createMockCtx({
+    chatType: "group",
+    callbackData: GROUP_MENU_CALLBACK.STREAK_RECORD,
+  });
+  await handleGroupMenuCallback(ctx, { pointsFile: testPointsFile });
+  assert.ok(ctx.replies[0].text.includes("Longest ManGo Streaks"));
+});
+
+runTest("/start streak private → persoonlijke streak, geen uid", () => {
+  const ctx = createMockCtx({
+    chatType: "private",
+    userId: USER_A,
+    startPayload: "streak",
+  });
+  handleStart(ctx, { pointsFile: testPointsFile });
+  assert.ok(ctx.replies[0].text.includes("Your ManGo Streak"));
+  assert.ok(ctx.replies[0].text.includes("Current streak:"));
+  assert.ok(!JSON.stringify(ctx.replies[0]).includes("uid="));
+});
+
+runTest("/start streak group → geen persoonlijke streak dump", () => {
+  const ctx = createMockCtx({
+    chatType: "group",
+    userId: USER_A,
+    startPayload: "streak",
+  });
+  handleStart(ctx, { pointsFile: testPointsFile });
+  assert.strictEqual(ctx.replies[0].text, WELCOME_MESSAGE);
+  assert.ok(!ctx.replies[0].text.includes("Your ManGo Streak"));
 });
 
 runTest("/menu command skips daily activity", () => {

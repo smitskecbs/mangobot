@@ -1,5 +1,5 @@
 /**
- * /tictactoe — admin-start PvP Tic-Tac-Toe challenge in the community group.
+ * /connect4 — admin-start PvP Connect Four challenge in the community group.
  */
 
 const { isPrivateChat, isGroupChat } = require("../utils/botMenu");
@@ -10,15 +10,15 @@ const {
   getCommunityBusyReason,
 } = require("../services/communityGameState");
 const {
-  startTicTacToeChallenge,
-  getTicTacToeRuntime,
-} = require("../services/ticTacToe");
+  startConnectFourChallenge,
+  getConnectFourRuntime,
+} = require("../services/connectFour");
 
-async function handleTicTacToe(ctx, options = {}) {
+async function handleConnectFour(ctx, options = {}) {
   const startFn =
     typeof options.startChallengeFn === "function"
       ? options.startChallengeFn
-      : startTicTacToeChallenge;
+      : startConnectFourChallenge;
   const canManageFn =
     typeof options.canManageGroupFn === "function"
       ? options.canManageGroupFn
@@ -35,22 +35,18 @@ async function handleTicTacToe(ctx, options = {}) {
     typeof options.setMessageIdFn === "function"
       ? options.setMessageIdFn
       : (sessionId, messageId) =>
-          getTicTacToeRuntime().setMessageId(sessionId, messageId);
+          getConnectFourRuntime().setMessageId(sessionId, messageId);
 
   if (!ctx || !ctx.from) {
     return;
   }
 
-  if (isPrivateChat(ctx)) {
-    return ctx.reply("🎮 Tic-Tac-Toe is played in the ManGo community group.");
-  }
-
-  if (!isGroupChat(ctx)) {
-    return ctx.reply("🎮 Tic-Tac-Toe is played in the ManGo community group.");
+  if (isPrivateChat(ctx) || !isGroupChat(ctx)) {
+    return ctx.reply("🟡 Connect Four is played in the ManGo community group.");
   }
 
   if (!isAllowedChatFightChat(ctx.chat.id)) {
-    return ctx.reply("🎮 Tic-Tac-Toe is not available in this group.");
+    return ctx.reply("🟡 Connect Four is not available in this group.");
   }
 
   let allowed = false;
@@ -67,15 +63,17 @@ async function handleTicTacToe(ctx, options = {}) {
 
   if (!allowed) {
     return ctx.reply(
-      "🎮 Tic-Tac-Toe can currently only be started by an admin."
+      "🟡 Connect Four can currently only be started by an admin."
     );
   }
 
-    if (busyFn({
+  if (
+    busyFn({
       isChatFightOpenFn: options.isChatFightOpenFn,
       isTicTacToeOpenFn: options.isTicTacToeOpenFn,
       isConnectFourOpenFn: options.isConnectFourOpenFn,
-    })) {
+    })
+  ) {
     const reason = busyReasonFn({
       isChatFightOpenFn: options.isChatFightOpenFn,
       isTicTacToeOpenFn: options.isTicTacToeOpenFn,
@@ -84,21 +82,21 @@ async function handleTicTacToe(ctx, options = {}) {
     if (reason === "chatfight") {
       return ctx.reply("⚔️ A ChatFight is already running.");
     }
-    if (reason === "connect4") {
-      return ctx.reply("🟡 A Connect Four challenge is already open.");
+    if (reason === "tictactoe") {
+      return ctx.reply("🎮 A Tic-Tac-Toe challenge is already open.");
     }
-    return ctx.reply("🎮 A Tic-Tac-Toe challenge is already open.");
+    return ctx.reply("🟡 A Connect Four challenge is already open.");
   }
 
   const result = startFn({ chatId: ctx.chat.id });
   if (!result.ok) {
     if (result.reason === "already-active") {
-      return ctx.reply("🎮 A Tic-Tac-Toe challenge is already open.");
+      return ctx.reply("🟡 A Connect Four challenge is already open.");
     }
     if (result.reason === "wrong-chat") {
-      return ctx.reply("🎮 Tic-Tac-Toe is not available in this group.");
+      return ctx.reply("🟡 Connect Four is not available in this group.");
     }
-    return ctx.reply("🎮 Could not start Tic-Tac-Toe.");
+    return ctx.reply("🟡 Could not start Connect Four.");
   }
 
   const sent = await ctx.reply(result.text, result.keyboard || undefined);
@@ -109,7 +107,7 @@ async function handleTicTacToe(ctx, options = {}) {
 }
 
 module.exports = (bot) => {
-  bot.command("tictactoe", (ctx) => handleTicTacToe(ctx));
+  bot.command(["connect4", "connectfour"], (ctx) => handleConnectFour(ctx));
 };
 
-module.exports.handleTicTacToe = handleTicTacToe;
+module.exports.handleConnectFour = handleConnectFour;

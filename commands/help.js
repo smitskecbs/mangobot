@@ -15,7 +15,10 @@ const HELP_MESSAGE = `🥭 Commands
 /leaderboard
 /weekly
 /chatfight
-/tictactoe — Start a PvP Tic-Tac-Toe challenge
+/tictactoe — Start Tic-Tac-Toe PvP
+/connect4 — Start Connect Four PvP
+/streak — Active streak leaderboard
+/streakrecord — Longest streak leaderboard
 
 🐍 Snake
 /snake

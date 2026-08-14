@@ -6,6 +6,7 @@ const { Markup } = require("telegraf");
 
 const MENU_LABELS = Object.freeze({
   POINTS: "🥭 My Points",
+  MY_STREAK: "🔥 My Streak",
   SNAKE: "🎮 Play Snake",
   BOUNCH: "🏀 Play Bounch",
   LEADERBOARD: "🏆 Leaderboard",
@@ -25,6 +26,8 @@ const PRIVATE_MENU_HINT =
 const GROUP_MENU_CALLBACK = Object.freeze({
   LEADERBOARD: "gmenu:lb",
   WEEKLY: "gmenu:weekly",
+  STREAK: "gmenu:streak",
+  STREAK_RECORD: "gmenu:streakrecord",
   HELP: "gmenu:help",
 });
 
@@ -160,9 +163,10 @@ function appendHighscoreAnnouncementPlayCta(
 
 function getPrivateMenuKeyboard() {
   return Markup.keyboard([
-    [MENU_LABELS.POINTS, MENU_LABELS.SNAKE],
-    [MENU_LABELS.BOUNCH, MENU_LABELS.LEADERBOARD],
-    [MENU_LABELS.WEEKLY, MENU_LABELS.HELP],
+    [MENU_LABELS.POINTS, MENU_LABELS.MY_STREAK],
+    [MENU_LABELS.SNAKE, MENU_LABELS.BOUNCH],
+    [MENU_LABELS.LEADERBOARD, MENU_LABELS.WEEKLY],
+    [MENU_LABELS.HELP],
   ]).resize();
 }
 
@@ -207,11 +211,16 @@ function getGroupMenuExtra(ctx) {
   const snakeUrl = buildPrivateDeepLink(username, "snake");
   const bounchUrl = buildPrivateDeepLink(username, "bounch");
   const pointsUrl = buildPrivateDeepLink(username, "points");
+  const streakUrl = buildPrivateDeepLink(username, "streak");
 
   const rows = [
     [
       Markup.button.callback("🏆 Leaderboard", GROUP_MENU_CALLBACK.LEADERBOARD),
       Markup.button.callback("📅 Weekly", GROUP_MENU_CALLBACK.WEEKLY),
+    ],
+    [
+      Markup.button.callback("🔥 Streak", GROUP_MENU_CALLBACK.STREAK),
+      Markup.button.callback("🏆 Streak Record", GROUP_MENU_CALLBACK.STREAK_RECORD),
     ],
   ];
 
@@ -226,12 +235,18 @@ function getGroupMenuExtra(ctx) {
     rows.push(playRow);
   }
 
-  const bottomRow = [];
+  const personalRow = [];
   if (pointsUrl) {
-    bottomRow.push(Markup.button.url("🥭 My Points", pointsUrl));
+    personalRow.push(Markup.button.url("🥭 My Points", pointsUrl));
   }
-  bottomRow.push(Markup.button.callback("ℹ️ Help", GROUP_MENU_CALLBACK.HELP));
-  rows.push(bottomRow);
+  if (streakUrl) {
+    personalRow.push(Markup.button.url("🔥 My Streak", streakUrl));
+  }
+  if (personalRow.length) {
+    rows.push(personalRow);
+  }
+
+  rows.push([Markup.button.callback("ℹ️ Help", GROUP_MENU_CALLBACK.HELP)]);
 
   return Markup.inlineKeyboard(rows);
 }
@@ -240,6 +255,8 @@ function isGroupMenuCallback(data) {
   return (
     data === GROUP_MENU_CALLBACK.LEADERBOARD ||
     data === GROUP_MENU_CALLBACK.WEEKLY ||
+    data === GROUP_MENU_CALLBACK.STREAK ||
+    data === GROUP_MENU_CALLBACK.STREAK_RECORD ||
     data === GROUP_MENU_CALLBACK.HELP
   );
 }

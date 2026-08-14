@@ -165,7 +165,7 @@ runTest("2. owner uid verborgen uit weekly", () => {
   assert.ok(formatWeeklyLines(top)[0].startsWith("🥇 Alice"));
 });
 
-runTest("3. verified owner uid verborgen uit Snake", () => {
+runTest("3. verified owner uid blijft zichtbaar op Snake", () => {
   writeScoresFile(snakeFile, {
     ...createEmptyScores(),
     globalHighScore: 900,
@@ -194,14 +194,14 @@ runTest("3. verified owner uid verborgen uit Snake", () => {
   const display = getSnakeDisplay(snakeFile, 10);
   assert.deepStrictEqual(
     display.map((e) => e.name),
-    ["Alice"]
+    ["OwnerAlias", "Alice"]
   );
   const text = formatSnakeLeaderboardMessage(snakeFile, "ManGoTestBot");
-  assert.ok(text.includes("🥇 Alice — 500"));
-  assert.ok(!text.includes("OwnerAlias"));
+  assert.ok(text.includes("🥇 OwnerAlias — 900"));
+  assert.ok(text.includes("Alice"));
 });
 
-runTest("4. verified owner uid verborgen uit Bounch", () => {
+runTest("4. verified owner uid blijft zichtbaar op Bounch", () => {
   bounchScores.writeScoresFile(bounchFile, {
     ...bounchScores.createEmptyScores(),
     globalBestLevel: 7,
@@ -230,11 +230,11 @@ runTest("4. verified owner uid verborgen uit Bounch", () => {
   const display = bounchScores.getDisplayLeaderboard(bounchFile, 10);
   assert.deepStrictEqual(
     display.map((e) => e.name),
-    ["Alice"]
+    ["OwnerAlias", "Alice"]
   );
   const text = formatBounchLeaderboardMessage(bounchFile, "ManGoTestBot");
-  assert.ok(text.includes("🥇 Alice — Level 5"));
-  assert.ok(!text.includes("OwnerAlias"));
+  assert.ok(text.includes("OwnerAlias"));
+  assert.ok(text.includes("Alice"));
 });
 
 runTest("5. andere speler met exact dezelfde display name blijft zichtbaar", () => {
@@ -262,13 +262,13 @@ runTest("5. andere speler met exact dezelfde display name blijft zichtbaar", () 
   assert.strictEqual(display[0].name, "Kevin");
 });
 
-runTest("6. eigenaar met andere game display name blijft verborgen door uid", () => {
+runTest("6. eigenaar met andere game display name blijft zichtbaar via uid", () => {
   assert.strictEqual(
     shouldHideScoreLeaderboardEntry({
       name: "TotallyDifferent",
       telegramUserId: OWNER_ID,
     }),
-    true
+    false
   );
 });
 
@@ -354,8 +354,7 @@ runTest("10. verified submit kan veilige uid koppeling toevoegen", () => {
   });
   assert.strictEqual(data.leaderboard[0].telegramUserId, OWNER_ID);
   assert.strictEqual(data.leaderboard[0].score, 45);
-  // Now hidden from public board
-  assert.deepStrictEqual(getSnakeDisplay(snakeFile, 10), []);
+  assert.strictEqual(getSnakeDisplay(snakeFile, 10)[0].name, "LinkMe");
 });
 
 runTest("11. bestaande andere verified uid wordt niet blind overschreven", () => {
@@ -392,19 +391,19 @@ runTest("12. /points voor eigenaar blijft werken", () => {
   assert.ok(ctx.replies[0].text.includes("500") || ctx.replies[0].text.length > 10);
 });
 
-runTest("13. owner blijft gewoon XP verdienen", () => {
+runTest("13. owner krijgt geen nieuwe community competition XP", () => {
   const before = loadPoints(pointsFile).users[OWNER_ID].points;
   assert.strictEqual(
     awardDailyActivityPoint(OWNER_ID, "Kevin", pointsFile).awarded,
-    true
+    false
   );
   assert.strictEqual(
     awardTriggerPoints(OWNER_ID, "Kevin", "gm", pointsFile).awarded,
-    true
+    false
   );
   assert.strictEqual(
     loadPoints(pointsFile).users[OWNER_ID].points,
-    before + 2
+    before
   );
 });
 
@@ -436,7 +435,7 @@ runTest("bounch verified uid attach + conflict same as snake", () => {
   assert.strictEqual(data.leaderboard[0].bestLevel, 4);
 });
 
-runTest("15. legacy Snake Kevin visible until owner verified submit links uid", () => {
+runTest("15. legacy Snake Kevin visible after owner verified submit links uid", () => {
   writeScoresFile(snakeFile, {
     ...createEmptyScores(),
     globalHighScore: 777,
@@ -458,10 +457,10 @@ runTest("15. legacy Snake Kevin visible until owner verified submit links uid", 
     verifiedTelegramUserId: OWNER_ID,
   });
   assert.strictEqual(data.leaderboard[0].telegramUserId, OWNER_ID);
-  assert.deepStrictEqual(getSnakeDisplay(snakeFile, 10), []);
+  assert.strictEqual(getSnakeDisplay(snakeFile, 10)[0].name, "Kevin");
 });
 
-runTest("16. legacy Bounch Kevin links then hidden", () => {
+runTest("16. legacy Bounch Kevin links then stays visible", () => {
   bounchScores.writeScoresFile(bounchFile, {
     ...bounchScores.createEmptyScores(),
     globalBestLevel: 5,
@@ -486,9 +485,9 @@ runTest("16. legacy Bounch Kevin links then hidden", () => {
   });
   assert.ok(!submitted.error, submitted.error);
   assert.strictEqual(submitted.data.leaderboard[0].telegramUserId, OWNER_ID);
-  assert.deepStrictEqual(
-    bounchScores.getDisplayLeaderboard(bounchFile, 10),
-    []
+  assert.strictEqual(
+    bounchScores.getDisplayLeaderboard(bounchFile, 10)[0].name,
+    "Kevin"
   );
 });
 
@@ -521,7 +520,7 @@ runTest("17. other Kevin with other verified uid stays visible after owner link"
   const display = getSnakeDisplay(snakeFile, 10);
   assert.deepStrictEqual(
     display.map((e) => e.name),
-    ["Kevin"]
+    ["Kevin", "OwnerKev"]
   );
   const stored = readSnakeScores(snakeFile).leaderboard.find(
     (e) => e.name === "Kevin"
@@ -561,7 +560,8 @@ runTest("18. name-dedupe preserves verified uid when higher score is legacy", ()
   assert.strictEqual(raw.leaderboard.length, 1);
   assert.strictEqual(raw.leaderboard[0].score, 200);
   assert.strictEqual(raw.leaderboard[0].telegramUserId, OWNER_ID);
-  assert.deepStrictEqual(getSnakeDisplay(snakeFile, 10), []);
+  assert.strictEqual(getSnakeDisplay(snakeFile, 10)[0].score, 200);
+  assert.strictEqual(getSnakeDisplay(snakeFile, 10)[0].name, "kevin");
 });
 
 restoreAdminEnv();

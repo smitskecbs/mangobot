@@ -341,7 +341,14 @@ function formatCooldownMinutes(remainingMs) {
 }
 
 function buildWinnerReply(userName, awardResult) {
-  const lines = [`⚔️ ${userName} wins the ChatFight!`, `+${CHAT_FIGHT_XP} XP 🥭`];
+  const lines = [`⚔️ ${userName} wins the ChatFight!`];
+  if (awardResult && awardResult.awarded) {
+    const xp =
+      typeof awardResult.pointsToAdd === "number"
+        ? awardResult.pointsToAdd
+        : CHAT_FIGHT_XP;
+    lines.push(`+${xp} XP 🥭`);
+  }
   if (awardResult && awardResult.rankUp && awardResult.rank) {
     lines.push(`${awardResult.rank.emoji} Rank up: ${awardResult.rank.title}!`);
   }

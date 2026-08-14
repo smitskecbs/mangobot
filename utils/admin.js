@@ -6,44 +6,28 @@
 
 const { isAdmin } = require("../services/points");
 const { isGroupChat } = require("./botMenu");
-const {
-  normalizeVerifiedTelegramUserId,
-} = require("./scoreIdentity");
+const { isCommunityCompetitionExcluded } = require("./competition");
 
 const MANAGE_STATUSES = new Set(["creator", "administrator"]);
 
 /**
- * Whether this Telegram user id must be omitted from public leaderboards.
- * Missing ADMIN_USER_ID → hide nobody.
+ * Community competition boards (lifetime, weekly, streaks).
+ * Delegates to the single ADMIN_USER_ID helper.
  * @param {string|number|null|undefined} userId
  * @returns {boolean}
  */
 function shouldHideFromLeaderboards(userId) {
-  const adminId = process.env.ADMIN_USER_ID;
-  if (!adminId) {
-    return false;
-  }
-  if (userId === undefined || userId === null || userId === "") {
-    return false;
-  }
-  return String(userId) === String(adminId);
+  return isCommunityCompetitionExcluded(userId);
 }
 
 /**
- * Snake/Bounch entry hide: only verified telegramUserId === ADMIN_USER_ID.
- * Legacy entries without telegramUserId stay visible (no name-based hide).
- * @param {object|null|undefined} entry
+ * Snake/Bounch highscores stay visible, including ADMIN_USER_ID,
+ * so community members can beat the owner's scores.
+ * @param {object|null|undefined} _entry
  * @returns {boolean}
  */
-function shouldHideScoreLeaderboardEntry(entry) {
-  if (!entry || typeof entry !== "object") {
-    return false;
-  }
-  const uid = normalizeVerifiedTelegramUserId(entry.telegramUserId);
-  if (!uid) {
-    return false;
-  }
-  return shouldHideFromLeaderboards(uid);
+function shouldHideScoreLeaderboardEntry(_entry) {
+  return false;
 }
 
 /**
@@ -103,4 +87,5 @@ module.exports = {
   shouldHideFromLeaderboards,
   shouldHideScoreLeaderboardEntry,
   canManageGroup,
+  isCommunityCompetitionExcluded,
 };

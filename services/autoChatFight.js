@@ -319,8 +319,8 @@ async function tryStartAutoChatFight({
     return finishSkip("active-fight");
   }
   try {
-    const { isTicTacToeBusy } = require("./communityGameState");
-    if (isTicTacToeBusy()) {
+    const { isPvpBusy } = require("./communityGameState");
+    if (isPvpBusy()) {
       return finishSkip("active-pvp");
     }
   } catch (_err) {

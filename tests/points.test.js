@@ -394,7 +394,7 @@ runTest("activityDate today means daily activity claimed", () => {
   assert.strictEqual(hasClaimedDailyActivity({ activityDate: today }), true);
   assert.strictEqual(
     formatClaimedTodayLines({ activityDate: today, triggerDate: null, triggersUsed: [] }),
-    "✅ Daily activity\n⬜ Snake\n⬜ Bounch\n🎮 PvP wins today: 0 / 3"
+    "✅ Daily activity\n⬜ GMango\n⬜ GNango\n⬜ GM\n⬜ GN\n⬜ Snake\n⬜ Bounch\n🎮 PvP wins today: 0 / 3"
   );
 });
 
@@ -406,7 +406,7 @@ runTest("activityDate other day means daily activity not claimed", () => {
       triggerDate: null,
       triggersUsed: [],
     }),
-    "⬜ Daily activity\n⬜ Snake\n⬜ Bounch\n🎮 PvP wins today: 0 / 3"
+    "⬜ Daily activity\n⬜ GMango\n⬜ GNango\n⬜ GM\n⬜ GN\n⬜ Snake\n⬜ Bounch\n🎮 PvP wins today: 0 / 3"
   );
 });
 
@@ -427,7 +427,7 @@ runTest("trigger claimed-today status still works with activity lines", () => {
   assert.deepStrictEqual(getTriggersClaimedToday(user), ["gm", "gmango"]);
   assert.strictEqual(
     formatClaimedTodayLines(user),
-    "✅ Daily activity\n✅ gm\n✅ gmango\n⬜ Snake\n⬜ Bounch\n🎮 PvP wins today: 0 / 3"
+    "✅ Daily activity\n✅ GMango\n⬜ GNango\n✅ GM\n⬜ GN\n⬜ Snake\n⬜ Bounch\n🎮 PvP wins today: 0 / 3"
   );
 
   const triggersOnly = {
@@ -436,7 +436,7 @@ runTest("trigger claimed-today status still works with activity lines", () => {
   };
   assert.strictEqual(
     formatClaimedTodayLines(triggersOnly),
-    "⬜ Daily activity\n✅ gm\n✅ gmango\n⬜ Snake\n⬜ Bounch\n🎮 PvP wins today: 0 / 3"
+    "⬜ Daily activity\n✅ GMango\n⬜ GNango\n✅ GM\n⬜ GN\n⬜ Snake\n⬜ Bounch\n🎮 PvP wins today: 0 / 3"
   );
 });
 
@@ -448,7 +448,7 @@ runTest("legacy user without game → Snake/Bounch unchecked and unlocks 0/7", (
   assert.strictEqual(formatBounchUnlocksLine(legacy), "🎮 Bounch unlocks: 0 / 7");
   assert.strictEqual(
     formatClaimedTodayLines(legacy),
-    "⬜ Daily activity\n⬜ Snake\n⬜ Bounch\n🎮 PvP wins today: 0 / 3"
+    "⬜ Daily activity\n⬜ GMango\n⬜ GNango\n⬜ GM\n⬜ GN\n⬜ Snake\n⬜ Bounch\n🎮 PvP wins today: 0 / 3"
   );
   assert.strictEqual(hasClaimedSnakeToday(undefined), false);
   assert.strictEqual(hasClaimedBounchToday(null), false);
