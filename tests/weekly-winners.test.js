@@ -9,15 +9,8 @@ const path = require("path");
 const assert = require("assert");
 
 const {
-  getWeekId,
-  getTodayDate,
-  awardDailyActivityPoint,
-  loadPoints,
-  savePoints,
-} = require("../services/points");
-const { isCommunityCompetitionExcluded } = require("../utils/competition");
-const {
   TOP_N,
+  DEFAULT_WINNERS_FILE,
   emptyState,
   normalizeState,
   readWinnersState,
@@ -32,7 +25,20 @@ const {
   processWeeklyWinnersBoundary,
   getLatestWeeklyWinners,
   setWeeklyWinnersFileForTests,
+  resolveWinnersFile,
+  isLikelyTestProcess,
+  reconstructCurrentStandingsFromPoints,
 } = require("../services/weeklyWinners");
+const {
+  getWeekId,
+  getTodayDate,
+  awardDailyActivityPoint,
+  loadPoints,
+  savePoints,
+  getEffectiveWeeklyPoints,
+} = require("../services/points");
+const { getWeeklyTop } = require("../services/leaderboard");
+const { isCommunityCompetitionExcluded } = require("../utils/competition");
 const { handleWeeklyWinners } = require("../commands/weeklywinners");
 const { handleWeekly } = require("../commands/weekly");
 const { HELP_MESSAGE } = require("../commands/help");
@@ -548,6 +554,165 @@ async function main() {
       winners: [{ telegramUserId: "1", name: "Alice", weeklyPoints: 1 }],
     });
     assert.ok(msg.includes("Week 32"));
+  });
+
+  await runTest("test process never resolves to production weekly-winners path", () => {
+    assert.strictEqual(isLikelyTestProcess(), true);
+    setWeeklyWinnersFileForTests(null);
+    delete process.env.WEEKLY_WINNERS_FILE;
+    const resolved = resolveWinnersFile();
+    assert.notStrictEqual(
+      path.resolve(resolved),
+      path.resolve(DEFAULT_WINNERS_FILE)
+    );
+    assert.ok(resolved.includes("mango-ww-isolate-") || resolved.includes(os.tmpdir()));
+  });
+
+  await runTest("award path does not mutate production weekly-winners sentinel", () => {
+    setWeeklyWinnersFileForTests(null);
+    delete process.env.WEEKLY_WINNERS_FILE;
+
+    const dir = path.dirname(DEFAULT_WINNERS_FILE);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    const existed = fs.existsSync(DEFAULT_WINNERS_FILE);
+    const stamp = `SENTINEL_POLLUTION_GUARD_${Date.now()}`;
+    const previous = existed
+      ? fs.readFileSync(DEFAULT_WINNERS_FILE, "utf8")
+      : null;
+    if (!existed) {
+      fs.writeFileSync(
+        DEFAULT_WINNERS_FILE,
+        `${JSON.stringify({ sentinel: stamp, latest: null }, null, 2)}\n`,
+        "utf8"
+      );
+    }
+    const before = fs.readFileSync(DEFAULT_WINNERS_FILE, "utf8");
+
+    try {
+      // These fixture IDs previously polluted production standings.
+      awardDailyActivityPoint(42, "Kevin", pointsFile());
+      awardDailyActivityPoint(99, "Ada", pointsFile());
+      awardDailyActivityPoint(111, "Player", pointsFile());
+      awardDailyActivityPoint(222, "Alice", pointsFile());
+      awardDailyActivityPoint(111111111, "Ada", pointsFile());
+      noteWeeklyStanding(42, "Kevin", getWeekId(), 3);
+
+      const after = fs.readFileSync(DEFAULT_WINNERS_FILE, "utf8");
+      assert.strictEqual(after, before);
+    } finally {
+      if (!existed) {
+        try {
+          fs.unlinkSync(DEFAULT_WINNERS_FILE);
+        } catch (_err) {
+          /* ignore */
+        }
+      } else if (previous != null) {
+        // Leave production content untouched (we asserted equality).
+      }
+    }
+  });
+
+  await runTest("reconstruct current standings from points; preserve latest", () => {
+    const pf = pointsFile();
+    const wf = winnersFile();
+    const week = getWeekId();
+    seedUsers(
+      pf,
+      [
+        { id: 1001, name: "KronicGrimm", weeklyPoints: 14, points: 14 },
+        { id: 1002, name: "Pippi", weeklyPoints: 12, points: 12 },
+        { id: 42, name: "KevinFixture", weeklyPoints: 99, points: 99 },
+        { id: OWNER_ID, name: "Kevin", weeklyPoints: 999, points: 999 },
+      ],
+      week
+    );
+    // Fixture id 42 is a real points row here — reconstruction includes it
+    // only because it is in points.json. Pollution IDs absent from points
+    // must not appear.
+    const data = loadPoints(pf);
+    data.users["42"].weekId = getPreviousWeekId(week); // old week → excluded
+    data.users["42"].weeklyPoints = 99;
+    savePoints(data, pf);
+
+    const latest = {
+      week: "2026-08-03",
+      finalizedAt: 123,
+      announced: true,
+      winners: [
+        { telegramUserId: "9", name: "Ay", weeklyPoints: 2 },
+        { telegramUserId: "8", name: "MK", weeklyPoints: 2 },
+      ],
+    };
+    writeWinnersState(
+      {
+        version: 1,
+        lastFinalizedWeek: "2026-08-03",
+        latest,
+        current: {
+          week: week,
+          standings: {
+            42: { name: "Kevin", weeklyPoints: 3 },
+            99: { name: "Ada", weeklyPoints: 1 },
+            111: { name: "Player", weeklyPoints: 3 },
+            222: { name: "Alice", weeklyPoints: 1 },
+            111111111: { name: "Ada", weeklyPoints: 1 },
+            1001: { name: "stale", weeklyPoints: 1 },
+          },
+          updatedAt: 1,
+        },
+      },
+      wf
+    );
+
+    const result = reconstructCurrentStandingsFromPoints({
+      winnersFile: wf,
+      pointsFile: pf,
+    });
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.week, week);
+    assert.strictEqual(result.preservedLatest, true);
+    assert.strictEqual(result.preservedFinalized, true);
+
+    const state = readWinnersState(wf);
+    assert.strictEqual(state.lastFinalizedWeek, "2026-08-03");
+    assert.strictEqual(state.latest.announced, true);
+    assert.deepStrictEqual(
+      state.latest.winners.map((w) => w.name),
+      ["Ay", "MK"]
+    );
+    assert.strictEqual(state.current.week, week);
+    assert.strictEqual(state.current.standings["1001"].weeklyPoints, 14);
+    assert.strictEqual(state.current.standings["1002"].weeklyPoints, 12);
+    assert.strictEqual(state.current.standings["42"], undefined);
+    assert.strictEqual(state.current.standings["99"], undefined);
+    assert.strictEqual(state.current.standings["111"], undefined);
+    assert.strictEqual(state.current.standings[OWNER_ID], undefined);
+
+    // Match /weekly semantics.
+    const top = getWeeklyTop(loadPoints(pf).users, getEffectiveWeeklyPoints, 10);
+    assert.deepStrictEqual(
+      top.map((u) => u.name).sort(),
+      ["KronicGrimm", "Pippi"].sort()
+    );
+    assert.strictEqual(isCommunityCompetitionExcluded(OWNER_ID), true);
+  });
+
+  await runTest("reconstruct 0 users + malformed state safe", () => {
+    const pf = pointsFile();
+    const wf = winnersFile();
+    savePoints({ users: {} }, pf);
+    fs.writeFileSync(wf, "{not-json", "utf8");
+    const result = reconstructCurrentStandingsFromPoints({
+      winnersFile: wf,
+      pointsFile: pf,
+    });
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.standingCount, 0);
+    const state = readWinnersState(wf);
+    assert.strictEqual(state.current.week, getWeekId());
+    assert.deepStrictEqual(state.current.standings, {});
   });
 
   console.log("\nAll weekly-winners tests passed.");

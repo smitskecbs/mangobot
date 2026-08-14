@@ -8,6 +8,7 @@
  */
 
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const lockfile = require("proper-lockfile");
 const { writeJsonFileAtomic } = require("../utils/json");
@@ -30,8 +31,39 @@ const TOP_N = 3;
 /** Test/prod override (also WEEKLY_WINNERS_FILE env). */
 let winnersFileOverride = null;
 
+/** Lazy temp file when tests would otherwise hit the production path. */
+let autoTestWinnersFile = null;
+
 function setWeeklyWinnersFileForTests(filePath) {
   winnersFileOverride = filePath || null;
+}
+
+/**
+ * Detect `node tests/...` / `*.test.js` so award paths never touch production.
+ * Production `node index.js` does not match.
+ */
+function isLikelyTestProcess() {
+  if (process.env.MANGO_FORCE_TEST_WEEKLY_WINNERS === "1") {
+    return true;
+  }
+  for (const arg of process.argv) {
+    if (typeof arg !== "string") {
+      continue;
+    }
+    const norm = arg.replace(/\\/g, "/");
+    if (norm.includes("/tests/") || /\.test\.js$/i.test(norm)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function getAutoTestWinnersFile() {
+  if (!autoTestWinnersFile) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-ww-isolate-"));
+    autoTestWinnersFile = path.join(dir, "weekly-winners.json");
+  }
+  return autoTestWinnersFile;
 }
 
 function resolveWinnersFile(explicit) {
@@ -45,7 +77,14 @@ function resolveWinnersFile(explicit) {
     typeof process.env.WEEKLY_WINNERS_FILE === "string"
       ? process.env.WEEKLY_WINNERS_FILE.trim()
       : "";
-  return fromEnv || DEFAULT_WINNERS_FILE;
+  if (fromEnv) {
+    return fromEnv;
+  }
+  // Structural isolation: never let test processes write the repo production file.
+  if (isLikelyTestProcess()) {
+    return getAutoTestWinnersFile();
+  }
+  return DEFAULT_WINNERS_FILE;
 }
 
 const LOCK_OPTIONS = Object.freeze({
@@ -653,12 +692,89 @@ function getLatestWeeklyWinners(winnersFile) {
   return state.latest;
 }
 
+/**
+ * One-shot maintenance: rebuild current.standings from points.json for the
+ * current UTC week only. Preserves latest / lastFinalizedWeek / announced.
+ * Does NOT auto-run on bot startup.
+ *
+ * Semantics match /weekly: user.weekId must equal getWeekId(); owner excluded.
+ *
+ * @param {object} [options]
+ * @param {string} [options.winnersFile]
+ * @param {string} [options.pointsFile]
+ * @param {Date|Function|number} [options.now]
+ * @returns {{ ok: boolean, week: string|null, standingCount: number, preservedLatest: boolean, reason?: string }}
+ */
+function reconstructCurrentStandingsFromPoints(options = {}) {
+  const winnersFile = resolveWinnersFile(options.winnersFile);
+  const pointsFile = options.pointsFile;
+  const now =
+    typeof options.now === "function" ? options.now() : options.now || new Date();
+  const currentWeek = getWeekId(now);
+
+  let release;
+  try {
+    release = acquireWinnersLock(winnersFile);
+    const state = readWinnersState(winnersFile);
+    const beforeLatest = state.latest
+      ? JSON.stringify(state.latest)
+      : null;
+    const beforeFinalized = state.lastFinalizedWeek;
+
+    const points = pointsFile
+      ? readPointsSnapshot(pointsFile)
+      : loadPoints();
+    const standings = buildCurrentStandingsFromLive(
+      points.users || {},
+      currentWeek
+    );
+
+    state.current = {
+      week: currentWeek,
+      standings,
+      updatedAt:
+        now instanceof Date ? now.getTime() : new Date(now).getTime(),
+    };
+    writeWinnersState(state, winnersFile);
+
+    const afterLatest = state.latest ? JSON.stringify(state.latest) : null;
+    return {
+      ok: true,
+      week: currentWeek,
+      standingCount: Object.keys(standings).length,
+      preservedLatest: beforeLatest === afterLatest,
+      preservedFinalized: beforeFinalized === state.lastFinalizedWeek,
+    };
+  } catch (err) {
+    logError(
+      "[weekly-winners] reconstructCurrentStandings failed:",
+      err && err.message ? err.message : err
+    );
+    return {
+      ok: false,
+      week: null,
+      standingCount: 0,
+      preservedLatest: false,
+      reason: err && err.message ? err.message : String(err),
+    };
+  } finally {
+    if (typeof release === "function") {
+      try {
+        release();
+      } catch (_err) {
+        /* ignore */
+      }
+    }
+  }
+}
+
 module.exports = {
   TOP_N,
   DEFAULT_WINNERS_FILE,
   resolveDefaultWinnersFile,
   setWeeklyWinnersFileForTests,
   resolveWinnersFile,
+  isLikelyTestProcess,
   emptyState,
   normalizeState,
   readWinnersState,
@@ -672,4 +788,5 @@ module.exports = {
   markWeeklyWinnersAnnounced,
   processWeeklyWinnersBoundary,
   getLatestWeeklyWinners,
+  reconstructCurrentStandingsFromPoints,
 };
