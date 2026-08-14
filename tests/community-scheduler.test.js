@@ -98,6 +98,180 @@ async function main() {
     assert.strictEqual(sent.length, 0);
   });
 
+  await runTest(
+    "disabled scheduler: geen weekly announcement ondanks pending Top 3",
+    async () => {
+      const { savePoints } = require("../services/points");
+      const {
+        writeWinnersState,
+        emptyState,
+        readWinnersState,
+      } = require("../services/weeklyWinners");
+      const pf = path.join(tempDir, `points-disabled-weekly-${testCounter}.json`);
+      const wf = path.join(tempDir, `winners-disabled-weekly-${testCounter}.json`);
+      testCounter += 1;
+      savePoints(
+        {
+          users: {
+            1: {
+              name: "Alice",
+              points: 40,
+              weeklyPoints: 40,
+              weekId: "2026-08-03",
+            },
+            2: {
+              name: "Bob",
+              points: 30,
+              weeklyPoints: 30,
+              weekId: "2026-08-03",
+            },
+            3: {
+              name: "Charlie",
+              points: 20,
+              weeklyPoints: 20,
+              weekId: "2026-08-03",
+            },
+          },
+        },
+        pf
+      );
+      writeWinnersState(emptyState(), wf);
+
+      const sent = [];
+      const sched = createCommunityScheduler({
+        enabled: false,
+        chatId: "123",
+        stateFile: stateFile(),
+        pointsFile: pf,
+        weeklyWinnersFile: wf,
+        activityEngineConfig: {
+          enabled: false,
+          twentyFourSeven: false,
+          intervalMinutes: 30,
+          slots: [],
+          autoFightEnabled: false,
+          autoFightMinGapMinutes: 120,
+          autoFightMinGapMs: 120 * 60_000,
+          skipRecentMs: 0,
+          fightTypes: [],
+        },
+        autoChatFightConfig: {
+          enabled: false,
+          intervalMinutes: 120,
+          chancePercent: 0,
+          slots: [],
+          types: [],
+          startHour: 9,
+          endHour: 22,
+          minActivityGapMs: 0,
+        },
+        sendMessage: async (chatId, text) => {
+          sent.push({ chatId, text });
+          return true;
+        },
+        now: () => utcDate("2026-08-10T07:00:00.000Z"),
+      });
+      sched.setLastChecked(utcDate("2026-08-10T06:59:00.000Z"));
+      const result = await sched.tick();
+      assert.strictEqual(result.skipped, "disabled");
+      assert.strictEqual(sent.length, 0);
+      assert.strictEqual(result.weeklyWinners.skipped, "scheduler-disabled");
+      // Not finalized via disabled scheduler path.
+      assert.strictEqual(readWinnersState(wf).lastFinalizedWeek, null);
+    }
+  );
+
+  await runTest(
+    "enabled scheduler announces weekly winners once; no duplicate on retick",
+    async () => {
+      const { savePoints } = require("../services/points");
+      const {
+        writeWinnersState,
+        emptyState,
+        readWinnersState,
+      } = require("../services/weeklyWinners");
+      const pf = path.join(tempDir, `points-enabled-weekly-${testCounter}.json`);
+      const wf = path.join(tempDir, `winners-enabled-weekly-${testCounter}.json`);
+      testCounter += 1;
+      savePoints(
+        {
+          users: {
+            1: {
+              name: "Alice",
+              points: 40,
+              weeklyPoints: 40,
+              weekId: "2026-08-03",
+            },
+            2: {
+              name: "Bob",
+              points: 30,
+              weeklyPoints: 30,
+              weekId: "2026-08-03",
+            },
+          },
+        },
+        pf
+      );
+      writeWinnersState(emptyState(), wf);
+
+      const sent = [];
+      const sched = createCommunityScheduler({
+        enabled: false,
+        chatId: "-1003916996602",
+        stateFile: stateFile(),
+        pointsFile: pf,
+        weeklyWinnersFile: wf,
+        // Activity engine on → scheduler wanted; empty slots → no activity sends.
+        activityEngineConfig: {
+          enabled: true,
+          twentyFourSeven: true,
+          intervalMinutes: 30,
+          slots: [],
+          autoFightEnabled: false,
+          autoFightMinGapMinutes: 120,
+          autoFightMinGapMs: 120 * 60_000,
+          skipRecentMs: 0,
+          fightTypes: [],
+        },
+        autoChatFightConfig: {
+          enabled: false,
+          intervalMinutes: 120,
+          chancePercent: 0,
+          slots: [],
+          types: [],
+          startHour: 9,
+          endHour: 22,
+          minActivityGapMs: 0,
+        },
+        sendMessage: async (chatId, text) => {
+          sent.push({ chatId, text });
+          return true;
+        },
+        now: () => utcDate("2026-08-10T07:00:00.000Z"),
+      });
+      sched.setLastChecked(utcDate("2026-08-10T06:59:00.000Z"));
+
+      const first = await sched.tick();
+      assert.notStrictEqual(first.skipped, "disabled");
+      const weeklySends = sent.filter((s) =>
+        String(s.text).includes("ManGo Weekly Winners")
+      );
+      assert.strictEqual(weeklySends.length, 1);
+      assert.ok(weeklySends[0].text.includes("Alice"));
+      assert.strictEqual(readWinnersState(wf).latest.announced, true);
+      assert.strictEqual(readWinnersState(wf).lastFinalizedWeek, "2026-08-03");
+
+      const before = sent.length;
+      const second = await sched.tick();
+      const weeklyAfter = sent.filter((s) =>
+        String(s.text).includes("ManGo Weekly Winners")
+      );
+      assert.strictEqual(weeklyAfter.length, 1);
+      assert.strictEqual(second.weeklyWinners.posted, false);
+      assert.strictEqual(sent.length, before);
+    }
+  );
+
   await runTest("ontbrekende TELEGRAM_CHAT_ID → geen crash", async () => {
     const sent = [];
     const sched = createCommunityScheduler({

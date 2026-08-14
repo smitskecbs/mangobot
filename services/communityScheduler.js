@@ -760,13 +760,21 @@ function createCommunityScheduler(options = {}) {
   }
 
   async function tick() {
-    const weeklyWinners = await processWeeklyWinners();
-
     const remindersWanted = enabled && !activityConfig.enabled;
     const autoWanted = autoConfig.enabled && !activityConfig.enabled;
     const engineWanted = activityConfig.enabled;
+    const wanted = remindersWanted || autoWanted || engineWanted;
 
-    if (!remindersWanted && !autoWanted && !engineWanted) {
+    // Weekly Top 3 announce uses the same sendMessage channel as community
+    // activity. A disabled scheduler must not send anything — including
+    // weekly-winners. Startup recovery in index.js beforeScheduler remains
+    // the announce path when the scheduler itself never starts.
+    let weeklyWinners = { skipped: "scheduler-disabled" };
+    if (wanted) {
+      weeklyWinners = await processWeeklyWinners();
+    }
+
+    if (!wanted) {
       return { skipped: "disabled", weeklyWinners };
     }
     if (!chatId) {
