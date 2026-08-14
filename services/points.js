@@ -203,6 +203,44 @@ function applySameDayStreakRepair(user, today = getTodayDate()) {
   return { ...streak, repaired: true };
 }
 
+/**
+ * One-shot startup repair: activityDate === today + no streak → streak 1.
+ * No XP. Skips owner/admin. No write when nothing changes.
+ * @param {string} [pointsFile]
+ * @param {string} [todayDate]
+ * @returns {{ repaired: number, written: boolean }}
+ */
+function repairCurrentDayStreaks(pointsFile = POINTS_FILE, todayDate) {
+  const today = todayDate || getTodayDate();
+  const snapshot = readPointsSnapshot(pointsFile);
+  let need = 0;
+  for (const [userId, user] of Object.entries(snapshot.users || {})) {
+    if (isCommunityCompetitionExcluded(userId)) {
+      continue;
+    }
+    if (needsSameDayStreakRepair(user, today)) {
+      need += 1;
+    }
+  }
+  if (need === 0) {
+    return { repaired: 0, written: false };
+  }
+
+  return mutatePoints((data) => {
+    let repaired = 0;
+    for (const [userId, user] of Object.entries(data.users || {})) {
+      if (isCommunityCompetitionExcluded(userId)) {
+        continue;
+      }
+      if (needsSameDayStreakRepair(user, today)) {
+        applySameDayStreakRepair(user, today);
+        repaired += 1;
+      }
+    }
+    return { repaired, written: repaired > 0 };
+  }, pointsFile);
+}
+
 function excludedAwardResult(userId, pointsFile, extra = {}) {
   const data = readPointsSnapshot(pointsFile);
   const user = data.users[String(userId)];
@@ -887,18 +925,83 @@ function awardChatFightXp(userId, userName, pointsFile = POINTS_FILE) {
   }, pointsFile);
 }
 
-/** Trivia race win XP. */
-const TRIVIA_WIN_XP = 2;
+/** Trivia sole-winner round XP. */
+const TRIVIA_ROUND_WIN_XP = 3;
+/** Trivia shared-#1 tie XP. */
+const TRIVIA_TIE_XP = 2;
+/** Max rewarded Trivia rounds per UTC day per user. */
+const TRIVIA_DAILY_REWARD_CAP = 2;
 
 /**
- * Trivia win: +2 lifetime XP and +2 weeklyPoints.
- * Call only after a sync winner claim. Does not claim daily activity.
+ * Ensure optional trivia XP state exists (backward compatible).
+ * @param {object} user
+ * @returns {{ rewardDate: string|null, rewardedRounds: number }}
  */
-function awardTriviaWinXp(userId, userName, pointsFile = POINTS_FILE) {
-  const pointsToAdd = TRIVIA_WIN_XP;
+function ensureTriviaState(user) {
+  if (!user.trivia || typeof user.trivia !== "object") {
+    user.trivia = {
+      rewardDate: null,
+      rewardedRounds: 0,
+    };
+  }
+  if (!Object.prototype.hasOwnProperty.call(user.trivia, "rewardDate")) {
+    user.trivia.rewardDate = null;
+  }
+  let rounds = user.trivia.rewardedRounds;
+  if (typeof rounds !== "number" || !Number.isInteger(rounds) || rounds < 0) {
+    rounds = 0;
+  }
+  user.trivia.rewardedRounds = rounds;
+  return user.trivia;
+}
+
+function resetTriviaIfNewDay(user) {
+  const today = getTodayDate();
+  ensureTriviaState(user);
+  if (user.trivia.rewardDate !== today) {
+    user.trivia.rewardDate = today;
+    user.trivia.rewardedRounds = 0;
+  }
+}
+
+function getTriviaRewardedRoundsToday(user) {
+  if (!user || typeof user !== "object" || !user.trivia || typeof user.trivia !== "object") {
+    return 0;
+  }
+  if (user.trivia.rewardDate !== getTodayDate()) {
+    return 0;
+  }
+  const rounds = user.trivia.rewardedRounds;
+  if (typeof rounds !== "number" || !Number.isInteger(rounds) || rounds < 0) {
+    return 0;
+  }
+  return rounds;
+}
+
+/**
+ * Trivia round reward XP with per-UTC-day rewarded-round cap.
+ * @param {string|number} userId
+ * @param {string} userName
+ * @param {number} pointsToAdd
+ * @param {string} [pointsFile]
+ */
+function awardTriviaRoundXp(
+  userId,
+  userName,
+  pointsToAdd,
+  pointsFile = POINTS_FILE
+) {
+  const amount =
+    typeof pointsToAdd === "number" && Number.isInteger(pointsToAdd) && pointsToAdd > 0
+      ? pointsToAdd
+      : TRIVIA_ROUND_WIN_XP;
 
   if (isCommunityCompetitionExcluded(userId)) {
-    return excludedAwardResult(userId, pointsFile, { pointsToAdd: 0 });
+    return excludedAwardResult(userId, pointsFile, {
+      pointsToAdd: 0,
+      rewardedRoundsToday: 0,
+      dailyCap: TRIVIA_DAILY_REWARD_CAP,
+    });
   }
 
   return mutatePoints((data) => {
@@ -906,10 +1009,25 @@ function awardTriviaWinXp(userId, userName, pointsFile = POINTS_FILE) {
     const user = ensureUserRecord(data, id, userName);
     user.name = userName;
     resetWeeklyIfNewWeek(user);
+    resetTriviaIfNewDay(user);
+
+    if (user.trivia.rewardedRounds >= TRIVIA_DAILY_REWARD_CAP) {
+      return {
+        awarded: false,
+        reason: "daily-cap",
+        points: user.points,
+        pointsToAdd: 0,
+        rewardedRoundsToday: user.trivia.rewardedRounds,
+        dailyCap: TRIVIA_DAILY_REWARD_CAP,
+        rankUp: false,
+        rank: getRank(user.points),
+      };
+    }
 
     const pointsBefore = user.points;
-    user.points += pointsToAdd;
-    user.weeklyPoints += pointsToAdd;
+    user.points += amount;
+    user.weeklyPoints += amount;
+    user.trivia.rewardedRounds += 1;
 
     const previousRank = getRank(pointsBefore);
     const rank = getRank(user.points);
@@ -918,12 +1036,19 @@ function awardTriviaWinXp(userId, userName, pointsFile = POINTS_FILE) {
     return {
       awarded: true,
       points: user.points,
-      pointsToAdd,
+      pointsToAdd: amount,
+      rewardedRoundsToday: user.trivia.rewardedRounds,
+      dailyCap: TRIVIA_DAILY_REWARD_CAP,
       rankUp,
       rank,
       previousRank,
     };
   }, pointsFile);
+}
+
+/** @deprecated Use awardTriviaRoundXp — kept name alias for clarity in older call sites. */
+function awardTriviaWinXp(userId, userName, pointsFile = POINTS_FILE) {
+  return awardTriviaRoundXp(userId, userName, TRIVIA_ROUND_WIN_XP, pointsFile);
 }
 
 /** PvP board-game win XP (Tic-Tac-Toe, later Connect Four). */
@@ -1082,8 +1207,13 @@ module.exports = {
   awardDailyActivityPoint,
   awardTriggerPoints,
   awardChatFightXp,
+  awardTriviaRoundXp,
   awardTriviaWinXp,
-  TRIVIA_WIN_XP,
+  TRIVIA_ROUND_WIN_XP,
+  TRIVIA_TIE_XP,
+  TRIVIA_DAILY_REWARD_CAP,
+  ensureTriviaState,
+  getTriviaRewardedRoundsToday,
   awardPvpWinXp,
   PVP_WIN_XP,
   PVP_DAILY_WIN_CAP,
@@ -1099,5 +1229,6 @@ module.exports = {
   applyDailyActivityStreak,
   needsSameDayStreakRepair,
   applySameDayStreakRepair,
+  repairCurrentDayStreaks,
   emptyStreak,
 };

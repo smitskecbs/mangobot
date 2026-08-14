@@ -615,7 +615,8 @@ runTest("22-24. timeout ends fight; one message; no XP after", () => {
   clock.advance(60_000);
   assert.strictEqual(service.getActiveFight(), null);
   assert.strictEqual(sent.length, 1);
-  assert.ok(sent[0].text.includes("ChatFight over"));
+  assert.ok(sent[0].text.includes("CHAT FIGHT EXPIRED"));
+  assert.ok(sent[0].text.includes("Nobody solved it in time"));
   assert.ok(sent[0].text.includes("Answer:"));
 
   // Second timeout tick must not double-send
@@ -1170,7 +1171,7 @@ runTest("reveal21. reveal timeout without click", () => {
   assert.strictEqual(service.getActiveFight(), null);
   assert.strictEqual(service.getFightSnapshot().status, FIGHT_STATUS.EXPIRED);
   assert.strictEqual(sent.length, 1);
-  assert.ok(sent[0].text.includes("Nobody revealed"));
+  assert.ok(sent[0].text.includes("Nobody revealed the challenge"));
   const claim = service.tryClaimWinner(USER_A, COMMUNITY_CHAT, "MANGO");
   assert.strictEqual(claim.claimed, false);
 });
@@ -1189,7 +1190,8 @@ runTest("reveal22-23. answer timeout after reveal; timer cleanup", () => {
   clock.advance(60_000);
   assert.strictEqual(service.getActiveFight(), null);
   assert.strictEqual(sent.length, 1);
-  assert.ok(sent[0].text.includes("ChatFight over"));
+  assert.ok(sent[0].text.includes("CHAT FIGHT EXPIRED"));
+  assert.ok(sent[0].text.includes("Nobody solved it in time"));
   assert.strictEqual(clock.pendingCount(), 0);
 });
 

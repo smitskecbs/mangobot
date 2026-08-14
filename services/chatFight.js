@@ -5,6 +5,10 @@
  */
 
 const { Markup } = require("telegraf");
+const {
+  emptyInlineKeyboardExtra,
+  scheduleExpiredMessageCleanup,
+} = require("../utils/expiredMessageCleanup");
 
 const CHAT_FIGHT_DURATION_MS = 60 * 1000;
 const CHAT_FIGHT_REVEAL_WAIT_MS = 5 * 60 * 1000;
@@ -359,9 +363,27 @@ function buildTimeoutMessage(fight) {
   const answer =
     fight && fight.revealAnswer != null ? String(fight.revealAnswer) : null;
   if (answer) {
-    return `⚔️ ChatFight over!\nNo winner this round.\nAnswer: ${answer}`;
+    return `⏱ CHAT FIGHT EXPIRED
+
+Nobody solved it in time.
+
+Answer: ${answer}
+
+Challenge closed. 🥭`;
   }
-  return "⚔️ ChatFight over!\nNo winner this round.";
+  return `⏱ CHAT FIGHT EXPIRED
+
+Nobody solved it in time.
+
+Challenge closed. 🥭`;
+}
+
+function buildRevealTimeoutMessage() {
+  return `⏱ CHAT FIGHT EXPIRED
+
+Nobody revealed the challenge.
+
+Challenge closed. 🥭`;
 }
 
 function buildTeaserText() {
@@ -465,12 +487,48 @@ function createChatFightService(options = {}) {
   }
 
   function notifyTimeout(text) {
+    if (!fight) {
+      return;
+    }
+    const extra = emptyInlineKeyboardExtra();
+    const chatId = fight.chatId;
+    const messageId = fight.messageId;
+
+    const afterEdit = () => {
+      if (messageId != null) {
+        scheduleExpiredMessageCleanup({
+          chatId,
+          messageId,
+          setTimeoutFn,
+          clearTimeoutFn,
+          deleteMessageFn:
+            typeof options.deleteMessageFn === "function"
+              ? options.deleteMessageFn
+              : null,
+          telegram: options.telegram || null,
+        });
+      }
+    };
+
+    if (typeof editMessage === "function" && messageId != null) {
+      Promise.resolve(editMessage(chatId, messageId, text, extra))
+        .then(afterEdit)
+        .catch(() => {
+          const notify =
+            typeof fight.sendMessage === "function"
+              ? fight.sendMessage
+              : sendMessage;
+          if (typeof notify === "function") {
+            Promise.resolve(notify(chatId, text)).catch(() => {});
+          }
+        });
+      return;
+    }
+
     const notify =
-      fight && typeof fight.sendMessage === "function"
-        ? fight.sendMessage
-        : sendMessage;
-    if (typeof notify === "function" && fight) {
-      Promise.resolve(notify(fight.chatId, text)).catch(() => {});
+      typeof fight.sendMessage === "function" ? fight.sendMessage : sendMessage;
+    if (typeof notify === "function") {
+      Promise.resolve(notify(chatId, text)).catch(() => {});
     }
   }
 
@@ -491,7 +549,7 @@ function createChatFightService(options = {}) {
         return;
       }
       timeoutMessageSent = true;
-      notifyTimeout("⚔️ ChatFight expired.\nNobody revealed the challenge.");
+      notifyTimeout(buildRevealTimeoutMessage());
     }, delay);
   }
 
@@ -774,7 +832,7 @@ function createChatFightService(options = {}) {
     if (!timeoutMessageSent) {
       timeoutMessageSent = true;
       const text = wasWaiting
-        ? "⚔️ ChatFight expired.\nNobody revealed the challenge."
+        ? buildRevealTimeoutMessage()
         : buildTimeoutMessage(fight);
       notifyTimeout(text);
       return {
@@ -826,6 +884,7 @@ function createChatFightService(options = {}) {
     clearFightTimer,
     buildWinnerReply,
     buildTimeoutMessage,
+    buildRevealTimeoutMessage,
     buildTeaserText,
     getRevealKeyboard,
     generateChallenge,
@@ -855,6 +914,7 @@ module.exports = {
   formatCooldownMinutes,
   buildWinnerReply,
   buildTimeoutMessage,
+  buildRevealTimeoutMessage,
   buildTeaserText,
   getRevealKeyboard,
   generateChallenge,

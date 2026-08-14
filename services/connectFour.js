@@ -276,12 +276,13 @@ Good game! 🥭`;
 }
 
 function buildExpiredText() {
-  return `🟡 CONNECT FOUR
+  return `⏱ CONNECT FOUR EXPIRED
 
-Challenge expired — nobody joined in time.`;
+No opponent joined in time.`;
 }
 
 function renderMessage(session, xpResult) {
+  const { emptyInlineKeyboardExtra } = require("../utils/expiredMessageCleanup");
   if (session.status === STATUS.WAITING) {
     return {
       text: buildWaitingText(session),
@@ -297,19 +298,19 @@ function renderMessage(session, xpResult) {
   if (session.status === STATUS.WON) {
     return {
       text: buildWonText(session, xpResult),
-      extra: undefined,
+      extra: emptyInlineKeyboardExtra(),
     };
   }
   if (session.status === STATUS.DRAW) {
     return {
       text: buildDrawText(session),
-      extra: undefined,
+      extra: emptyInlineKeyboardExtra(),
     };
   }
   if (session.status === STATUS.EXPIRED) {
-    return { text: buildExpiredText(), extra: undefined };
+    return { text: buildExpiredText(), extra: emptyInlineKeyboardExtra() };
   }
-  return { text: "🟡 CONNECT FOUR", extra: undefined };
+  return { text: "🟡 CONNECT FOUR", extra: emptyInlineKeyboardExtra() };
 }
 
 function createConnectFourService(options = {}) {

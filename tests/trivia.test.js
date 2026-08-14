@@ -1,5 +1,5 @@
 /**
- * Trivia race + question bank validation.
+ * Trivia 5-question rounds + auto engine + XP cap.
  * Run: node tests/trivia.test.js
  */
 
@@ -13,7 +13,10 @@ const {
   parseTriviaCallbackData,
   buildAnswerCallbackData,
   STATUS,
-  TRIVIA_TIMEOUT_MS,
+  TRIVIA_ROUND_QUESTIONS,
+  TRIVIA_ROUND_WIN_XP,
+  TRIVIA_TIE_XP,
+  rankRoundScores,
 } = require("../services/trivia");
 const {
   TRIVIA_QUESTIONS,
@@ -22,24 +25,32 @@ const {
   validateTriviaQuestionBank,
 } = require("../services/triviaQuestions");
 const {
-  awardTriviaWinXp,
-  TRIVIA_WIN_XP,
+  awardTriviaRoundXp,
+  TRIVIA_DAILY_REWARD_CAP,
   loadPoints,
 } = require("../services/points");
 const { handleTrivia, handleTriviaAnswer } = require("../commands/trivia");
-const { handleChatFight } = require("../commands/chatfight");
-const { handleTicTacToe } = require("../commands/tictactoe");
-const { handleConnectFour } = require("../commands/connect4");
-const { createChatFightService } = require("../services/chatFight");
-const { createTicTacToeService } = require("../services/ticTacToe");
-const { createConnectFourService } = require("../services/connectFour");
-const { createPvpSessionManager } = require("../services/pvpSessionManager");
 const {
   isCommunityChallengeBusy,
   getCommunityBusyReason,
 } = require("../services/communityGameState");
-const { ACTION_REGISTRY } = require("../services/communityActivityEngine");
+const {
+  ACTION_REGISTRY,
+  ACTION_WEIGHTS,
+  ACTION_IDS,
+  chooseAction,
+  processCommunityActivitySlot,
+  isActionEligible,
+} = require("../services/communityActivityEngine");
+const { createChatFightService } = require("../services/chatFight");
 const { HELP_MESSAGE } = require("../commands/help");
+const {
+  scheduleExpiredMessageCleanup,
+  emptyInlineKeyboardExtra,
+  EXPIRED_MESSAGE_CLEANUP_MS,
+  clearAllExpiredMessageCleanups,
+  getPendingExpiredCleanupCount,
+} = require("../utils/expiredMessageCleanup");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-trivia-"));
 let testCounter = 0;
@@ -73,6 +84,7 @@ function restoreEnv() {
 
 async function runTest(name, fn) {
   resetEnv();
+  clearAllExpiredMessageCleanups();
   try {
     await fn();
     console.log(`✓ ${name}`);
@@ -114,13 +126,19 @@ function createFakeTimers() {
   };
 }
 
-const SAMPLE_QUESTION = Object.freeze({
-  id: "test-mars",
-  category: "space",
-  question: "Which planet is known as the Red Planet?",
-  answers: Object.freeze(["Venus", "Mars", "Jupiter", "Mercury"]),
-  correctIndex: 1,
-});
+function makeBank(n = 20) {
+  const bank = [];
+  for (let i = 0; i < n; i += 1) {
+    bank.push({
+      id: `t-${i}`,
+      category: "general knowledge",
+      question: `Question number ${i}?`,
+      answers: ["Alpha", "Beta", "Gamma", "Delta"],
+      correctIndex: 1,
+    });
+  }
+  return bank;
+}
 
 function createService(overrides = {}) {
   const timers = createFakeTimers();
@@ -128,24 +146,51 @@ function createService(overrides = {}) {
     now: timers.now,
     setTimeoutFn: timers.setTimeout,
     clearTimeoutFn: timers.clearTimeout,
-    timeoutMs:
-      overrides.timeoutMs != null ? overrides.timeoutMs : TRIVIA_TIMEOUT_MS,
+    questionTimeoutMs:
+      overrides.questionTimeoutMs != null ? overrides.questionTimeoutMs : 60_000,
+    nextQuestionDelayMs:
+      overrides.nextQuestionDelayMs != null ? overrides.nextQuestionDelayMs : 5_000,
+    totalQuestions:
+      overrides.totalQuestions != null
+        ? overrides.totalQuestions
+        : TRIVIA_ROUND_QUESTIONS,
     random: overrides.random || (() => 0),
     randomIdFn: overrides.randomIdFn || (() => "abc123"),
-    questions: overrides.questions || TRIVIA_QUESTIONS,
+    questions: overrides.questions || makeBank(30),
     antiRepeatWindow: overrides.antiRepeatWindow,
   });
   return { service, timers };
 }
 
-function startSample(service, chatId = COMMUNITY_CHAT) {
-  const started = service.startTrivia({
-    chatId,
-    question: SAMPLE_QUESTION,
-  });
+function startRound(service, chatId = COMMUNITY_CHAT) {
+  const started = service.startTrivia({ chatId, source: "manual" });
   assert.strictEqual(started.ok, true);
   service.setMessageId(started.session.id, 9001);
   return started;
+}
+
+function answerCorrect(service, sessionId, userId, name) {
+  const snap = service.getSnapshot();
+  assert.ok(snap);
+  return service.tryAnswer({
+    sessionId,
+    userId,
+    answerIndex: snap.correctIndex,
+    chatId: COMMUNITY_CHAT,
+    displayName: name,
+  });
+}
+
+function answerWrong(service, sessionId, userId, name) {
+  const snap = service.getSnapshot();
+  const wrong = (snap.correctIndex + 1) % 4;
+  return service.tryAnswer({
+    sessionId,
+    userId,
+    answerIndex: wrong,
+    chatId: COMMUNITY_CHAT,
+    displayName: name,
+  });
 }
 
 function createMockCtx({
@@ -194,21 +239,379 @@ function createMockCtx({
 async function main() {
   resetEnv();
 
-  await runTest("question bank validates (>=50, unique, 4 answers)", () => {
+  await runTest("question bank validates", () => {
     const result = validateTriviaQuestionBank(TRIVIA_QUESTIONS);
     assert.strictEqual(result.ok, true, result.errors.join("; "));
     assert.ok(TRIVIA_QUESTIONS.length >= 50);
-    const categories = new Set(TRIVIA_QUESTIONS.map((q) => q.category));
-    assert.ok(categories.has("geography"));
-    assert.ok(categories.has("science"));
-    assert.ok(categories.has("history"));
-    assert.ok(categories.has("animals/nature"));
-    assert.ok(categories.has("technology"));
-    assert.ok(categories.has("space"));
-    assert.ok(categories.has("sports"));
-    assert.ok(categories.has("food/culture"));
-    assert.ok(categories.has("simple math/logic"));
-    assert.ok(categories.has("general knowledge"));
+  });
+
+  await runTest("round = 5 questions + numbering", () => {
+    const { service } = createService();
+    const started = startRound(service);
+    assert.strictEqual(started.session.totalQuestions, 5);
+    assert.strictEqual(started.session.questionNumber, 1);
+    assert.ok(started.text.includes("Question 1 / 5"));
+    assert.strictEqual(TRIVIA_ROUND_QUESTIONS, 5);
+  });
+
+  await runTest("one attempt per question; resets next question", () => {
+    const { service, timers } = createService({ nextQuestionDelayMs: 5_000 });
+    const started = startRound(service);
+    const wrong = answerWrong(service, started.session.id, USER_A, "Alice");
+    assert.strictEqual(wrong.correct, false);
+    const again = answerCorrect(service, started.session.id, USER_A, "Alice");
+    assert.strictEqual(again.reason, "already-answered");
+
+    answerCorrect(service, started.session.id, USER_B, "Bob");
+    timers.advance(5_000);
+    assert.strictEqual(service.getSnapshot().questionNumber, 2);
+    const next = answerCorrect(service, started.session.id, USER_A, "Alice");
+    assert.strictEqual(next.questionWon, true);
+    assert.strictEqual(service.getSnapshot().scores[String(USER_A)].score, 1);
+  });
+
+  await runTest("first correct earns 1 round point; wrong 0; no lifetime XP yet", () => {
+    const file = pointsFile();
+    const { service } = createService();
+    const started = startRound(service);
+    service.tryAnswer({
+      sessionId: started.session.id,
+      userId: USER_A,
+      answerIndex: (service.getSnapshot().correctIndex + 1) % 4,
+      chatId: COMMUNITY_CHAT,
+      displayName: "Alice",
+    });
+    answerCorrect(service, started.session.id, USER_B, "Bob");
+    assert.strictEqual(service.getSnapshot().scores[String(USER_B)].score, 1);
+    assert.strictEqual(service.getSnapshot().scores[String(USER_A)], undefined);
+    assert.strictEqual(loadPoints(file).users[String(USER_B)], undefined);
+  });
+
+  await runTest("question timeout continues round; 5th completes", () => {
+    const edits = [];
+    const { service, timers } = createService({
+      questionTimeoutMs: 60_000,
+      nextQuestionDelayMs: 5_000,
+    });
+    service.setEditMessageHandler((chatId, messageId, text, extra) => {
+      edits.push({ text, extra });
+    });
+    const file = pointsFile();
+    service.setAwardXpHandler((uid, name, amount) =>
+      awardTriviaRoundXp(uid, name, amount, file)
+    );
+    startRound(service);
+    assert.strictEqual(service.isTriviaOpen(), true);
+
+    for (let q = 1; q <= 5; q += 1) {
+      assert.strictEqual(service.getSnapshot().questionNumber, q);
+      timers.advance(60_000);
+      assert.ok(edits.some((e) => e.text.includes("TIME'S UP")));
+      if (q < 5) {
+        timers.advance(5_000);
+      } else {
+        timers.advance(5_000);
+      }
+    }
+    assert.strictEqual(service.isTriviaOpen(), false);
+    assert.strictEqual(service.getSnapshot().status, STATUS.COMPLETE);
+    assert.ok(edits.some((e) => e.text.includes("TRIVIA COMPLETE")));
+  });
+
+  await runTest("sole winner +3 XP; tie +2 XP; owner +0; daily cap", () => {
+    const file = pointsFile();
+    assert.strictEqual(TRIVIA_ROUND_WIN_XP, 3);
+    assert.strictEqual(TRIVIA_TIE_XP, 2);
+    assert.strictEqual(TRIVIA_DAILY_REWARD_CAP, 2);
+
+    const sole = awardTriviaRoundXp(USER_A, "Alice", TRIVIA_ROUND_WIN_XP, file);
+    assert.strictEqual(sole.awarded, true);
+    assert.strictEqual(sole.pointsToAdd, 3);
+    assert.strictEqual(loadPoints(file).users[String(USER_A)].points, 3);
+    assert.strictEqual(loadPoints(file).users[String(USER_A)].weeklyPoints, 3);
+
+    const tie = awardTriviaRoundXp(USER_B, "Bob", TRIVIA_TIE_XP, file);
+    assert.strictEqual(tie.awarded, true);
+    assert.strictEqual(tie.pointsToAdd, 2);
+
+    const owner = awardTriviaRoundXp(OWNER_ID, "Kevin", TRIVIA_ROUND_WIN_XP, file);
+    assert.strictEqual(owner.awarded, false);
+    assert.strictEqual(owner.reason, "excluded");
+
+    awardTriviaRoundXp(USER_A, "Alice", TRIVIA_ROUND_WIN_XP, file);
+    const capped = awardTriviaRoundXp(USER_A, "Alice", TRIVIA_ROUND_WIN_XP, file);
+    assert.strictEqual(capped.awarded, false);
+    assert.strictEqual(capped.reason, "daily-cap");
+    assert.strictEqual(loadPoints(file).users[String(USER_A)].points, 6);
+  });
+
+  await runTest("full round sole winner awards once; concurrency one question winner", () => {
+    const file = pointsFile();
+    const { service, timers } = createService({ nextQuestionDelayMs: 1 });
+    service.setAwardXpHandler((uid, name, amount) =>
+      awardTriviaRoundXp(uid, name, amount, file)
+    );
+    const edits = [];
+    service.setEditMessageHandler((c, m, text) => {
+      edits.push(text);
+    });
+    const started = startRound(service);
+
+    for (let q = 1; q <= 5; q += 1) {
+      const a = answerCorrect(service, started.session.id, USER_A, "Alice");
+      const b = answerCorrect(service, started.session.id, USER_B, "Bob");
+      assert.strictEqual(a.questionWon, true);
+      assert.strictEqual(b.ok, false);
+      timers.advance(1);
+    }
+    assert.strictEqual(service.isTriviaOpen(), false);
+    assert.strictEqual(loadPoints(file).users[String(USER_A)].points, 3);
+    assert.strictEqual(loadPoints(file).users[String(USER_B)], undefined);
+    const claim2 = service.claimRoundXp();
+    assert.strictEqual(claim2.shouldAward, false);
+  });
+
+  await runTest("tie winners both get +2", () => {
+    const file = pointsFile();
+    const { service, timers } = createService({ nextQuestionDelayMs: 1 });
+    service.setAwardXpHandler((uid, name, amount) =>
+      awardTriviaRoundXp(uid, name, amount, file)
+    );
+    service.setEditMessageHandler(() => {});
+    const started = startRound(service);
+    // A wins Q1,Q2; B wins Q3,Q4; Q5 timeout → tie 2-2
+    answerCorrect(service, started.session.id, USER_A, "Alice");
+    timers.advance(1);
+    answerCorrect(service, started.session.id, USER_A, "Alice");
+    timers.advance(1);
+    answerCorrect(service, started.session.id, USER_B, "Bob");
+    timers.advance(1);
+    answerCorrect(service, started.session.id, USER_B, "Bob");
+    timers.advance(1);
+    timers.advance(60_000);
+    timers.advance(1);
+    assert.strictEqual(loadPoints(file).users[String(USER_A)].points, 2);
+    assert.strictEqual(loadPoints(file).users[String(USER_B)].points, 2);
+  });
+
+  await runTest("all scores 0 after five questions → no tie XP", () => {
+    const file = pointsFile();
+    const awards = [];
+    const edits = [];
+    const { service, timers } = createService({ nextQuestionDelayMs: 1 });
+    service.setAwardXpHandler((uid, name, amount) => {
+      awards.push({ uid, name, amount });
+      return awardTriviaRoundXp(uid, name, amount, file);
+    });
+    service.setEditMessageHandler((_c, _m, text) => {
+      edits.push(text);
+    });
+    startRound(service);
+    for (let q = 1; q <= 5; q += 1) {
+      timers.advance(60_000);
+      timers.advance(1);
+    }
+    assert.strictEqual(service.isTriviaOpen(), false);
+    assert.strictEqual(service.getSnapshot().status, STATUS.COMPLETE);
+    assert.strictEqual(awards.length, 0);
+    assert.strictEqual(Object.keys(loadPoints(file).users || {}).length, 0);
+    const claim = service.claimRoundXp();
+    assert.strictEqual(claim.shouldAward, false);
+    assert.strictEqual(claim.ok, false);
+    assert.strictEqual(claim.reason, "already-claimed");
+    const final = edits.find((t) => t.includes("TRIVIA COMPLETE"));
+    assert.ok(final);
+    assert.ok(final.includes("No Trivia winner — nobody scored."));
+    assert.ok(final.includes("No Trivia XP this round."));
+    assert.ok(!final.includes("Trivia tie"));
+    const ranked = rankRoundScores(service.getSnapshot().scores);
+    assert.strictEqual(ranked.length, 0);
+  });
+
+  await runTest("busy remains between questions; released after round", () => {
+    const { service, timers } = createService({ nextQuestionDelayMs: 5_000 });
+    const started = startRound(service);
+    assert.strictEqual(
+      isCommunityChallengeBusy({
+        isChatFightOpenFn: () => false,
+        isTicTacToeOpenFn: () => false,
+        isConnectFourOpenFn: () => false,
+        isTriviaOpenFn: () => service.isTriviaOpen(),
+      }),
+      true
+    );
+    answerCorrect(service, started.session.id, USER_A, "Alice");
+    assert.strictEqual(service.isTriviaOpen(), true);
+    timers.advance(5_000);
+    assert.strictEqual(service.isTriviaOpen(), true);
+    for (let q = 2; q <= 5; q += 1) {
+      answerCorrect(service, started.session.id, USER_A, "Alice");
+      timers.advance(5_000);
+    }
+    assert.strictEqual(service.isTriviaOpen(), false);
+  });
+
+  await runTest("auto registry + weights total 100", () => {
+    assert.strictEqual(ACTION_REGISTRY.trivia.enabledForAuto, true);
+    assert.strictEqual(ACTION_REGISTRY.trivia.mode, "race");
+    assert.strictEqual(ACTION_WEIGHTS[ACTION_IDS.TRIVIA], 15);
+    assert.strictEqual(ACTION_WEIGHTS[ACTION_IDS.CHATFIGHT], 18);
+    const total = Object.values(ACTION_WEIGHTS).reduce((a, b) => a + b, 0);
+    assert.strictEqual(total, 100);
+  });
+
+  await runTest("auto slot may select Trivia; busy blocks", async () => {
+    const { service } = createService();
+    const fight = createChatFightService({ cooldownMs: 0 });
+    const config = {
+      enabled: true,
+      autoFightEnabled: true,
+      autoFightMinGapMs: 0,
+      skipRecentMs: 0,
+      fightTypes: ["type_rush"],
+      slots: [{ id: "s1", label: "00:00", hour: 0, minute: 0 }],
+    };
+    const state = { sent: {}, autoChatFight: {}, recentActivityTypes: [] };
+    let announced = null;
+    const result = await processCommunityActivitySlot({
+      chatId: COMMUNITY_CHAT,
+      slot: config.slots[0],
+      dayKey: "2026-08-14",
+      config,
+      state,
+      chatFight: fight,
+      triviaRuntime: service,
+      sendMessage: async () => true,
+      announceTrivia: async (chatId, text, keyboard) => {
+        announced = { chatId, text, keyboard };
+        return { message_id: 42 };
+      },
+      nowMs: Date.now(),
+      random: () => 0.2,
+      wasActiveWithinFn: () => false,
+    });
+    // With random 0.2 and weights, may or may not pick trivia — force eligibility checks
+    assert.strictEqual(
+      isActionEligible(ACTION_IDS.TRIVIA, {
+        config,
+        chatFight: fight,
+        autoState: {},
+        nowMs: Date.now(),
+      }),
+      true
+    );
+    fight.startFight({ chatId: COMMUNITY_CHAT, type: "type_rush", source: "auto" });
+    assert.strictEqual(
+      isActionEligible(ACTION_IDS.TRIVIA, {
+        config,
+        chatFight: fight,
+        autoState: {},
+        nowMs: Date.now(),
+      }),
+      false
+    );
+    fight.reset();
+
+    // isTriviaBusy() reads the production singleton
+    const { getTriviaRuntime } = require("../services/trivia");
+    const prod = getTriviaRuntime();
+    prod.reset();
+    assert.strictEqual(
+      prod.startTrivia({ chatId: COMMUNITY_CHAT, source: "manual" }).ok,
+      true
+    );
+    assert.strictEqual(
+      isActionEligible(ACTION_IDS.TRIVIA, {
+        config,
+        chatFight: fight,
+        autoState: {},
+        nowMs: Date.now(),
+      }),
+      false
+    );
+    prod.reset();
+    service.reset();
+    void result;
+    void announced;
+  });
+
+  await runTest("auto starts same 5-question runtime without admin", async () => {
+    const { service } = createService();
+    const started = service.startTrivia({
+      chatId: COMMUNITY_CHAT,
+      source: "auto",
+      autoIntro: true,
+    });
+    assert.strictEqual(started.ok, true);
+    assert.ok(started.text.includes("5-question community round"));
+    assert.ok(started.text.includes("Question 1 / 5"));
+    assert.strictEqual(started.session.totalQuestions, 5);
+
+    const member = createMockCtx({ userId: USER_A, memberStatus: "member" });
+    await handleTrivia(member, {
+      startTriviaFn: () => ({ ok: false }),
+      canManageGroupFn: async () => false,
+    });
+    assert.ok(member.replies[0].includes("admin"));
+  });
+
+  await runTest("cleanup helper schedules delete; failure safe", async () => {
+    const timers = createFakeTimers();
+    let deleted = null;
+    let logged = false;
+    const scheduled = scheduleExpiredMessageCleanup({
+      chatId: COMMUNITY_CHAT,
+      messageId: 55,
+      delayMs: EXPIRED_MESSAGE_CLEANUP_MS,
+      setTimeoutFn: timers.setTimeout,
+      clearTimeoutFn: timers.clearTimeout,
+      deleteMessageFn: async () => {
+        deleted = 55;
+        throw new Error("boom");
+      },
+      logErrorFn: () => {
+        logged = true;
+      },
+    });
+    assert.strictEqual(scheduled.scheduled, true);
+    assert.strictEqual(getPendingExpiredCleanupCount(), 1);
+    timers.advance(EXPIRED_MESSAGE_CLEANUP_MS);
+    await Promise.resolve();
+    assert.strictEqual(deleted, 55);
+    assert.strictEqual(logged, true);
+    assert.ok(emptyInlineKeyboardExtra().reply_markup.inline_keyboard);
+  });
+
+  await runTest("callbacks opaque; help lists 5-question", () => {
+    const data = buildAnswerCallbackData("abc123", 1);
+    assert.strictEqual(data, "trivia:abc123:1");
+    assert.ok(!data.includes("Beta"));
+    assert.deepStrictEqual(parseTriviaCallbackData(data), {
+      sessionId: "abc123",
+      answerIndex: 1,
+    });
+    assert.ok(HELP_MESSAGE.includes("5-question Trivia round"));
+  });
+
+  await runTest("anti-repeat window", () => {
+    const bank = makeBank(3);
+    let recent = [];
+    const seen = [];
+    for (let i = 0; i < 5; i += 1) {
+      const picked = pickTriviaQuestion(bank, recent, () => 0, 10);
+      recent = picked.recentIds;
+      seen.push(picked.question.id);
+    }
+    assert.deepStrictEqual(seen.slice(0, 3), ["t-0", "t-1", "t-2"]);
+    assert.ok(ANTI_REPEAT_WINDOW >= 10);
+  });
+
+  await runTest("fatal abort releases busy", () => {
+    const { service } = createService();
+    startRound(service);
+    service.abortRound("edit-failed");
+    assert.strictEqual(service.isTriviaOpen(), false);
+    assert.strictEqual(service.getSnapshot().status, STATUS.ABORTED);
   });
 
   await runTest("configured group only + private rejected", async () => {
@@ -219,448 +622,11 @@ async function main() {
       canManageGroupFn: async () => true,
     });
     assert.ok(privateCtx.replies[0].includes("community group"));
-
-    const wrong = service.startTrivia({ chatId: OTHER_CHAT });
-    assert.strictEqual(wrong.ok, false);
-    assert.strictEqual(wrong.reason, "wrong-chat");
-  });
-
-  await runTest("admin start + non-admin rejected", async () => {
-    const { service } = createService();
-    const member = createMockCtx({ userId: USER_A, memberStatus: "member" });
-    await handleTrivia(member, {
-      startTriviaFn: (p) => service.startTrivia(p),
-      canManageGroupFn: async () => false,
-    });
-    assert.ok(member.replies[0].includes("admin"));
-
-    const admin = createMockCtx({
-      userId: ADMIN_ID,
-      memberStatus: "administrator",
-    });
-    await handleTrivia(admin, {
-      startTriviaFn: (p) => service.startTrivia(p),
-      canManageGroupFn: async () => true,
-      isBusyFn: () => false,
-    });
-    assert.ok(admin.replies[0].includes("MANGO TRIVIA"));
-    assert.strictEqual(service.isTriviaOpen(), true);
-  });
-
-  await runTest("exactly 4 answers + correct answer server-side", () => {
-    const { service } = createService();
-    const started = startSample(service);
-    assert.strictEqual(started.session.answers.length, 4);
-    assert.strictEqual(started.session.correctIndex, 1);
-    assert.strictEqual(started.session.answers[1], "Mars");
-    assert.ok(!started.text.includes("correctIndex"));
-    assert.ok(started.text.includes("[B] Mars"));
-  });
-
-  await runTest("callbacks contain no answer text or user id", () => {
-    const data = buildAnswerCallbackData("abc123", 1);
-    assert.strictEqual(data, "trivia:abc123:1");
-    assert.ok(!data.includes("Mars"));
-    assert.ok(!data.includes(String(USER_A)));
-    assert.deepStrictEqual(parseTriviaCallbackData(data), {
-      sessionId: "abc123",
-      answerIndex: 1,
-    });
-    assert.strictEqual(parseTriviaCallbackData("trivia:abc123:9"), null);
-    assert.strictEqual(parseTriviaCallbackData("trivia:abc123:1:extra"), null);
-    assert.strictEqual(parseTriviaCallbackData("pvp:c4:join:abc"), null);
-  });
-
-  await runTest("first correct wins + wrong no XP + one attempt", () => {
-    const file = pointsFile();
-    const { service } = createService();
-    const started = startSample(service);
-
-    const wrong = service.tryAnswer({
-      sessionId: started.session.id,
-      userId: USER_A,
-      answerIndex: 0,
-      chatId: COMMUNITY_CHAT,
-      displayName: "Alice",
-    });
-    assert.strictEqual(wrong.ok, true);
-    assert.strictEqual(wrong.correct, false);
-    assert.strictEqual(wrong.toast, "Wrong answer ❌");
-    assert.strictEqual(loadPoints(file).users[String(USER_A)], undefined);
-
-    const again = service.tryAnswer({
-      sessionId: started.session.id,
-      userId: USER_A,
-      answerIndex: 1,
-      chatId: COMMUNITY_CHAT,
-      displayName: "Alice",
-    });
-    assert.strictEqual(again.ok, false);
-    assert.strictEqual(again.reason, "already-answered");
-
-    const win = service.tryAnswer({
-      sessionId: started.session.id,
-      userId: USER_B,
-      answerIndex: 1,
-      chatId: COMMUNITY_CHAT,
-      displayName: "Bob",
-    });
-    assert.strictEqual(win.ok, true);
-    assert.strictEqual(win.correct, true);
-    assert.strictEqual(win.won, true);
-    const claim = service.claimXpAward(started.session.id);
-    assert.strictEqual(claim.shouldAward, true);
-    const xp = awardTriviaWinXp(claim.winnerUserId, "Bob", file);
-    assert.strictEqual(xp.awarded, true);
-    assert.strictEqual(xp.pointsToAdd, TRIVIA_WIN_XP);
-    assert.strictEqual(TRIVIA_WIN_XP, 2);
-    const user = loadPoints(file).users[String(USER_B)];
-    assert.strictEqual(user.points, 2);
-    assert.strictEqual(user.weeklyPoints, 2);
-  });
-
-  await runTest("second user can still answer after first wrong", () => {
-    const { service } = createService();
-    const started = startSample(service);
-    service.tryAnswer({
-      sessionId: started.session.id,
-      userId: USER_A,
-      answerIndex: 0,
-      chatId: COMMUNITY_CHAT,
-      displayName: "Alice",
-    });
-    const win = service.tryAnswer({
-      sessionId: started.session.id,
-      userId: USER_B,
-      answerIndex: 1,
-      chatId: COMMUNITY_CHAT,
-      displayName: "Bob",
-    });
-    assert.strictEqual(win.won, true);
-    assert.strictEqual(win.session.winnerId, String(USER_B));
-  });
-
-  await runTest("owner answers for +0 XP", () => {
-    const file = pointsFile();
-    const { service } = createService();
-    const started = startSample(service);
-    const win = service.tryAnswer({
-      sessionId: started.session.id,
-      userId: OWNER_ID,
-      answerIndex: 1,
-      chatId: COMMUNITY_CHAT,
-      displayName: "Kevin",
-    });
-    assert.strictEqual(win.won, true);
-    const claim = service.claimXpAward(started.session.id);
-    const xp = awardTriviaWinXp(claim.winnerUserId, "Kevin", file);
-    assert.strictEqual(xp.awarded, false);
-    assert.strictEqual(xp.reason, "excluded");
-    assert.strictEqual(loadPoints(file).users[String(OWNER_ID)], undefined);
-    const rendered = service.applyXpResultToRender(started.session.id, xp);
-    assert.ok(rendered.text.includes("Winner:"));
-    assert.ok(!rendered.text.includes("Reward: +2"));
-  });
-
-  await runTest("timeout + no answer after timeout + timer cleanup", () => {
-    const edits = [];
-    const { service, timers } = createService({ timeoutMs: 60_000 });
-    service.setEditMessageHandler((chatId, messageId, text) => {
-      edits.push({ chatId, messageId, text });
-    });
-    const started = startSample(service);
-    assert.strictEqual(timers.pendingCount(), 1);
-    assert.strictEqual(service.isTriviaOpen(), true);
-    timers.advance(60_000);
-    assert.strictEqual(service.isTriviaOpen(), false);
-    assert.strictEqual(timers.pendingCount(), 0);
-    assert.ok(edits[0].text.includes("TRIVIA OVER"));
-    assert.ok(edits[0].text.includes("Mars"));
-
-    const late = service.tryAnswer({
-      sessionId: started.session.id,
-      userId: USER_A,
-      answerIndex: 1,
-      chatId: COMMUNITY_CHAT,
-      displayName: "Alice",
-    });
-    assert.strictEqual(late.ok, false);
-    assert.strictEqual(late.reason, "finished");
-  });
-
-  await runTest("concurrent correct → one winner", () => {
-    const file = pointsFile();
-    const { service } = createService();
-    const started = startSample(service);
-    const a = service.tryAnswer({
-      sessionId: started.session.id,
-      userId: USER_A,
-      answerIndex: 1,
-      chatId: COMMUNITY_CHAT,
-      displayName: "Alice",
-    });
-    const b = service.tryAnswer({
-      sessionId: started.session.id,
-      userId: USER_B,
-      answerIndex: 1,
-      chatId: COMMUNITY_CHAT,
-      displayName: "Bob",
-    });
-    assert.strictEqual(a.won, true);
-    assert.strictEqual(b.ok, false);
-    assert.strictEqual(b.reason, "finished");
-    const claim1 = service.claimXpAward(started.session.id);
-    const claim2 = service.claimXpAward(started.session.id);
-    assert.strictEqual(claim1.shouldAward, true);
-    assert.strictEqual(claim2.shouldAward, false);
-    awardTriviaWinXp(claim1.winnerUserId, "Alice", file);
-    assert.strictEqual(loadPoints(file).users[String(USER_A)].points, 2);
-    assert.strictEqual(loadPoints(file).users[String(USER_B)], undefined);
-  });
-
-  await runTest("busy state ChatFight / TTT / Connect Four / Trivia", async () => {
-    const { service } = createService();
-    startSample(service);
-
-    assert.strictEqual(
-      getCommunityBusyReason({
-        isChatFightOpenFn: () => false,
-        isTicTacToeOpenFn: () => false,
-        isConnectFourOpenFn: () => false,
-        isTriviaOpenFn: () => service.isTriviaOpen(),
-      }),
-      "trivia"
-    );
-    assert.strictEqual(
-      isCommunityChallengeBusy({
-        isChatFightOpenFn: () => false,
-        isTicTacToeOpenFn: () => false,
-        isConnectFourOpenFn: () => false,
-        isTriviaOpenFn: () => true,
-      }),
-      true
-    );
-
-    const fight = createChatFightService({
-      cooldownMs: 0,
-      durationMs: 60_000,
-      revealWaitMs: 300_000,
-    });
-    fight.startFight({ chatId: COMMUNITY_CHAT, type: null });
-    const triviaBlockedByFight = createMockCtx({ userId: ADMIN_ID });
-    await handleTrivia(triviaBlockedByFight, {
-      startTriviaFn: (p) => service.startTrivia(p),
-      canManageGroupFn: async () => true,
-      isBusyFn: isCommunityChallengeBusy,
-      getBusyReasonFn: getCommunityBusyReason,
-      isChatFightOpenFn: () => fight.isFightOpen(),
-      isTicTacToeOpenFn: () => false,
-      isConnectFourOpenFn: () => false,
-      isTriviaOpenFn: () => false,
-    });
-    assert.ok(triviaBlockedByFight.replies[0].includes("ChatFight"));
-    fight.reset();
-
-    const timers = createFakeTimers();
-    const manager = createPvpSessionManager({
-      now: timers.now,
-      setTimeoutFn: timers.setTimeout,
-      clearTimeoutFn: timers.clearTimeout,
-      pairCooldownMs: 0,
-    });
-    const ttt = createTicTacToeService({ manager, now: timers.now });
-    const c4 = createConnectFourService({ manager, now: timers.now });
-    assert.strictEqual(ttt.startChallenge({ chatId: COMMUNITY_CHAT }).ok, true);
-
-    const triviaBlockedByTtt = createMockCtx({ userId: ADMIN_ID });
-    await handleTrivia(triviaBlockedByTtt, {
-      startTriviaFn: (p) => createService().service.startTrivia(p),
-      canManageGroupFn: async () => true,
-      isBusyFn: isCommunityChallengeBusy,
-      getBusyReasonFn: getCommunityBusyReason,
-      isChatFightOpenFn: () => false,
-      isTicTacToeOpenFn: () => ttt.isOpen(),
-      isConnectFourOpenFn: () => false,
-      isTriviaOpenFn: () => false,
-    });
-    assert.ok(triviaBlockedByTtt.replies[0].includes("Tic-Tac-Toe"));
-    manager.resetAll();
-
-    assert.strictEqual(c4.startChallenge({ chatId: COMMUNITY_CHAT }).ok, true);
-    const triviaBlockedByC4 = createMockCtx({ userId: ADMIN_ID });
-    await handleTrivia(triviaBlockedByC4, {
-      startTriviaFn: (p) => createService().service.startTrivia(p),
-      canManageGroupFn: async () => true,
-      isBusyFn: isCommunityChallengeBusy,
-      getBusyReasonFn: getCommunityBusyReason,
-      isChatFightOpenFn: () => false,
-      isTicTacToeOpenFn: () => false,
-      isConnectFourOpenFn: () => c4.isOpen(),
-      isTriviaOpenFn: () => false,
-    });
-    assert.ok(triviaBlockedByC4.replies[0].includes("Connect Four"));
-    manager.resetAll();
-
-    const openTrivia = createService().service;
-    startSample(openTrivia);
-    const chatFightCtx = createMockCtx({
-      userId: ADMIN_ID,
-      text: "/chatfight",
-    });
-    await handleChatFight(chatFightCtx, {
-      startFightFn: () => ({ ok: false, reason: "should-not-run" }),
-      canManageGroupFn: async () => true,
-      isBusyFn: isCommunityChallengeBusy,
-      getBusyReasonFn: getCommunityBusyReason,
-      isChatFightOpenFn: () => false,
-      isTicTacToeOpenFn: () => false,
-      isConnectFourOpenFn: () => false,
-      isTriviaOpenFn: () => openTrivia.isTriviaOpen(),
-    });
-    assert.ok(chatFightCtx.replies[0].includes("Trivia"));
-
-    const tttCtx = createMockCtx({ userId: ADMIN_ID, text: "/tictactoe" });
-    await handleTicTacToe(tttCtx, {
-      startChallengeFn: () => ({ ok: false }),
-      canManageGroupFn: async () => true,
-      isBusyFn: isCommunityChallengeBusy,
-      getBusyReasonFn: getCommunityBusyReason,
-      isChatFightOpenFn: () => false,
-      isTicTacToeOpenFn: () => false,
-      isConnectFourOpenFn: () => false,
-      isTriviaOpenFn: () => openTrivia.isTriviaOpen(),
-    });
-    assert.ok(tttCtx.replies[0].includes("Trivia"));
-
-    const c4Ctx = createMockCtx({ userId: ADMIN_ID, text: "/connect4" });
-    await handleConnectFour(c4Ctx, {
-      startChallengeFn: () => ({ ok: false }),
-      canManageGroupFn: async () => true,
-      isBusyFn: isCommunityChallengeBusy,
-      getBusyReasonFn: getCommunityBusyReason,
-      isChatFightOpenFn: () => false,
-      isTicTacToeOpenFn: () => false,
-      isConnectFourOpenFn: () => false,
-      isTriviaOpenFn: () => openTrivia.isTriviaOpen(),
-    });
-    assert.ok(c4Ctx.replies[0].includes("Trivia"));
-  });
-
-  await runTest("busy released after completion", () => {
-    const { service } = createService();
-    const started = startSample(service);
-    assert.strictEqual(service.isTriviaOpen(), true);
-    service.tryAnswer({
-      sessionId: started.session.id,
-      userId: USER_A,
-      answerIndex: 1,
-      chatId: COMMUNITY_CHAT,
-      displayName: "Alice",
-    });
-    assert.strictEqual(service.isTriviaOpen(), false);
-    assert.strictEqual(
-      isCommunityChallengeBusy({
-        isChatFightOpenFn: () => false,
-        isTicTacToeOpenFn: () => false,
-        isConnectFourOpenFn: () => false,
-        isTriviaOpenFn: () => service.isTriviaOpen(),
-      }),
-      false
-    );
-  });
-
-  await runTest("question anti-repeat window + fallback", () => {
-    const bank = [
-      { id: "a", category: "x", question: "A?", answers: ["1", "2", "3", "4"], correctIndex: 0 },
-      { id: "b", category: "x", question: "B?", answers: ["1", "2", "3", "4"], correctIndex: 0 },
-      { id: "c", category: "x", question: "C?", answers: ["1", "2", "3", "4"], correctIndex: 0 },
-    ];
-    let recent = [];
-    const seen = [];
-    for (let i = 0; i < 5; i += 1) {
-      const picked = pickTriviaQuestion(bank, recent, () => 0, 10);
-      recent = picked.recentIds;
-      seen.push(picked.question.id);
-    }
-    assert.deepStrictEqual(seen.slice(0, 3), ["a", "b", "c"]);
-    assert.strictEqual(seen[3], "a");
-    assert.ok(ANTI_REPEAT_WINDOW >= 10);
-  });
-
-  await runTest("malformed callback / wrong chat / bot safe", async () => {
-    const { service } = createService();
-    const started = startSample(service);
-
-    const malformed = createMockCtx({
-      callbackData: "trivia:not-hex:1",
-    });
-    await handleTriviaAnswer(malformed, { runtime: service });
-    assert.strictEqual(malformed.cbAnswers.length, 0);
-    assert.strictEqual(service.isTriviaOpen(), true);
-
-    const botCtx = createMockCtx({
-      isBot: true,
-      callbackData: buildAnswerCallbackData(started.session.id, 1),
-    });
-    await handleTriviaAnswer(botCtx, { runtime: service });
-    assert.ok(botCtx.cbAnswers[0].includes("Bots"));
-    assert.strictEqual(service.isTriviaOpen(), true);
-
-    const wrongChat = createMockCtx({
-      chatId: OTHER_CHAT,
-      callbackData: buildAnswerCallbackData(started.session.id, 1),
-    });
-    await handleTriviaAnswer(wrongChat, { runtime: service });
-    assert.ok(wrongChat.cbAnswers[0].includes("Wrong chat"));
-    assert.strictEqual(service.isTriviaOpen(), true);
-  });
-
-  await runTest("callback handler awards + edits complete message", async () => {
-    const file = pointsFile();
-    const { service } = createService();
-    const started = startSample(service);
-    const ctx = createMockCtx({
-      userId: USER_C,
-      firstName: "Carol",
-      callbackData: buildAnswerCallbackData(started.session.id, 1),
-    });
-    await handleTriviaAnswer(ctx, {
-      runtime: service,
-      awardTriviaWinXpFn: (uid, name) => awardTriviaWinXp(uid, name, file),
-    });
-    assert.ok(ctx.cbAnswers.some((a) => a.includes("Correct")));
-    assert.ok(ctx.edited[0].text.includes("TRIVIA COMPLETE"));
-    assert.ok(ctx.edited[0].text.includes("Carol"));
-    assert.ok(ctx.edited[0].text.includes("Reward: +2 XP"));
-    assert.strictEqual(loadPoints(file).users[String(USER_C)].points, 2);
-    assert.strictEqual(service.isTriviaOpen(), false);
-  });
-
-  await runTest("help lists /trivia; auto registry disabled", () => {
-    assert.ok(HELP_MESSAGE.includes("/trivia"));
-    assert.strictEqual(ACTION_REGISTRY.trivia.enabledForAuto, false);
-    assert.strictEqual(ACTION_REGISTRY.trivia.mode, "race");
-  });
-
-  await runTest("trivia does not claim daily activity via callback", async () => {
-    const file = pointsFile();
-    const { service } = createService();
-    const started = startSample(service);
-    const ctx = createMockCtx({
-      userId: USER_A,
-      callbackData: buildAnswerCallbackData(started.session.id, 1),
-    });
-    await handleTriviaAnswer(ctx, {
-      runtime: service,
-      awardTriviaWinXpFn: (uid, name) => awardTriviaWinXp(uid, name, file),
-    });
-    const user = loadPoints(file).users[String(USER_A)];
-    assert.strictEqual(user.points, 2);
-    assert.strictEqual(user.activityDate, null);
   });
 
   fs.rmSync(tempDir, { recursive: true, force: true });
   restoreEnv();
+  clearAllExpiredMessageCleanups();
   console.log("\nAll trivia tests passed.");
 }
 

@@ -217,12 +217,13 @@ Good game! 🥭`;
 }
 
 function buildExpiredText() {
-  return `🎮 TIC-TAC-TOE
+  return `⏱ TIC-TAC-TOE EXPIRED
 
-Challenge expired — nobody joined in time.`;
+No opponent joined in time.`;
 }
 
 function renderMessage(session, xpResult) {
+  const { emptyInlineKeyboardExtra } = require("../utils/expiredMessageCleanup");
   if (session.status === STATUS.WAITING) {
     return {
       text: buildWaitingText(session),
@@ -238,19 +239,19 @@ function renderMessage(session, xpResult) {
   if (session.status === STATUS.WON) {
     return {
       text: buildWonText(session, xpResult),
-      extra: buildBoardKeyboard(session, false),
+      extra: emptyInlineKeyboardExtra(),
     };
   }
   if (session.status === STATUS.DRAW) {
     return {
       text: buildDrawText(session),
-      extra: buildBoardKeyboard(session, false),
+      extra: emptyInlineKeyboardExtra(),
     };
   }
   if (session.status === STATUS.EXPIRED) {
-    return { text: buildExpiredText(), extra: undefined };
+    return { text: buildExpiredText(), extra: emptyInlineKeyboardExtra() };
   }
-  return { text: "🎮 TIC-TAC-TOE", extra: undefined };
+  return { text: "🎮 TIC-TAC-TOE", extra: emptyInlineKeyboardExtra() };
 }
 
 function createTicTacToeService(options = {}) {

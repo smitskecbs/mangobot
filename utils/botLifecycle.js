@@ -5,6 +5,11 @@
  * then awaits the polling loop. The returned Promise stays pending until
  * polling stops — so scheduler startup must use the onLaunch callback,
  * never `launch().then(...)`.
+ *
+ * Order inside onLaunch:
+ * 1. log "ManGo Bot running"
+ * 2. optional beforeScheduler (e.g. streak repair) — must not throw out
+ * 3. start community scheduler
  */
 
 function startBotRuntime({
@@ -12,6 +17,7 @@ function startBotRuntime({
   startScheduler,
   logFn = console.log,
   onLaunchFailed,
+  beforeScheduler,
 }) {
   if (!bot || typeof bot.launch !== "function") {
     throw new Error("startBotRuntime requires bot.launch");
@@ -29,6 +35,18 @@ function startBotRuntime({
     }
     schedulerStarted = true;
     logFn("🥭 ManGo Bot running...");
+
+    if (typeof beforeScheduler === "function") {
+      try {
+        beforeScheduler();
+      } catch (err) {
+        logFn(
+          "[lifecycle] beforeScheduler failed:",
+          err && err.message ? err.message : err
+        );
+      }
+    }
+
     try {
       communityScheduler = startScheduler(bot.telegram);
     } catch (err) {
@@ -55,6 +73,23 @@ function startBotRuntime({
   function shutdown(signal) {
     if (communityScheduler && typeof communityScheduler.stop === "function") {
       communityScheduler.stop("shutdown");
+    }
+    try {
+      const {
+        clearAllExpiredMessageCleanups,
+      } = require("./expiredMessageCleanup");
+      clearAllExpiredMessageCleanups();
+    } catch (_err) {
+      /* ignore */
+    }
+    try {
+      const { getTriviaRuntime } = require("../services/trivia");
+      const runtime = getTriviaRuntime();
+      if (runtime && typeof runtime.clearAllTimers === "function") {
+        runtime.clearAllTimers();
+      }
+    } catch (_err) {
+      /* ignore */
     }
     bot.stop(signal);
   }

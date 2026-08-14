@@ -140,6 +140,65 @@ async function main() {
     resolveLaunch();
   });
 
+  await runTest("beforeScheduler runs after ManGo log, before scheduler start", async () => {
+    const order = [];
+    const fake = createFakeBot({
+      onLaunchHook: (onLaunch) => {
+        onLaunch();
+      },
+    });
+
+    startBotRuntime({
+      bot: fake.bot,
+      startScheduler: () => {
+        order.push("scheduler");
+        return { stop() {} };
+      },
+      logFn: (...args) => {
+        const line = args.join(" ");
+        if (line.includes("🥭 ManGo Bot running...")) {
+          order.push("running");
+        }
+      },
+      beforeScheduler: () => {
+        order.push("repair");
+      },
+    });
+
+    await sleep(10);
+    assert.deepStrictEqual(order, ["running", "repair", "scheduler"]);
+  });
+
+  await runTest("beforeScheduler error does not block scheduler start", async () => {
+    let startCount = 0;
+    const logs = [];
+    const fake = createFakeBot({
+      onLaunchHook: (onLaunch) => {
+        onLaunch();
+      },
+    });
+
+    const runtime = startBotRuntime({
+      bot: fake.bot,
+      startScheduler: () => {
+        startCount += 1;
+        return { stop() {} };
+      },
+      logFn: (...args) => logs.push(args.join(" ")),
+      beforeScheduler: () => {
+        throw new Error("repair boom");
+      },
+    });
+
+    await sleep(10);
+    assert.strictEqual(startCount, 1);
+    assert.strictEqual(runtime.isSchedulerStarted(), true);
+    assert.ok(
+      logs.some((line) => line.includes("beforeScheduler failed")),
+      "generic failure log expected"
+    );
+  });
+
   await runTest("F. scheduler starts exactly once even if onLaunch re-fired", async () => {
     let startCount = 0;
     const fake = createFakeBot({

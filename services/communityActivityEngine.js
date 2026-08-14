@@ -30,6 +30,7 @@ const QUIET_GROUP_MS = 60 * 60 * 1000;
 
 const ACTION_IDS = Object.freeze({
   CHATFIGHT: "chatfight",
+  TRIVIA: "trivia",
   GAME: "game",
   COMMUNITY: "community",
   WEEKLY: "weekly",
@@ -41,22 +42,28 @@ const ACTION_IDS = Object.freeze({
   SKIP: "skip",
 });
 
-/** Exact total weight 100. */
+/**
+ * Exact total weight 100.
+ * Before Trivia: chatfight 25, game 12, community 12, weekly 8, snake 9,
+ * bounch 9, gmgn 7, leaderboard 7, checkin 7, skip 4.
+ */
 const ACTION_WEIGHTS = Object.freeze({
-  [ACTION_IDS.CHATFIGHT]: 25,
-  [ACTION_IDS.GAME]: 12,
-  [ACTION_IDS.COMMUNITY]: 12,
+  [ACTION_IDS.CHATFIGHT]: 18,
+  [ACTION_IDS.TRIVIA]: 15,
+  [ACTION_IDS.GAME]: 11,
+  [ACTION_IDS.COMMUNITY]: 10,
   [ACTION_IDS.WEEKLY]: 8,
-  [ACTION_IDS.SNAKE]: 9,
-  [ACTION_IDS.BOUNCH]: 9,
-  [ACTION_IDS.GMGN]: 7,
-  [ACTION_IDS.LEADERBOARD]: 7,
-  [ACTION_IDS.CHECKIN]: 7,
+  [ACTION_IDS.SNAKE]: 8,
+  [ACTION_IDS.BOUNCH]: 8,
+  [ACTION_IDS.GMGN]: 6,
+  [ACTION_IDS.LEADERBOARD]: 6,
+  [ACTION_IDS.CHECKIN]: 6,
   [ACTION_IDS.SKIP]: 4,
 });
 
 const INTERACTIVE_ACTIONS = new Set([
   ACTION_IDS.CHATFIGHT,
+  ACTION_IDS.TRIVIA,
   ACTION_IDS.SNAKE,
   ACTION_IDS.BOUNCH,
   ACTION_IDS.WEEKLY,
@@ -75,6 +82,12 @@ const ACTION_REGISTRY = Object.freeze({
     id: ACTION_IDS.CHATFIGHT,
     mode: "race",
     category: "chatfight",
+  }),
+  [ACTION_IDS.TRIVIA]: Object.freeze({
+    id: ACTION_IDS.TRIVIA,
+    mode: "race",
+    category: "trivia",
+    enabledForAuto: true,
   }),
   [ACTION_IDS.GAME]: Object.freeze({
     id: ACTION_IDS.GAME,
@@ -134,11 +147,12 @@ const ACTION_REGISTRY = Object.freeze({
     category: "pvp",
     enabledForAuto: false,
   }),
+  // Alias kept for older tests that read ACTION_REGISTRY.trivia
   trivia: Object.freeze({
     id: "trivia",
     mode: "race",
     category: "trivia",
-    enabledForAuto: false,
+    enabledForAuto: true,
   }),
 });
 
@@ -393,12 +407,26 @@ function buildWeights(config, context) {
     weights[ACTION_IDS.CHATFIGHT] = Math.round(
       weights[ACTION_IDS.CHATFIGHT] * 1.4
     );
+    weights[ACTION_IDS.TRIVIA] = Math.round(weights[ACTION_IDS.TRIVIA] * 1.3);
     weights[ACTION_IDS.SNAKE] = Math.round(weights[ACTION_IDS.SNAKE] * 1.3);
     weights[ACTION_IDS.BOUNCH] = Math.round(weights[ACTION_IDS.BOUNCH] * 1.3);
     weights[ACTION_IDS.GAME] = Math.round(weights[ACTION_IDS.GAME] * 1.2);
   }
 
   return weights;
+}
+
+function isInteractiveBusy() {
+  try {
+    const {
+      isPvpBusy,
+      isTriviaBusy,
+      isChatFightBusy,
+    } = require("./communityGameState");
+    return Boolean(isChatFightBusy() || isPvpBusy() || isTriviaBusy());
+  } catch (_err) {
+    return false;
+  }
 }
 
 function isActionEligible(actionId, context) {
@@ -433,6 +461,23 @@ function isActionEligible(actionId, context) {
       context.nowMs - last < context.config.autoFightMinGapMs
     ) {
       return false;
+    }
+    return true;
+  }
+  if (actionId === ACTION_IDS.TRIVIA) {
+    if (context.chatFight && context.chatFight.isFightOpen()) {
+      return false;
+    }
+    try {
+      const { isPvpBusy, isTriviaBusy } = require("./communityGameState");
+      if (isPvpBusy()) {
+        return false;
+      }
+      if (isTriviaBusy()) {
+        return false;
+      }
+    } catch (_err) {
+      /* ignore */
     }
     return true;
   }
@@ -510,8 +555,10 @@ async function processCommunityActivitySlot({
   config,
   state,
   chatFight = chatFightRuntime,
+  triviaRuntime = null,
   sendMessage,
   announceChatFight,
+  announceTrivia,
   nowMs = Date.now(),
   random = Math.random,
   wasActiveWithinFn = wasActiveWithin,
@@ -544,6 +591,15 @@ async function processCommunityActivitySlot({
   }
   if (!Array.isArray(state.recentActivityTypes)) {
     state.recentActivityTypes = [];
+  }
+
+  let trivia = triviaRuntime;
+  if (!trivia) {
+    try {
+      trivia = require("./trivia").getTriviaRuntime();
+    } catch (_err) {
+      trivia = null;
+    }
   }
 
   const context = {
@@ -589,6 +645,18 @@ async function processCommunityActivitySlot({
       actionId,
     ];
     return { action: actionId, sent: true, reason: "sent" };
+  }
+
+  function pickPromptFallback() {
+    const promptIds = [
+      ACTION_IDS.SNAKE,
+      ACTION_IDS.BOUNCH,
+      ACTION_IDS.WEEKLY,
+      ACTION_IDS.LEADERBOARD,
+      ACTION_IDS.GAME,
+      ACTION_IDS.COMMUNITY,
+    ];
+    return promptIds[Math.floor(random() * promptIds.length)];
   }
 
   async function tryChatFight() {
@@ -638,6 +706,56 @@ async function processCommunityActivitySlot({
     return { ok: true, reason: "started" };
   }
 
+  async function tryTrivia() {
+    if (!isActionEligible(ACTION_IDS.TRIVIA, context)) {
+      return { ok: false, reason: "busy" };
+    }
+    if (!trivia || typeof trivia.startTrivia !== "function") {
+      return { ok: false, reason: "missing-runtime" };
+    }
+    if (typeof announceTrivia !== "function" && typeof sendMessage !== "function") {
+      return { ok: false, reason: "missing-announcer" };
+    }
+    const started = trivia.startTrivia({
+      chatId,
+      source: "auto",
+      autoIntro: true,
+    });
+    if (!started.ok) {
+      return { ok: false, reason: started.reason || "start-failed" };
+    }
+    try {
+      const announce =
+        typeof announceTrivia === "function" ? announceTrivia : sendMessage;
+      const sentMsg = await announce(
+        chatId,
+        started.text,
+        started.keyboard || undefined
+      );
+      const messageId =
+        sentMsg &&
+        (sentMsg.message_id != null ? sentMsg.message_id : sentMsg.messageId);
+      if (messageId != null && typeof trivia.setMessageId === "function") {
+        trivia.setMessageId(started.session.id, messageId);
+      }
+    } catch (_err) {
+      logError("[activity-engine] trivia announce failed");
+      if (typeof trivia.abortRound === "function") {
+        trivia.abortRound("send-failed");
+      } else if (typeof trivia.reset === "function") {
+        trivia.reset();
+      }
+      return { ok: false, reason: "send-failed" };
+    }
+    state.lastActivityType = ACTION_IDS.TRIVIA;
+    state.lastMessageKey = String(started.text || "").slice(0, 80);
+    state.recentActivityTypes = [
+      ...state.recentActivityTypes.slice(-4),
+      ACTION_IDS.TRIVIA,
+    ];
+    return { ok: true, reason: "started" };
+  }
+
   if (action === ACTION_IDS.SKIP) {
     state.lastActivityType = ACTION_IDS.SKIP;
     log(`[activity-engine] skipped slot=${slot.label} reason=skip`);
@@ -656,17 +774,44 @@ async function processCommunityActivitySlot({
     const weights = buildWeights(config, context);
     weights[ACTION_IDS.CHATFIGHT] = 0;
     action = pickWeightedAction(weights, random);
-    if (action === ACTION_IDS.CHATFIGHT || action === ACTION_IDS.SKIP) {
-      // Force a prompt category if still fight/skip.
-      const promptIds = [
-        ACTION_IDS.SNAKE,
-        ACTION_IDS.BOUNCH,
-        ACTION_IDS.WEEKLY,
-        ACTION_IDS.LEADERBOARD,
-        ACTION_IDS.GAME,
-        ACTION_IDS.COMMUNITY,
-      ];
-      action = promptIds[Math.floor(random() * promptIds.length)];
+    if (
+      action === ACTION_IDS.CHATFIGHT ||
+      action === ACTION_IDS.SKIP ||
+      !isActionEligible(action, context)
+    ) {
+      action = pickPromptFallback();
+    }
+  }
+
+  if (action === ACTION_IDS.TRIVIA) {
+    const triviaResult = await tryTrivia();
+    if (triviaResult.ok) {
+      if (fallbackFrom) {
+        log(
+          `[activity-engine] action=trivia slot=${slot.label} fallback=${fallbackFrom}`
+        );
+        return {
+          action: ACTION_IDS.TRIVIA,
+          sent: true,
+          reason: "started",
+          fallback: fallbackFrom,
+        };
+      }
+      log(`[activity-engine] action=trivia slot=${slot.label}`);
+      return { action: ACTION_IDS.TRIVIA, sent: true, reason: "started" };
+    }
+    fallbackFrom = fallbackFrom || `trivia-${triviaResult.reason}`;
+    const weights = buildWeights(config, context);
+    weights[ACTION_IDS.TRIVIA] = 0;
+    weights[ACTION_IDS.CHATFIGHT] = 0;
+    action = pickWeightedAction(weights, random);
+    if (
+      action === ACTION_IDS.TRIVIA ||
+      action === ACTION_IDS.CHATFIGHT ||
+      action === ACTION_IDS.SKIP ||
+      !isActionEligible(action, context)
+    ) {
+      action = pickPromptFallback();
     }
   }
 
@@ -715,6 +860,7 @@ module.exports = {
   pickWeightedAction,
   buildWeights,
   chooseAction,
+  isActionEligible,
   processCommunityActivitySlot,
   nextActivitySlotLabel,
   // re-export for tests / avoid unused import lint

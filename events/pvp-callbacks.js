@@ -14,6 +14,9 @@ const {
   parsePvpCallbackData: parseC4CallbackData,
   getConnectFourRuntime,
 } = require("../services/connectFour");
+const {
+  scheduleExpiredMessageCleanup,
+} = require("../utils/expiredMessageCleanup");
 
 function cbAnswer(ctx, text) {
   if (ctx && typeof ctx.answerCbQuery === "function") {
@@ -94,9 +97,21 @@ function wireTimeoutMessageEdits(runtime, telegram, awardXpFn) {
   runtime.expireJoin = (sessionId) => {
     const result = origExpire(sessionId);
     if (result && result.ok && result.rendered) {
-      Promise.resolve(editSessionMessage(result.session, result.rendered)).catch(
-        () => {}
-      );
+      Promise.resolve(editSessionMessage(result.session, result.rendered))
+        .then(() => {
+          if (
+            result.session &&
+            result.session.messageId != null &&
+            result.session.chatId != null
+          ) {
+            scheduleExpiredMessageCleanup({
+              telegram,
+              chatId: result.session.chatId,
+              messageId: result.session.messageId,
+            });
+          }
+        })
+        .catch(() => {});
     }
     return result;
   };

@@ -1,5 +1,6 @@
 /**
- * /trivia | /quiz — admin-start community trivia race.
+ * /trivia | /quiz — admin-start 5-question community Trivia round.
+ * Auto Trivia uses the same runtime via Activity Engine (no admin).
  * Callbacks: trivia:<sessionId>:<answerIndex>
  */
 
@@ -16,8 +17,11 @@ const {
   parseTriviaCallbackData,
   sanitizePvpDisplayName,
 } = require("../services/trivia");
-const { awardTriviaWinXp } = require("../services/points");
+const { awardTriviaRoundXp } = require("../services/points");
 const { logError } = require("../utils/logger");
+const {
+  emptyInlineKeyboardExtra,
+} = require("../utils/expiredMessageCleanup");
 
 function busyOptions(options = {}) {
   return {
@@ -26,6 +30,56 @@ function busyOptions(options = {}) {
     isConnectFourOpenFn: options.isConnectFourOpenFn,
     isTriviaOpenFn: options.isTriviaOpenFn,
   };
+}
+
+function wireTriviaRuntime(runtime, botOrTelegram, options = {}) {
+  if (!runtime) {
+    return;
+  }
+
+  const telegram =
+    botOrTelegram && botOrTelegram.telegram
+      ? botOrTelegram.telegram
+      : botOrTelegram;
+
+  runtime.setAwardXpHandler((userId, name, pointsToAdd) =>
+    awardTriviaRoundXp(userId, name, pointsToAdd, options.pointsFile)
+  );
+
+  if (telegram && typeof telegram.editMessageText === "function") {
+    runtime.setEditMessageHandler((chatId, messageId, text, extra) =>
+      telegram.editMessageText(
+        chatId,
+        messageId,
+        undefined,
+        text,
+        extra || emptyInlineKeyboardExtra()
+      )
+    );
+  }
+
+  runtime.setRoundCompleteHandler(async (payload) => {
+    if (!payload || !payload.session || payload.session.messageId == null) {
+      return;
+    }
+    if (!telegram || typeof telegram.editMessageText !== "function") {
+      return;
+    }
+    try {
+      await telegram.editMessageText(
+        payload.session.chatId,
+        payload.session.messageId,
+        undefined,
+        payload.text,
+        payload.extra || emptyInlineKeyboardExtra()
+      );
+    } catch (err) {
+      logError(
+        "[trivia] final edit failed:",
+        err && err.message ? err.message : err
+      );
+    }
+  });
 }
 
 async function handleTrivia(ctx, options = {}) {
@@ -93,7 +147,7 @@ async function handleTrivia(ctx, options = {}) {
     return ctx.reply("🧠 A Trivia challenge is already open.");
   }
 
-  const result = startFn({ chatId: ctx.chat.id });
+  const result = startFn({ chatId: ctx.chat.id, source: "manual" });
   if (!result.ok) {
     if (result.reason === "already-active") {
       return ctx.reply("🧠 A Trivia challenge is already open.");
@@ -121,10 +175,6 @@ async function handleTriviaAnswer(ctx, options = {}) {
     typeof options.parseCallbackData === "function"
       ? options.parseCallbackData
       : parseTriviaCallbackData;
-  const awardXpFn =
-    typeof options.awardTriviaWinXpFn === "function"
-      ? options.awardTriviaWinXpFn
-      : (userId, name) => awardTriviaWinXp(userId, name, options.pointsFile);
 
   if (!ctx || !ctx.from || !ctx.callbackQuery) {
     return;
@@ -151,7 +201,6 @@ async function handleTriviaAnswer(ctx, options = {}) {
   const chatId = ctx.chat && ctx.chat.id;
   const displayName = sanitizePvpDisplayName(ctx.from);
 
-  // Sync attempt + winner flag before any XP await.
   const result = runtime.tryAnswer({
     sessionId: parsed.sessionId,
     userId: ctx.from.id,
@@ -164,8 +213,12 @@ async function handleTriviaAnswer(ctx, options = {}) {
   if (!result.ok) {
     if (result.reason === "already-answered") {
       await answer("You already answered.");
-    } else if (result.reason === "finished" || result.reason === "inactive") {
-      await answer("This trivia is over.");
+    } else if (
+      result.reason === "finished" ||
+      result.reason === "inactive" ||
+      result.reason === "question-closed"
+    ) {
+      await answer("This question is over.");
     } else if (result.reason === "wrong-chat") {
       await answer("Wrong chat.");
     } else if (result.reason === "bot") {
@@ -185,43 +238,23 @@ async function handleTriviaAnswer(ctx, options = {}) {
 
   await answer("Correct! 🏆");
 
-  const claim = runtime.claimXpAward(parsed.sessionId);
-  let awardResult = { awarded: false, pointsToAdd: 0 };
-  if (claim.ok && claim.shouldAward) {
+  if (result.rendered && typeof ctx.editMessageText === "function") {
     try {
-      awardResult = awardXpFn(claim.winnerUserId, claim.winnerName || "Player");
-    } catch (err) {
-      logError(
-        "[trivia] awardTriviaWinXp failed:",
-        err && err.message ? err.message : err
+      await ctx.editMessageText(
+        result.rendered.text,
+        result.rendered.extra || emptyInlineKeyboardExtra()
       );
-      awardResult = { awarded: false, reason: "award-error", pointsToAdd: 0 };
-    }
-  }
-
-  const rendered = runtime.applyXpResultToRender(parsed.sessionId, awardResult);
-  if (rendered && typeof ctx.editMessageText === "function") {
-    try {
-      await ctx.editMessageText(rendered.text, rendered.extra || undefined);
     } catch (err) {
       logError(
         "[trivia] editMessageText failed:",
         err && err.message ? err.message : err
       );
-      if (typeof ctx.reply === "function") {
-        await ctx.reply(rendered.text).catch(() => {});
-      }
     }
   }
 }
 
 module.exports = (bot) => {
-  const runtime = getTriviaRuntime();
-  if (bot && bot.telegram && typeof bot.telegram.editMessageText === "function") {
-    runtime.setEditMessageHandler((chatId, messageId, text) =>
-      bot.telegram.editMessageText(chatId, messageId, undefined, text)
-    );
-  }
+  wireTriviaRuntime(getTriviaRuntime(), bot);
 
   bot.command(["trivia", "quiz"], (ctx) =>
     Promise.resolve(handleTrivia(ctx)).catch(() => undefined)
@@ -233,3 +266,4 @@ module.exports = (bot) => {
 
 module.exports.handleTrivia = handleTrivia;
 module.exports.handleTriviaAnswer = handleTriviaAnswer;
+module.exports.wireTriviaRuntime = wireTriviaRuntime;

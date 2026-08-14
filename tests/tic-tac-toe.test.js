@@ -842,11 +842,13 @@ async function main() {
     assert.ok(HELP_MESSAGE.includes("/streakrecord"));
   });
 
-  await runTest("activity engine metadata enabledForAuto false", () => {
+  await runTest("activity engine metadata enabledForAuto", () => {
     assert.strictEqual(ACTION_REGISTRY.tictactoe.enabledForAuto, false);
     assert.strictEqual(ACTION_REGISTRY.tictactoe.mode, "pvp");
     assert.strictEqual(ACTION_REGISTRY.connect4.enabledForAuto, false);
     assert.strictEqual(ACTION_REGISTRY.connect4.mode, "pvp");
+    assert.strictEqual(ACTION_REGISTRY.trivia.enabledForAuto, true);
+    assert.strictEqual(ACTION_REGISTRY.trivia.mode, "race");
   });
 
   await runTest("locking: concurrent awardPvpWinXp safe", () => {

@@ -906,6 +906,114 @@ runTest("/streak read does not repair without activity", () => {
   });
 });
 
+runTest("startup repair: activityDate=today + no streak → board visible, no XP", () => {
+  const {
+    repairCurrentDayStreaks,
+  } = require("../services/points");
+  const file = pointsFile();
+  seedLegacySameDayActivity(file, ALICE, "Alice", { points: 5, weeklyPoints: 2 });
+  seedLegacySameDayActivity(file, BOB, "Bob", { points: 3, weeklyPoints: 1 });
+  // Bob seed overwrote Alice — rewrite both
+  const today = getTodayDate();
+  savePoints(
+    {
+      users: {
+        [String(ALICE)]: {
+          points: 5,
+          weeklyPoints: 2,
+          weekId: getWeekIdForTest(),
+          name: "Alice",
+          activityDate: today,
+        },
+        [String(BOB)]: {
+          points: 3,
+          weeklyPoints: 1,
+          weekId: getWeekIdForTest(),
+          name: "Bob",
+          activityDate: today,
+          streak: { current: 0, longest: 0, lastActiveDate: null },
+        },
+        [OWNER_ID]: {
+          points: 99,
+          weeklyPoints: 9,
+          weekId: getWeekIdForTest(),
+          name: "Kevin",
+          activityDate: today,
+        },
+        legacy: {
+          points: 2,
+          weeklyPoints: 0,
+          weekId: getWeekIdForTest(),
+          name: "Old",
+          activityDate: utcYesterday(today),
+        },
+      },
+    },
+    file
+  );
+
+  const result = repairCurrentDayStreaks(file, today);
+  assert.strictEqual(result.repaired, 2);
+  assert.strictEqual(result.written, true);
+
+  const data = loadPoints(file);
+  assert.strictEqual(data.users[String(ALICE)].points, 5);
+  assert.strictEqual(data.users[String(ALICE)].weeklyPoints, 2);
+  assert.deepStrictEqual(readStreak(data.users[String(ALICE)]), {
+    current: 1,
+    longest: 1,
+    lastActiveDate: today,
+  });
+  assert.deepStrictEqual(readStreak(data.users[String(BOB)]), {
+    current: 1,
+    longest: 1,
+    lastActiveDate: today,
+  });
+  assert.deepStrictEqual(readStreak(data.users[OWNER_ID]), {
+    current: 0,
+    longest: 0,
+    lastActiveDate: null,
+  });
+  assert.deepStrictEqual(readStreak(data.users.legacy), {
+    current: 0,
+    longest: 0,
+    lastActiveDate: null,
+  });
+
+  const streakCtx = {
+    chat: { type: "group" },
+    from: { id: ALICE, first_name: "Alice" },
+    replies: [],
+    reply(text) {
+      this.replies.push({ text });
+    },
+  };
+  handleStreak(streakCtx, { pointsFile: file });
+  assert.ok(streakCtx.replies[0].text.includes("Alice — 1 days"));
+  assert.ok(streakCtx.replies[0].text.includes("Bob — 1 days"));
+  assert.ok(!streakCtx.replies[0].text.includes("Kevin"));
+
+  const recordCtx = { ...streakCtx, replies: [] };
+  recordCtx.reply = function (text) {
+    this.replies.push({ text });
+  };
+  handleStreakRecord(recordCtx, { pointsFile: file });
+  assert.ok(recordCtx.replies[0].text.includes("Alice — 1 days"));
+
+  const again = repairCurrentDayStreaks(file, today);
+  assert.strictEqual(again.repaired, 0);
+  assert.strictEqual(again.written, false);
+});
+
+runTest("startup repair: no-write when count=0", () => {
+  const { repairCurrentDayStreaks } = require("../services/points");
+  const file = pointsFile();
+  savePoints({ users: {} }, file);
+  const result = repairCurrentDayStreaks(file, getTodayDate());
+  assert.strictEqual(result.repaired, 0);
+  assert.strictEqual(result.written, false);
+});
+
 fs.rmSync(tempDir, { recursive: true, force: true });
 restoreEnv();
 console.log("\nAll streak/activity tests passed.");

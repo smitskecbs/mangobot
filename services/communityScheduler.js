@@ -496,6 +496,10 @@ function createCommunityScheduler(options = {}) {
     typeof options.announceChatFight === "function"
       ? options.announceChatFight
       : null;
+  const announceTrivia =
+    typeof options.announceTrivia === "function"
+      ? options.announceTrivia
+      : null;
   const autoRandom =
     typeof options.autoChatFightRandom === "function"
       ? options.autoChatFightRandom
@@ -673,6 +677,7 @@ function createCommunityScheduler(options = {}) {
         chatFight,
         sendMessage,
         announceChatFight,
+        announceTrivia,
         nowMs,
         random: activityRandom,
         wasActiveWithinFn: wasActiveFn,
@@ -1047,11 +1052,26 @@ function createCommunityScheduler(options = {}) {
 function startCommunityScheduler(telegram, options = {}) {
   const fight = options.chatFight || chatFightRuntime;
   if (typeof fight.setEditMessageHandler === "function") {
-    fight.setEditMessageHandler(async (chatId, messageId, text) => {
-      await telegram.editMessageText(chatId, messageId, undefined, text, {
+    fight.setEditMessageHandler(async (chatId, messageId, text, extra) => {
+      const opts = {
         disable_web_page_preview: true,
-      });
+      };
+      if (extra && extra.reply_markup) {
+        opts.reply_markup = extra.reply_markup;
+      } else if (extra) {
+        Object.assign(opts, extra);
+      }
+      await telegram.editMessageText(chatId, messageId, undefined, text, opts);
     });
+  }
+
+  try {
+    const { getTriviaRuntime } = require("./trivia");
+    const { wireTriviaRuntime } = require("../commands/trivia");
+    const trivia = options.triviaRuntime || getTriviaRuntime();
+    wireTriviaRuntime(trivia, { telegram });
+  } catch (_err) {
+    /* trivia optional during early boot/tests */
   }
 
   const scheduler = createCommunityScheduler({
@@ -1073,6 +1093,17 @@ function startCommunityScheduler(telegram, options = {}) {
         Object.assign(extra, keyboard);
       }
       return telegram.sendMessage(chatId, teaser, extra);
+    },
+    announceTrivia: async (chatId, text, keyboard) => {
+      const extra = {
+        disable_web_page_preview: true,
+      };
+      if (keyboard && keyboard.reply_markup) {
+        extra.reply_markup = keyboard.reply_markup;
+      } else if (keyboard) {
+        Object.assign(extra, keyboard);
+      }
+      return telegram.sendMessage(chatId, text, extra);
     },
   });
   liveCommunityScheduler = scheduler;
