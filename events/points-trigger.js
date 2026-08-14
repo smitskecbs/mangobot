@@ -191,15 +191,27 @@ function processCommunityMessage(ctx, options = {}) {
   return { activityResult, triggerResult, reply };
 }
 
-module.exports = (bot) => {
-  bot.on(COMMUNITY_ACTIVITY_UPDATES, (ctx) => {
-    const result = processCommunityMessage(ctx);
+/**
+ * @param {object} bot
+ * @param {object} [options] forwarded to processCommunityMessage (e.g. pointsFile)
+ */
+function registerCommunityActivityListener(bot, options = {}) {
+  bot.on(COMMUNITY_ACTIVITY_UPDATES, (ctx, next) => {
+    const result = processCommunityMessage(ctx, options);
     if (result.reply) {
       ctx.reply(result.reply);
     }
+    if (typeof next === "function") {
+      return next();
+    }
   });
+}
+
+module.exports = (bot) => {
+  registerCommunityActivityListener(bot);
 };
 
+module.exports.registerCommunityActivityListener = registerCommunityActivityListener;
 module.exports.shouldSkipCommunityActivity = shouldSkipCommunityActivity;
 module.exports.isEligibleCommunityActivityMessage = isEligibleCommunityActivityMessage;
 module.exports.isServiceMessage = isServiceMessage;

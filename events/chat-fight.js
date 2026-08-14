@@ -1,6 +1,9 @@
 /**
  * ChatFight answer listener — first correct text wins XP.
  * Registered before points-trigger (alphabetical) so winner claim runs first.
+ *
+ * CRITICAL: always call next() so later middleware (community activity /
+ * points-trigger) still runs. Telegraf 4 stops the chain when next is omitted.
  */
 
 const {
@@ -31,28 +34,31 @@ function registerChatFightListener(bot, options = {}) {
       : awardChatFightXp;
   const pointsFile = options.pointsFile;
 
-  bot.on("text", (ctx) => {
+  bot.on("text", (ctx, next) => {
+    const continueChain =
+      typeof next === "function" ? next : () => undefined;
+
     if (!ctx || !ctx.from || !ctx.chat || !ctx.message) {
-      return;
+      return continueChain();
     }
 
     if (ctx.from.is_bot) {
-      return;
+      return continueChain();
     }
 
     if (!isAllowedChatFightChat(ctx.chat.id)) {
-      return;
+      return continueChain();
     }
 
     const text = ctx.message.text;
     if (isCommandText(text)) {
-      return;
+      return continueChain();
     }
 
     // Sync claim before any XP / reply work (near-simultaneous safety).
     const claim = tryClaim(ctx.from.id, ctx.chat.id, text);
     if (!claim.claimed) {
-      return;
+      return continueChain();
     }
 
     const userName =
@@ -71,6 +77,8 @@ function registerChatFightListener(bot, options = {}) {
 
     const reply = buildWinnerReply(userName, awardResult);
     ctx.reply(reply);
+
+    return continueChain();
   });
 }
 
