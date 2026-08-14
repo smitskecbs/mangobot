@@ -54,6 +54,25 @@ const runtime = startBotRuntime({
         err && err.message ? err.message : err
       );
     }
+
+    try {
+      const {
+        processWeeklyWinnersBoundary,
+      } = require("./services/weeklyWinners");
+      Promise.resolve(
+        processWeeklyWinnersBoundary({ telegram: bot.telegram })
+      ).catch((err) => {
+        logError(
+          "[weekly-winners] startup boundary failed:",
+          err && err.message ? err.message : err
+        );
+      });
+    } catch (err) {
+      logError(
+        "[weekly-winners] startup boundary failed:",
+        err && err.message ? err.message : err
+      );
+    }
   },
 });
 

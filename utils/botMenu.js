@@ -26,6 +26,7 @@ const PRIVATE_MENU_HINT =
 const GROUP_MENU_CALLBACK = Object.freeze({
   LEADERBOARD: "gmenu:lb",
   WEEKLY: "gmenu:weekly",
+  WEEKLY_WINNERS: "gmenu:weeklywinners",
   STREAK: "gmenu:streak",
   STREAK_RECORD: "gmenu:streakrecord",
   HELP: "gmenu:help",
@@ -219,8 +220,18 @@ function getGroupMenuExtra(ctx) {
       Markup.button.callback("📅 Weekly", GROUP_MENU_CALLBACK.WEEKLY),
     ],
     [
+      Markup.button.callback(
+        "🏆 Weekly Winners",
+        GROUP_MENU_CALLBACK.WEEKLY_WINNERS
+      ),
       Markup.button.callback("🔥 Streak", GROUP_MENU_CALLBACK.STREAK),
-      Markup.button.callback("🏆 Streak Record", GROUP_MENU_CALLBACK.STREAK_RECORD),
+    ],
+    [
+      Markup.button.callback(
+        "🏆 Streak Record",
+        GROUP_MENU_CALLBACK.STREAK_RECORD
+      ),
+      Markup.button.callback("ℹ️ Help", GROUP_MENU_CALLBACK.HELP),
     ],
   ];
 
@@ -246,8 +257,6 @@ function getGroupMenuExtra(ctx) {
     rows.push(personalRow);
   }
 
-  rows.push([Markup.button.callback("ℹ️ Help", GROUP_MENU_CALLBACK.HELP)]);
-
   return Markup.inlineKeyboard(rows);
 }
 
@@ -255,6 +264,7 @@ function isGroupMenuCallback(data) {
   return (
     data === GROUP_MENU_CALLBACK.LEADERBOARD ||
     data === GROUP_MENU_CALLBACK.WEEKLY ||
+    data === GROUP_MENU_CALLBACK.WEEKLY_WINNERS ||
     data === GROUP_MENU_CALLBACK.STREAK ||
     data === GROUP_MENU_CALLBACK.STREAK_RECORD ||
     data === GROUP_MENU_CALLBACK.HELP

@@ -571,9 +571,43 @@ function getUserRecord(data, userId) {
   );
 }
 
-function resetWeeklyIfNewWeek(user) {
+/**
+ * Preserve weekly standing before lazy week roll wipes weeklyPoints.
+ * Lazy-requires weeklyWinners to avoid circular load issues.
+ * @param {string|number} userId
+ * @param {object} user
+ */
+function noteWeeklyStandingSafe(userId, user) {
+  if (userId == null || !user || !user.weekId) {
+    return;
+  }
+  try {
+    const { noteWeeklyStanding } = require("./weeklyWinners");
+    noteWeeklyStanding(
+      userId,
+      user.name,
+      user.weekId,
+      typeof user.weeklyPoints === "number" ? user.weeklyPoints : 0
+    );
+  } catch (err) {
+    logError(
+      "[points] noteWeeklyStanding failed:",
+      err && err.message ? err.message : err
+    );
+  }
+}
+
+/**
+ * Lazy UTC-week roll. Captures prior-week score before wipe (Top 3 safety).
+ * @param {object} user
+ * @param {string|number} [userId]
+ */
+function resetWeeklyIfNewWeek(user, userId) {
   const currentWeek = getWeekId();
-  if (user.weekId !== currentWeek) {
+  if (user.weekId != null && user.weekId !== currentWeek) {
+    if (userId != null) {
+      noteWeeklyStandingSafe(userId, user);
+    }
     user.weekId = currentWeek;
     user.weeklyPoints = 0;
   }
@@ -715,7 +749,7 @@ function awardSnakeGameXp(userId, userName, pointsFile = POINTS_FILE) {
     const id = String(userId);
     const user = ensureUserRecord(data, id, userName);
     user.name = userName;
-    resetWeeklyIfNewWeek(user);
+    resetWeeklyIfNewWeek(user, id);
     const game = ensureGameState(user);
     const today = getTodayDate();
     const pointsBefore = user.points;
@@ -726,6 +760,7 @@ function awardSnakeGameXp(userId, userName, pointsFile = POINTS_FILE) {
       game.snakePlayDate = today;
       user.points += 1;
       user.weeklyPoints += 1;
+      noteWeeklyStandingSafe(id, user);
     }
 
     return buildGameXpResult(pointsBefore, user.points, dailyPlay, 0);
@@ -752,7 +787,7 @@ function awardBounchGameXp(userId, userName, level, pointsFile = POINTS_FILE) {
     const id = String(userId);
     const user = ensureUserRecord(data, id, userName);
     user.name = userName;
-    resetWeeklyIfNewWeek(user);
+    resetWeeklyIfNewWeek(user, id);
     const game = ensureGameState(user);
     const today = getTodayDate();
     const pointsBefore = user.points;
@@ -773,6 +808,7 @@ function awardBounchGameXp(userId, userName, level, pointsFile = POINTS_FILE) {
     if (pointsToAdd > 0) {
       user.points += pointsToAdd;
       user.weeklyPoints += pointsToAdd;
+      noteWeeklyStandingSafe(id, user);
     }
 
     return buildGameXpResult(pointsBefore, user.points, dailyPlay, unlock);
@@ -795,7 +831,7 @@ function awardDailyActivityPoint(userId, userName, pointsFile = POINTS_FILE, tod
     const user = ensureUserRecord(data, id, userName);
 
     user.name = userName;
-    resetWeeklyIfNewWeek(user);
+    resetWeeklyIfNewWeek(user, id);
 
     if (user.activityDate === today) {
       const repaired = needsSameDayStreakRepair(user, today);
@@ -818,6 +854,7 @@ function awardDailyActivityPoint(userId, userName, pointsFile = POINTS_FILE, tod
     user.weeklyPoints += 1;
     user.activityDate = today;
     const streak = applyDailyActivityStreak(user, today);
+    noteWeeklyStandingSafe(id, user);
 
     const previousRank = getRank(pointsBefore);
     const rank = getRank(user.points);
@@ -857,7 +894,7 @@ function awardTriggerPoints(userId, userName, trigger, pointsFile = POINTS_FILE)
     const user = ensureUserRecord(data, id, userName);
     user.name = userName;
     resetTriggersIfNewDay(user);
-    resetWeeklyIfNewWeek(user);
+    resetWeeklyIfNewWeek(user, id);
 
     if (user.triggersUsed.includes(trigger)) {
       return {
@@ -873,6 +910,7 @@ function awardTriggerPoints(userId, userName, trigger, pointsFile = POINTS_FILE)
     user.points += pointsToAdd;
     user.weeklyPoints += pointsToAdd;
     user.triggersUsed.push(trigger);
+    noteWeeklyStandingSafe(id, user);
 
     const previousRank = getRank(pointsBefore);
     const rank = getRank(user.points);
@@ -904,11 +942,12 @@ function awardChatFightXp(userId, userName, pointsFile = POINTS_FILE) {
     const id = String(userId);
     const user = ensureUserRecord(data, id, userName);
     user.name = userName;
-    resetWeeklyIfNewWeek(user);
+    resetWeeklyIfNewWeek(user, id);
 
     const pointsBefore = user.points;
     user.points += pointsToAdd;
     user.weeklyPoints += pointsToAdd;
+    noteWeeklyStandingSafe(id, user);
 
     const previousRank = getRank(pointsBefore);
     const rank = getRank(user.points);
@@ -1008,7 +1047,7 @@ function awardTriviaRoundXp(
     const id = String(userId);
     const user = ensureUserRecord(data, id, userName);
     user.name = userName;
-    resetWeeklyIfNewWeek(user);
+    resetWeeklyIfNewWeek(user, id);
     resetTriviaIfNewDay(user);
 
     if (user.trivia.rewardedRounds >= TRIVIA_DAILY_REWARD_CAP) {
@@ -1028,6 +1067,7 @@ function awardTriviaRoundXp(
     user.points += amount;
     user.weeklyPoints += amount;
     user.trivia.rewardedRounds += 1;
+    noteWeeklyStandingSafe(id, user);
 
     const previousRank = getRank(pointsBefore);
     const rank = getRank(user.points);
@@ -1123,7 +1163,7 @@ function awardPvpWinXp(userId, userName, pointsFile = POINTS_FILE) {
     const id = String(userId);
     const user = ensureUserRecord(data, id, userName);
     user.name = userName;
-    resetWeeklyIfNewWeek(user);
+    resetWeeklyIfNewWeek(user, id);
     resetPvpIfNewDay(user);
 
     if (user.pvp.rewardedWins >= PVP_DAILY_WIN_CAP) {
@@ -1143,6 +1183,7 @@ function awardPvpWinXp(userId, userName, pointsFile = POINTS_FILE) {
     user.points += pointsToAdd;
     user.weeklyPoints += pointsToAdd;
     user.pvp.rewardedWins += 1;
+    noteWeeklyStandingSafe(id, user);
 
     const previousRank = getRank(pointsBefore);
     const rank = getRank(user.points);
@@ -1186,6 +1227,7 @@ module.exports = {
   isAdmin,
   getRank,
   getTodayDate,
+  getWeekId,
   utcYesterday,
   isCommandText,
   detectTrigger,

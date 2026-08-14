@@ -555,13 +555,14 @@ runTest("/menu group toont exact gewenste knoppen", () => {
   assert.deepStrictEqual(labels, [
     "🏆 Leaderboard",
     "📅 Weekly",
+    "🏆 Weekly Winners",
     "🔥 Streak",
     "🏆 Streak Record",
+    "ℹ️ Help",
     "🐍 Snake",
     "🏀 Bounch",
     "🥭 My Points",
     "🔥 My Streak",
-    "ℹ️ Help",
   ]);
 });
 
@@ -645,6 +646,16 @@ runTest("Weekly callback gebruikt bestaande weekly logic", async () => {
   await handleGroupMenuCallback(ctx, { pointsFile: testPointsFile });
   assert.strictEqual(ctx.answered.length, 1);
   assert.ok(ctx.replies[0].text.includes("Weekly"));
+});
+
+runTest("Weekly Winners callback toont winners board", async () => {
+  const ctx = createMockCtx({
+    chatType: "group",
+    callbackData: GROUP_MENU_CALLBACK.WEEKLY_WINNERS,
+  });
+  await handleGroupMenuCallback(ctx, { pointsFile: testPointsFile });
+  assert.strictEqual(ctx.answered.length, 1);
+  assert.ok(ctx.replies[0].text.includes("ManGo Weekly Winners"));
 });
 
 runTest("Leaderboard callback gebruikt bestaande leaderboard logic", async () => {

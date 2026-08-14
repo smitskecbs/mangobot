@@ -31,6 +31,9 @@ const {
   nextActivitySlotLabel,
 } = require("./communityActivityEngine");
 const { chatFightRuntime } = require("./chatFight");
+const {
+  processWeeklyWinnersBoundary,
+} = require("./weeklyWinners");
 
 /**
  * Absolute path to production scheduler state.
@@ -735,16 +738,39 @@ function createCommunityScheduler(options = {}) {
     return { enabled: true, started, skipped };
   }
 
+  async function processWeeklyWinners() {
+    if (!chatId || typeof sendMessage !== "function") {
+      return { skipped: "missing-chat-or-sender" };
+    }
+    try {
+      return await processWeeklyWinnersBoundary({
+        chatId,
+        sendMessageFn: sendMessage,
+        winnersFile: options.weeklyWinnersFile,
+        pointsFile: options.pointsFile,
+        now: getNow,
+      });
+    } catch (err) {
+      logError(
+        "[weekly-winners] boundary processing failed:",
+        err && err.message ? err.message : err
+      );
+      return { posted: false, reason: "error" };
+    }
+  }
+
   async function tick() {
+    const weeklyWinners = await processWeeklyWinners();
+
     const remindersWanted = enabled && !activityConfig.enabled;
     const autoWanted = autoConfig.enabled && !activityConfig.enabled;
     const engineWanted = activityConfig.enabled;
 
     if (!remindersWanted && !autoWanted && !engineWanted) {
-      return { skipped: "disabled" };
+      return { skipped: "disabled", weeklyWinners };
     }
     if (!chatId) {
-      return { skipped: "missing-chat-id" };
+      return { skipped: "missing-chat-id", weeklyWinners };
     }
 
     const now = getNow();
@@ -754,7 +780,7 @@ function createCommunityScheduler(options = {}) {
       lastCheckedAt = now;
       state.lastCheckedAt = now.getTime();
       persist();
-      return { skipped: "startup-seed", dayKey: nowClock.dayKey };
+      return { skipped: "startup-seed", dayKey: nowClock.dayKey, weeklyWinners };
     }
 
     const prevClock = getZonedClock(lastCheckedAt, timeZone);
@@ -802,6 +828,7 @@ function createCommunityScheduler(options = {}) {
       skippedRecent,
       activity,
       autoFight,
+      weeklyWinners,
     };
   }
 

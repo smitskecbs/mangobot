@@ -9,6 +9,7 @@ const { handleSnake } = require("./snake");
 const { handleBounch } = require("./bounch");
 const { handleLeaderboard } = require("./leaderboard");
 const { handleWeekly } = require("./weekly");
+const { handleWeeklyWinners } = require("./weeklywinners");
 const { handleHelp } = require("./help");
 const {
   handleStreak,
@@ -70,6 +71,9 @@ async function handleGroupMenuCallback(ctx, options = {}) {
   if (data === GROUP_MENU_CALLBACK.WEEKLY) {
     return handleWeekly(ctx, options);
   }
+  if (data === GROUP_MENU_CALLBACK.WEEKLY_WINNERS) {
+    return handleWeeklyWinners(ctx, options);
+  }
   if (data === GROUP_MENU_CALLBACK.STREAK) {
     return handleStreak(ctx, options);
   }
@@ -86,7 +90,7 @@ module.exports = (bot) => {
 
   bot.action(
     new RegExp(
-      `^(${GROUP_MENU_CALLBACK.LEADERBOARD}|${GROUP_MENU_CALLBACK.WEEKLY}|${GROUP_MENU_CALLBACK.STREAK}|${GROUP_MENU_CALLBACK.STREAK_RECORD}|${GROUP_MENU_CALLBACK.HELP})$`
+      `^(${GROUP_MENU_CALLBACK.LEADERBOARD}|${GROUP_MENU_CALLBACK.WEEKLY}|${GROUP_MENU_CALLBACK.WEEKLY_WINNERS}|${GROUP_MENU_CALLBACK.STREAK}|${GROUP_MENU_CALLBACK.STREAK_RECORD}|${GROUP_MENU_CALLBACK.HELP})$`
     ),
     (ctx) => handleGroupMenuCallback(ctx)
   );

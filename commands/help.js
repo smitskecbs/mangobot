@@ -14,6 +14,7 @@ const HELP_MESSAGE = `🥭 Commands
 /points
 /leaderboard
 /weekly
+/weeklywinners
 /chatfight
 /tictactoe — Start Tic-Tac-Toe PvP
 /connect4 — Start Connect Four PvP
