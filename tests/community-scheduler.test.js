@@ -9,7 +9,10 @@ const path = require("path");
 const assert = require("assert");
 
 const {
-  createCommunityScheduler,
+  createCommunityScheduler: createCommunitySchedulerImpl,
+  startCommunityScheduler: startCommunitySchedulerImpl,
+  getLiveCommunityScheduler,
+  getCommunitySchedulerDiagnostics,
   parseEnabledFlag,
   getZonedClock,
   didCrossSlot,
@@ -27,6 +30,11 @@ const {
   noteCommunityActivity,
   resetCommunityActivityPulse,
 } = require("../utils/communityActivityPulse");
+const { savePoints } = require("../services/points");
+const {
+  writeWinnersState,
+  emptyState,
+} = require("../services/weeklyWinners");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-community-sched-"));
 let testCounter = 0;
@@ -34,6 +42,48 @@ let testCounter = 0;
 function stateFile() {
   testCounter += 1;
   return path.join(tempDir, `state-${testCounter}.json`);
+}
+
+/**
+ * Hermetic weekly deps: enabled scheduler ticks always run weekly boundary
+ * sync. Without isolated empty points/winners, tests on Hetzner read
+ * production points.json (old weekId) and announce an extra winners message
+ * — and real-timer tests can miss ticks while syncing large points files.
+ */
+function hermeticWeeklyDeps() {
+  testCounter += 1;
+  const pointsFile = path.join(tempDir, `hermetic-points-${testCounter}.json`);
+  const weeklyWinnersFile = path.join(
+    tempDir,
+    `hermetic-winners-${testCounter}.json`
+  );
+  savePoints({ users: {} }, pointsFile);
+  writeWinnersState(emptyState(), weeklyWinnersFile);
+  return { pointsFile, weeklyWinnersFile };
+}
+
+function createCommunityScheduler(options = {}) {
+  return createCommunitySchedulerImpl({
+    ...hermeticWeeklyDeps(),
+    ...options,
+  });
+}
+
+function startCommunityScheduler(telegram, options = {}) {
+  return startCommunitySchedulerImpl(telegram, {
+    ...hermeticWeeklyDeps(),
+    ...options,
+  });
+}
+
+function assertNoWeeklyWinnersSend(sent) {
+  const texts = (sent || []).map((s) =>
+    typeof s === "string" ? s : s && s.text != null ? String(s.text) : ""
+  );
+  assert.ok(
+    !texts.some((t) => t.includes("ManGo Weekly Winners")),
+    "non-weekly scheduler test must not announce weekly winners"
+  );
 }
 
 function utcDate(iso) {
@@ -311,12 +361,40 @@ async function main() {
     const result = await sched.tick();
     assert.deepStrictEqual(result.fired, ["morning"]);
     assert.strictEqual(sent.length, 1);
+    assertNoWeeklyWinnersSend(sent);
     assert.strictEqual(sent[0].chatId, "999");
     assert.ok(MESSAGE_POOLS.morning.includes(sent[0].text));
     assert.ok(!sent[0].text.includes("?t="));
     assert.ok(!sent[0].text.includes("uid="));
     assert.ok(!sent[0].text.includes("GAME_LINK_SECRET"));
   });
+
+  await runTest(
+    "morning slot ignores ambient old-week points (no weekly side-send)",
+    async () => {
+      // Documents prior Hetzner failure: polluted points + Monday now → 2 sends.
+      // Hermetic wrapper must keep this at exactly 1 morning message.
+      const sent = [];
+      let now = utcDate("2026-08-10T06:59:00.000Z");
+      const sched = createCommunityScheduler({
+        enabled: true,
+        chatId: "999",
+        timeZone: "Europe/Amsterdam",
+        stateFile: stateFile(),
+        now: () => now,
+        sendMessage: async (chatId, text) => {
+          sent.push({ chatId, text });
+          return true;
+        },
+      });
+      await sched.tick();
+      now = utcDate("2026-08-10T07:00:00.000Z");
+      await sched.tick();
+      assert.strictEqual(sent.length, 1);
+      assert.ok(MESSAGE_POOLS.morning.includes(sent[0].text));
+      assertNoWeeklyWinnersSend(sent);
+    }
+  );
 
   await runTest("afternoon slot stuurt game message", async () => {
     const sent = [];
@@ -337,6 +415,7 @@ async function main() {
     const result = await sched.tick();
     assert.deepStrictEqual(result.fired, ["afternoon"]);
     assert.ok(MESSAGE_POOLS.afternoon.includes(sent[0]));
+    assertNoWeeklyWinnersSend(sent);
   });
 
   await runTest("evening slot stuurt ranking message", async () => {
@@ -1292,10 +1371,6 @@ async function main() {
     const {
       parseActivityEngineConfig,
     } = require("../services/communityActivityEngine");
-    const {
-      getLiveCommunityScheduler,
-      startCommunityScheduler,
-    } = require("../services/communityScheduler");
     const file = stateFile();
     const cfg = parseActivityEngineConfig(
       {},
@@ -1490,11 +1565,6 @@ async function main() {
     const {
       parseActivityEngineConfig,
     } = require("../services/communityActivityEngine");
-    const {
-      startCommunityScheduler,
-      getCommunitySchedulerDiagnostics,
-      getLiveCommunityScheduler,
-    } = require("../services/communityScheduler");
     const { handleChatFightStatus } = require("../commands/chatfightstatus");
     const cfg = parseActivityEngineConfig(
       {},
@@ -1629,9 +1699,6 @@ async function main() {
     delete process.env.COMMUNITY_AUTO_MESSAGES_ENABLED;
     process.env.TELEGRAM_CHAT_ID = "-1003916996602";
 
-    const {
-      startCommunityScheduler,
-    } = require("../services/communityScheduler");
     const file = stateFile();
     const sched = startCommunityScheduler(
       {
@@ -1760,11 +1827,6 @@ async function main() {
     const {
       parseActivityEngineConfig,
     } = require("../services/communityActivityEngine");
-    const {
-      startCommunityScheduler,
-      getLiveCommunityScheduler,
-      getCommunitySchedulerDiagnostics,
-    } = require("../services/communityScheduler");
     const cfg = parseActivityEngineConfig(
       {},
       { enabled: true, twentyFourSeven: true, autoFightEnabled: false }
@@ -1857,10 +1919,6 @@ async function main() {
     const {
       parseActivityEngineConfig,
     } = require("../services/communityActivityEngine");
-    const {
-      startCommunityScheduler,
-      getLiveCommunityScheduler,
-    } = require("../services/communityScheduler");
     const cfg = parseActivityEngineConfig(
       {},
       { enabled: true, twentyFourSeven: true, autoFightEnabled: false }
