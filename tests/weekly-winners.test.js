@@ -699,6 +699,113 @@ async function main() {
     assert.strictEqual(isCommunityCompetitionExcluded(OWNER_ID), true);
   });
 
+  await runTest(
+    "reconstruct excludes production owner id (string + number); keeps peers",
+    async () => {
+      assert.strictEqual(process.env.ADMIN_USER_ID, OWNER_ID);
+      assert.strictEqual(isCommunityCompetitionExcluded("1238384546"), true);
+      assert.strictEqual(isCommunityCompetitionExcluded(1238384546), true);
+
+      const pf = pointsFile();
+      const wf = winnersFile();
+      const week = getWeekId();
+      seedUsers(
+        pf,
+        [
+          { id: 1238384546, name: "Kevin", weeklyPoints: 21, points: 21 },
+          { id: 6170961561, name: "KronicGrimm", weeklyPoints: 14, points: 14 },
+          { id: 8388586967, name: "Pippi", weeklyPoints: 12, points: 12 },
+        ],
+        week
+      );
+
+      writeWinnersState(
+        {
+          version: 1,
+          lastFinalizedWeek: "2026-08-03",
+          latest: {
+            week: "2026-08-03",
+            finalizedAt: 1,
+            announced: true,
+            winners: [
+              { telegramUserId: "9", name: "Ay", weeklyPoints: 2 },
+              { telegramUserId: "8", name: "MK", weeklyPoints: 2 },
+            ],
+          },
+          current: {
+            week,
+            standings: {
+              "1238384546": { name: "Kevin", weeklyPoints: 21 },
+              1238384546: { name: "Kevin", weeklyPoints: 21 },
+              6170961561: { name: "stale", weeklyPoints: 1 },
+              99: { name: "Ada", weeklyPoints: 1 },
+            },
+            updatedAt: 1,
+          },
+        },
+        wf
+      );
+
+      const result = reconstructCurrentStandingsFromPoints({
+        winnersFile: wf,
+        pointsFile: pf,
+      });
+      assert.strictEqual(result.ok, true);
+      assert.strictEqual(result.standingCount, 2);
+      assert.strictEqual(result.preservedLatest, true);
+      assert.strictEqual(result.preservedFinalized, true);
+
+      const state = readWinnersState(wf);
+      assert.strictEqual(state.lastFinalizedWeek, "2026-08-03");
+      assert.strictEqual(state.latest.announced, true);
+      assert.strictEqual(state.current.standings["1238384546"], undefined);
+      assert.strictEqual(state.current.standings[1238384546], undefined);
+      assert.strictEqual(state.current.standings["6170961561"].weeklyPoints, 14);
+      assert.strictEqual(state.current.standings["8388586967"].weeklyPoints, 12);
+
+      const weeklyCtx = mockCtx();
+      await handleWeekly(weeklyCtx, { pointsFile: pf });
+      assert.ok(weeklyCtx.replies[0].text.includes("KronicGrimm"));
+      assert.ok(weeklyCtx.replies[0].text.includes("Pippi"));
+      assert.ok(!weeklyCtx.replies[0].text.includes("Kevin"));
+
+      const winnersCtx = mockCtx();
+      await handleWeeklyWinners(winnersCtx, { winnersFile: wf, pointsFile: pf });
+      assert.ok(!winnersCtx.replies[0].text.includes("Kevin"));
+    }
+  );
+
+  await runTest("reconstruct without ADMIN_USER_ID includes owner (env gap)", () => {
+    const pf = pointsFile();
+    const wf = winnersFile();
+    const week = getWeekId();
+    seedUsers(
+      pf,
+      [{ id: 1238384546, name: "Kevin", weeklyPoints: 21, points: 21 }],
+      week
+    );
+    writeWinnersState(emptyState(), wf);
+
+    const savedAdmin = process.env.ADMIN_USER_ID;
+    try {
+      delete process.env.ADMIN_USER_ID;
+      assert.strictEqual(isCommunityCompetitionExcluded("1238384546"), false);
+
+      const result = reconstructCurrentStandingsFromPoints({
+        winnersFile: wf,
+        pointsFile: pf,
+      });
+      assert.strictEqual(result.ok, true);
+      const state = readWinnersState(wf);
+      assert.ok(state.current.standings["1238384546"]);
+      assert.strictEqual(state.current.standings["1238384546"].weeklyPoints, 21);
+      assert.strictEqual(state.current.standings["1238384546"].name, "Kevin");
+    } finally {
+      if (savedAdmin === undefined) delete process.env.ADMIN_USER_ID;
+      else process.env.ADMIN_USER_ID = savedAdmin;
+    }
+  });
+
   await runTest("reconstruct 0 users + malformed state safe", () => {
     const pf = pointsFile();
     const wf = winnersFile();

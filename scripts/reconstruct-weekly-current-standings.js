@@ -16,6 +16,10 @@
  */
 
 const path = require("path");
+const { loadAppEnv } = require("../utils/loadEnv");
+// Same order as index.js: load .env (incl. ADMIN_USER_ID) before services.
+loadAppEnv({ envPath: path.join(__dirname, "..", ".env") });
+
 const {
   reconstructCurrentStandingsFromPoints,
   DEFAULT_WINNERS_FILE,
