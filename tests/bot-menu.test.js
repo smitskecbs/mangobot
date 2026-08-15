@@ -13,6 +13,9 @@ const {
   MENU_LABELS,
   MENU_LABEL_LIST,
   GROUP_MENU_TEXT,
+  GROUP_RANKINGS_TEXT,
+  GROUP_GAMES_TEXT,
+  GROUP_PROGRESS_TEXT,
   PRIVATE_MENU_HINT,
   GROUP_MENU_CALLBACK,
   GROUP_SNAKE_MESSAGE,
@@ -28,6 +31,9 @@ const {
   getGroupGameMessage,
   getGroupGameGateExtra,
   getGroupMenuExtra,
+  getGroupRankingsMenuExtra,
+  getGroupGamesMenuExtra,
+  getGroupProgressMenuExtra,
 } = require("../utils/botMenu");
 const { handleSnake } = require("../commands/snake");
 const { handleBounch } = require("../commands/bounch");
@@ -91,26 +97,42 @@ function createMockCtx({
   botUsername = BOT_USERNAME,
   startPayload,
   callbackData,
+  chatId = -1003916996602,
 } = {}) {
   const replies = [];
   const answered = [];
+  const edits = [];
   return {
-    chat: { type: chatType },
+    chat: { type: chatType, id: chatId },
     from: { id: userId, first_name: firstName },
     botInfo: botUsername ? { username: botUsername } : {},
     startPayload,
     callbackQuery: callbackData ? { data: callbackData } : undefined,
     replies,
     answered,
+    edits,
     reply(text, extra) {
       replies.push({ text, extra });
       return Promise.resolve(replies[replies.length - 1]);
+    },
+    editMessageText(text, extra) {
+      edits.push({ text, extra });
+      return Promise.resolve(edits[edits.length - 1]);
     },
     answerCbQuery(text) {
       answered.push(text || true);
       return Promise.resolve();
     },
   };
+}
+
+function getInlineRows(extra) {
+  return (
+    (extra &&
+      extra.reply_markup &&
+      extra.reply_markup.inline_keyboard) ||
+    []
+  );
 }
 
 function getInlineButtons(extra) {
@@ -300,7 +322,7 @@ runTest("menu niet zichtbaar in group /start", () => {
   assert.ok(!extra || !extra.reply_markup || !extra.reply_markup.keyboard);
 });
 
-runTest("menu bevat exact de gewenste 7 opties", () => {
+runTest("menu bevat private opties zonder PvP", () => {
   assert.deepStrictEqual(MENU_LABEL_LIST, [
     MENU_LABELS.POINTS,
     MENU_LABELS.MY_STREAK,
@@ -310,14 +332,12 @@ runTest("menu bevat exact de gewenste 7 opties", () => {
     MENU_LABELS.WEEKLY,
     MENU_LABELS.HELP,
   ]);
-  assert.strictEqual(MENU_LABEL_LIST.length, 7);
 
   const kb = getPrivateMenuKeyboard();
   const rows = kb.reply_markup.keyboard;
   assert.deepStrictEqual(rows, [
     [MENU_LABELS.POINTS, MENU_LABELS.MY_STREAK],
     [MENU_LABELS.SNAKE, MENU_LABELS.BOUNCH],
-    [MENU_LABELS.LEADERBOARD, MENU_LABELS.WEEKLY],
     [MENU_LABELS.HELP],
   ]);
   assert.strictEqual(kb.reply_markup.resize_keyboard, true);
@@ -546,42 +566,86 @@ runTest("isPrivateMenuLabel exact match only", () => {
   assert.strictEqual(isPrivateMenuLabel("gmango"), false);
 });
 
-runTest("/menu group toont exact gewenste knoppen", () => {
+runTest("/menu group toont exact 4 hoofdknoppen", () => {
   const ctx = createMockCtx({ chatType: "supergroup" });
   handleMenu(ctx);
   assert.strictEqual(ctx.replies[0].text, GROUP_MENU_TEXT);
-  const buttons = getInlineButtons(ctx.replies[0].extra);
-  const labels = buttons.map((b) => b.text);
+  const rows = getInlineRows(ctx.replies[0].extra);
+  assert.strictEqual(rows.length, 2);
+  assert.ok(rows.every((row) => row.length <= 2));
+  const labels = rows.flat().map((b) => b.text);
   assert.deepStrictEqual(labels, [
-    "🏆 Leaderboard",
-    "📅 Weekly",
-    "🏆 Weekly Winners",
-    "🔥 Streak",
-    "🏆 Streak Record",
+    "🏆 Rankings",
+    "🎮 Games",
+    "👤 My Progress",
     "ℹ️ Help",
-    "🐍 Snake",
-    "🏀 Bounch",
-    "🥭 My Points",
-    "🔥 My Streak",
   ]);
+  const streakLabels = labels.filter((t) => /streak/i.test(t));
+  assert.strictEqual(streakLabels.length, 0);
 });
 
-runTest("group menu Snake/Bounch/Points deep-links zijn veilig", () => {
+runTest("group hoofdmenu callbacks bevatten geen uid/token", () => {
   const ctx = createMockCtx({ chatType: "group" });
   handleMenu(ctx);
-  const buttons = getInlineButtons(ctx.replies[0].extra);
-  const snake = buttons.find((b) => b.text === "🐍 Snake");
-  const bounch = buttons.find((b) => b.text === "🏀 Bounch");
-  const points = buttons.find((b) => b.text === "🥭 My Points");
-  const myStreak = buttons.find((b) => b.text === "🔥 My Streak");
-  assert.strictEqual(snake.url, `https://t.me/${BOT_USERNAME}?start=snake`);
-  assert.strictEqual(bounch.url, `https://t.me/${BOT_USERNAME}?start=bounch`);
-  assert.strictEqual(points.url, `https://t.me/${BOT_USERNAME}?start=points`);
-  assert.strictEqual(myStreak.url, `https://t.me/${BOT_USERNAME}?start=streak`);
   const blob = JSON.stringify(ctx.replies[0]);
   assert.ok(!blob.includes("?t="));
   assert.ok(!blob.includes("uid="));
   assert.ok(!blob.includes("telegramUserId="));
+  assert.ok(!blob.includes(String(USER_A)));
+});
+
+runTest("Rankings submenu layout", () => {
+  const rows = getInlineRows(getGroupRankingsMenuExtra());
+  assert.ok(rows.every((row) => row.length <= 2));
+  assert.deepStrictEqual(
+    rows.flat().map((b) => b.text),
+    [
+      "Leaderboard",
+      "Weekly",
+      "Weekly Winners",
+      "Streak",
+      "Streak Record",
+      "⬅️ Back",
+    ]
+  );
+  assert.strictEqual(
+    rows.flat().filter((b) => /streak/i.test(b.text)).length,
+    2
+  );
+});
+
+runTest("Games submenu Snake/Bounch safe deep-links", () => {
+  const ctx = createMockCtx({ chatType: "group" });
+  const rows = getInlineRows(getGroupGamesMenuExtra(ctx));
+  assert.ok(rows.every((row) => row.length <= 2));
+  const buttons = rows.flat();
+  const snake = buttons.find((b) => b.text === "Snake");
+  const bounch = buttons.find((b) => b.text === "Bounch");
+  assert.strictEqual(snake.url, `https://t.me/${BOT_USERNAME}?start=snake`);
+  assert.strictEqual(bounch.url, `https://t.me/${BOT_USERNAME}?start=bounch`);
+  assert.ok(buttons.some((b) => b.callback_data === GROUP_MENU_CALLBACK.TICTACTOE));
+  assert.ok(buttons.some((b) => b.callback_data === GROUP_MENU_CALLBACK.CONNECT4));
+  assert.ok(buttons.some((b) => b.callback_data === GROUP_MENU_CALLBACK.TRIVIA));
+  assert.ok(buttons.some((b) => b.callback_data === GROUP_MENU_CALLBACK.BACK));
+  const blob = JSON.stringify(rows);
+  assert.ok(!blob.includes("?t="));
+  assert.ok(!blob.includes("uid="));
+});
+
+runTest("My Progress submenu deep-links", () => {
+  const ctx = createMockCtx({ chatType: "group" });
+  const rows = getInlineRows(getGroupProgressMenuExtra(ctx));
+  assert.ok(rows.every((row) => row.length <= 2));
+  const buttons = rows.flat();
+  const points = buttons.find((b) => b.text === "My Points");
+  const myStreak = buttons.find((b) => b.text === "My Streak");
+  assert.strictEqual(points.url, `https://t.me/${BOT_USERNAME}?start=points`);
+  assert.strictEqual(myStreak.url, `https://t.me/${BOT_USERNAME}?start=streak`);
+  assert.ok(buttons.some((b) => b.callback_data === GROUP_MENU_CALLBACK.BACK));
+  assert.strictEqual(
+    buttons.filter((b) => /streak/i.test(b.text)).length,
+    1
+  );
 });
 
 runTest("/menu private toont reply-keyboard hint", () => {
@@ -589,6 +653,12 @@ runTest("/menu private toont reply-keyboard hint", () => {
   handleMenu(ctx);
   assert.strictEqual(ctx.replies[0].text, PRIVATE_MENU_HINT);
   assert.ok(ctx.replies[0].extra.reply_markup.keyboard);
+  const rows = ctx.replies[0].extra.reply_markup.keyboard;
+  assert.deepStrictEqual(rows, [
+    [MENU_LABELS.POINTS, MENU_LABELS.MY_STREAK],
+    [MENU_LABELS.SNAKE, MENU_LABELS.BOUNCH],
+    [MENU_LABELS.HELP],
+  ]);
 });
 
 runTest("/start points private → persoonlijke points", () => {
@@ -693,6 +763,163 @@ runTest("Streak Record callback toont longest board", async () => {
   });
   await handleGroupMenuCallback(ctx, { pointsFile: testPointsFile });
   assert.ok(ctx.replies[0].text.includes("Longest ManGo Streaks"));
+});
+
+runTest("Rankings / Games / Progress / Back navigation edits menu", async () => {
+  const rankingsCtx = createMockCtx({
+    chatType: "group",
+    callbackData: GROUP_MENU_CALLBACK.RANKINGS,
+  });
+  await handleGroupMenuCallback(rankingsCtx);
+  assert.strictEqual(rankingsCtx.edits[0].text, GROUP_RANKINGS_TEXT);
+  assert.ok(
+    getInlineButtons(rankingsCtx.edits[0].extra).some(
+      (b) => b.callback_data === GROUP_MENU_CALLBACK.WEEKLY_WINNERS
+    )
+  );
+
+  const gamesCtx = createMockCtx({
+    chatType: "group",
+    callbackData: GROUP_MENU_CALLBACK.GAMES,
+  });
+  await handleGroupMenuCallback(gamesCtx);
+  assert.strictEqual(gamesCtx.edits[0].text, GROUP_GAMES_TEXT);
+
+  const progressCtx = createMockCtx({
+    chatType: "group",
+    callbackData: GROUP_MENU_CALLBACK.PROGRESS,
+  });
+  await handleGroupMenuCallback(progressCtx);
+  assert.strictEqual(progressCtx.edits[0].text, GROUP_PROGRESS_TEXT);
+
+  const backCtx = createMockCtx({
+    chatType: "group",
+    callbackData: GROUP_MENU_CALLBACK.BACK,
+  });
+  await handleGroupMenuCallback(backCtx);
+  assert.strictEqual(backCtx.edits[0].text, GROUP_MENU_TEXT);
+  assert.deepStrictEqual(
+    getInlineButtons(backCtx.edits[0].extra).map((b) => b.text),
+    ["🏆 Rankings", "🎮 Games", "👤 My Progress", "ℹ️ Help"]
+  );
+});
+
+runTest("Back fallback replies when edit unavailable", async () => {
+  const ctx = createMockCtx({
+    chatType: "group",
+    callbackData: GROUP_MENU_CALLBACK.BACK,
+  });
+  delete ctx.editMessageText;
+  await handleGroupMenuCallback(ctx);
+  assert.strictEqual(ctx.replies[0].text, GROUP_MENU_TEXT);
+});
+
+runTest("Tic-Tac-Toe menu uses existing authorization (non-admin denied)", async () => {
+  const ctx = createMockCtx({
+    chatType: "supergroup",
+    callbackData: GROUP_MENU_CALLBACK.TICTACTOE,
+  });
+  await handleGroupMenuCallback(ctx, {
+    canManageGroupFn: async () => false,
+    isBusyFn: () => false,
+  });
+  assert.ok(
+    ctx.replies[0].text.includes("only be started by an admin")
+  );
+});
+
+runTest("Tic-Tac-Toe menu admin can start via existing flow", async () => {
+  const ctx = createMockCtx({
+    chatType: "supergroup",
+    callbackData: GROUP_MENU_CALLBACK.TICTACTOE,
+  });
+  let started = false;
+  await handleGroupMenuCallback(ctx, {
+    canManageGroupFn: async () => true,
+    isBusyFn: () => false,
+    startChallengeFn: () => {
+      started = true;
+      return {
+        ok: true,
+        text: "🎮 Tic-Tac-Toe challenge open",
+        session: { id: "ttt-1" },
+      };
+    },
+    setMessageIdFn: () => {},
+  });
+  assert.strictEqual(started, true);
+  assert.ok(ctx.replies[0].text.includes("Tic-Tac-Toe"));
+});
+
+runTest("Connect Four menu uses existing authorization (non-admin denied)", async () => {
+  const ctx = createMockCtx({
+    chatType: "supergroup",
+    callbackData: GROUP_MENU_CALLBACK.CONNECT4,
+  });
+  await handleGroupMenuCallback(ctx, {
+    canManageGroupFn: async () => false,
+    isBusyFn: () => false,
+  });
+  assert.ok(ctx.replies[0].text.includes("only be started by an admin"));
+});
+
+runTest("Connect Four menu admin can start via existing flow", async () => {
+  const ctx = createMockCtx({
+    chatType: "supergroup",
+    callbackData: GROUP_MENU_CALLBACK.CONNECT4,
+  });
+  let started = false;
+  await handleGroupMenuCallback(ctx, {
+    canManageGroupFn: async () => true,
+    isBusyFn: () => false,
+    startChallengeFn: () => {
+      started = true;
+      return {
+        ok: true,
+        text: "🟡 Connect Four challenge open",
+        session: { id: "c4-1" },
+      };
+    },
+    setMessageIdFn: () => {},
+  });
+  assert.strictEqual(started, true);
+  assert.ok(ctx.replies[0].text.includes("Connect Four"));
+});
+
+runTest("Trivia menu uses existing authorization (non-admin denied)", async () => {
+  const ctx = createMockCtx({
+    chatType: "supergroup",
+    callbackData: GROUP_MENU_CALLBACK.TRIVIA,
+  });
+  await handleGroupMenuCallback(ctx, {
+    canManageGroupFn: async () => false,
+    isBusyFn: () => false,
+  });
+  assert.ok(ctx.replies[0].text.includes("only be started by an admin"));
+});
+
+runTest("Trivia menu admin can start via existing flow", async () => {
+  const ctx = createMockCtx({
+    chatType: "supergroup",
+    callbackData: GROUP_MENU_CALLBACK.TRIVIA,
+  });
+  let started = false;
+  await handleGroupMenuCallback(ctx, {
+    canManageGroupFn: async () => true,
+    isBusyFn: () => false,
+    startTriviaFn: () => {
+      started = true;
+      return {
+        ok: true,
+        text: "🧠 Trivia round",
+        session: { id: "tr-1" },
+        keyboard: {},
+      };
+    },
+    setMessageIdFn: () => {},
+  });
+  assert.strictEqual(started, true);
+  assert.ok(ctx.replies[0].text.includes("Trivia"));
 });
 
 runTest("/start streak private → persoonlijke streak, geen uid", () => {

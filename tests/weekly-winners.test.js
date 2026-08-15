@@ -45,6 +45,7 @@ const { HELP_MESSAGE } = require("../commands/help");
 const {
   GROUP_MENU_CALLBACK,
   getGroupMenuExtra,
+  getGroupRankingsMenuExtra,
   isGroupMenuCallback,
 } = require("../utils/botMenu");
 const { handleGroupMenuCallback } = require("../commands/menu");
@@ -432,10 +433,12 @@ async function main() {
 
   await runTest("menu callback Weekly Winners + help lists command", async () => {
     assert.strictEqual(isGroupMenuCallback(GROUP_MENU_CALLBACK.WEEKLY_WINNERS), true);
-    const extra = getGroupMenuExtra({
+    const main = getGroupMenuExtra({
       botInfo: { username: "mango_test_bot" },
     });
-    const flat = JSON.stringify(extra);
+    assert.ok(JSON.stringify(main).includes(GROUP_MENU_CALLBACK.RANKINGS));
+    const rankings = getGroupRankingsMenuExtra();
+    const flat = JSON.stringify(rankings);
     assert.ok(flat.includes("Weekly Winners"));
     assert.ok(flat.includes(GROUP_MENU_CALLBACK.WEEKLY_WINNERS));
     assert.ok(HELP_MESSAGE.includes("/weeklywinners"));
