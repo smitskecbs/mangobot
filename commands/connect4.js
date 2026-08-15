@@ -1,10 +1,8 @@
 /**
- * /connect4 — admin-start PvP Connect Four challenge in the community group.
+ * /connect4 — member-start PvP Connect Four challenge in the community group.
  */
 
 const { isPrivateChat, isGroupChat } = require("../utils/botMenu");
-const { canManageGroup } = require("../utils/admin");
-const { isAllowedChatFightChat } = require("../services/chatFight");
 const {
   isCommunityChallengeBusy,
   getCommunityBusyReason,
@@ -13,16 +11,17 @@ const {
   startConnectFourChallenge,
   getConnectFourRuntime,
 } = require("../services/connectFour");
+const {
+  GAMES_TOPIC_REQUIRED_MESSAGE,
+  assertCanStartInteractiveGame,
+  withCtxThreadExtra,
+} = require("../utils/gameTopic");
 
 async function handleConnectFour(ctx, options = {}) {
   const startFn =
     typeof options.startChallengeFn === "function"
       ? options.startChallengeFn
       : startConnectFourChallenge;
-  const canManageFn =
-    typeof options.canManageGroupFn === "function"
-      ? options.canManageGroupFn
-      : canManageGroup;
   const busyFn =
     typeof options.isBusyFn === "function"
       ? options.isBusyFn
@@ -36,6 +35,10 @@ async function handleConnectFour(ctx, options = {}) {
       ? options.setMessageIdFn
       : (sessionId, messageId) =>
           getConnectFourRuntime().setMessageId(sessionId, messageId);
+  const assertStartFn =
+    typeof options.assertCanStartFn === "function"
+      ? options.assertCanStartFn
+      : assertCanStartInteractiveGame;
 
   if (!ctx || !ctx.from) {
     return;
@@ -45,26 +48,15 @@ async function handleConnectFour(ctx, options = {}) {
     return ctx.reply("🟡 Connect Four is played in the ManGo community group.");
   }
 
-  if (!isAllowedChatFightChat(ctx.chat.id)) {
+  const gate = await assertStartFn(ctx, options);
+  if (!gate.ok) {
+    if (gate.reason === "bot") {
+      return ctx.reply("🟡 Bots cannot start Connect Four.");
+    }
+    if (gate.reason === "wrong-topic") {
+      return ctx.reply(GAMES_TOPIC_REQUIRED_MESSAGE);
+    }
     return ctx.reply("🟡 Connect Four is not available in this group.");
-  }
-
-  let allowed = false;
-  try {
-    allowed = Boolean(
-      await canManageFn(ctx, {
-        isAdminFn: options.isAdminFn,
-        getChatMember: options.getChatMember,
-      })
-    );
-  } catch (_err) {
-    allowed = false;
-  }
-
-  if (!allowed) {
-    return ctx.reply(
-      "🟡 Connect Four can currently only be started by an admin."
-    );
   }
 
   if (
@@ -104,7 +96,10 @@ async function handleConnectFour(ctx, options = {}) {
     return ctx.reply("🟡 Could not start Connect Four.");
   }
 
-  const sent = await ctx.reply(result.text, result.keyboard || undefined);
+  const sent = await ctx.reply(
+    result.text,
+    withCtxThreadExtra(ctx, result.keyboard || undefined)
+  );
   if (sent && sent.message_id != null && result.session) {
     setMessageIdFn(result.session.id, sent.message_id);
   }

@@ -50,6 +50,7 @@ const USER_C = 333;
 
 const originalAdmin = process.env.ADMIN_USER_ID;
 const originalChatId = process.env.TELEGRAM_CHAT_ID;
+const originalGamesTopic = process.env.TELEGRAM_GAMES_TOPIC_ID;
 
 function pointsFile() {
   testCounter += 1;
@@ -59,6 +60,7 @@ function pointsFile() {
 function resetEnv() {
   process.env.ADMIN_USER_ID = String(ADMIN_ID);
   process.env.TELEGRAM_CHAT_ID = String(COMMUNITY_CHAT);
+  delete process.env.TELEGRAM_GAMES_TOPIC_ID;
 }
 
 function restoreEnv() {
@@ -66,6 +68,8 @@ function restoreEnv() {
   else process.env.ADMIN_USER_ID = originalAdmin;
   if (originalChatId === undefined) delete process.env.TELEGRAM_CHAT_ID;
   else process.env.TELEGRAM_CHAT_ID = originalChatId;
+  if (originalGamesTopic === undefined) delete process.env.TELEGRAM_GAMES_TOPIC_ID;
+  else process.env.TELEGRAM_GAMES_TOPIC_ID = originalGamesTopic;
 }
 
 async function runTest(name, fn) {
@@ -145,18 +149,35 @@ function createMockCtx({
   isBot = false,
   memberStatus = "member",
   callbackData,
+  messageThreadId,
 } = {}) {
   const replies = [];
+  const replyExtras = [];
   const cbAnswers = [];
   const edited = [];
+  const message = { text };
+  if (messageThreadId != null) {
+    message.message_thread_id = messageThreadId;
+  }
   return {
     chat: { type: chatType, id: chatId },
     from: { id: userId, first_name: firstName, is_bot: isBot },
-    message: { text },
+    message,
     callbackQuery: callbackData
-      ? { data: callbackData, from: { id: userId, is_bot: isBot } }
+      ? {
+          data: callbackData,
+          from: { id: userId, is_bot: isBot },
+          message: {
+            message_id: 5001,
+            chat: { id: chatId, type: chatType },
+            ...(messageThreadId != null
+              ? { message_thread_id: messageThreadId }
+              : {}),
+          },
+        }
       : undefined,
     replies,
+    replyExtras,
     cbAnswers,
     edited,
     telegram: {
@@ -166,6 +187,7 @@ function createMockCtx({
     },
     reply(msg, extra) {
       replies.push(msg);
+      replyExtras.push(extra);
       return Promise.resolve({ message_id: 5001, extra });
     },
     answerCbQuery(text) {
@@ -232,7 +254,7 @@ async function main() {
     assert.ok(started.text.includes("Join game") || started.keyboard);
   });
 
-  await runTest("39. admin only", async () => {
+  await runTest("39. members can start; topic gate when configured", async () => {
     const { service } = createService();
     const member = createMockCtx({
       userId: USER_A,
@@ -241,21 +263,36 @@ async function main() {
     });
     await handleConnectFour(member, {
       startChallengeFn: (p) => service.startChallenge(p),
+      isBusyFn: () => false,
+      setMessageIdFn: (id, mid) => service.setMessageId(id, mid),
+    });
+    assert.ok(member.replies[0].includes("CONNECT FOUR"));
+    assert.ok(!String(member.replies[0]).toLowerCase().includes("admin"));
+
+    service.reset();
+    process.env.TELEGRAM_GAMES_TOPIC_ID = "123";
+    const blocked = createMockCtx({
+      userId: USER_A,
+      memberStatus: "member",
+    });
+    await handleConnectFour(blocked, {
+      startChallengeFn: (p) => service.startChallenge(p),
+      isBusyFn: () => false,
       canManageGroupFn: async () => false,
     });
-    assert.ok(member.replies[0].includes("admin"));
+    assert.ok(blocked.replies[0].includes("Games topic"));
 
-    const admin = createMockCtx({
-      userId: ADMIN_ID,
-      memberStatus: "administrator",
-      text: "/connect4",
+    const ok = createMockCtx({
+      userId: USER_A,
+      memberStatus: "member",
+      messageThreadId: 123,
     });
-    await handleConnectFour(admin, {
+    await handleConnectFour(ok, {
       startChallengeFn: (p) => service.startChallenge(p),
-      canManageGroupFn: async () => true,
       isBusyFn: () => false,
+      setMessageIdFn: (id, mid) => service.setMessageId(id, mid),
     });
-    assert.ok(admin.replies[0].includes("CONNECT FOUR"));
+    assert.ok(ok.replies[0].includes("CONNECT FOUR"));
   });
 
   await runTest("40. first player is red", () => {

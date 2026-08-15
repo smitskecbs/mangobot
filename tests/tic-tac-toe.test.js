@@ -59,6 +59,7 @@ const USER_C = 333;
 
 const originalAdmin = process.env.ADMIN_USER_ID;
 const originalChatId = process.env.TELEGRAM_CHAT_ID;
+const originalGamesTopic = process.env.TELEGRAM_GAMES_TOPIC_ID;
 
 function pointsFile() {
   testCounter += 1;
@@ -68,6 +69,7 @@ function pointsFile() {
 function resetEnv() {
   process.env.ADMIN_USER_ID = String(ADMIN_ID);
   process.env.TELEGRAM_CHAT_ID = String(COMMUNITY_CHAT);
+  delete process.env.TELEGRAM_GAMES_TOPIC_ID;
 }
 
 function restoreEnv() {
@@ -75,6 +77,8 @@ function restoreEnv() {
   else process.env.ADMIN_USER_ID = originalAdmin;
   if (originalChatId === undefined) delete process.env.TELEGRAM_CHAT_ID;
   else process.env.TELEGRAM_CHAT_ID = originalChatId;
+  if (originalGamesTopic === undefined) delete process.env.TELEGRAM_GAMES_TOPIC_ID;
+  else process.env.TELEGRAM_GAMES_TOPIC_ID = originalGamesTopic;
 }
 
 async function runTest(name, fn) {
@@ -147,11 +151,16 @@ function createMockCtx({
   isBot = false,
   memberStatus = "member",
   callbackData,
+  messageThreadId,
 } = {}) {
   const replies = [];
   const replyExtras = [];
   const cbAnswers = [];
   const edited = [];
+  const message = { text };
+  if (messageThreadId != null) {
+    message.message_thread_id = messageThreadId;
+  }
   const ctx = {
     chat: { type: chatType, id: chatId },
     from: {
@@ -160,9 +169,19 @@ function createMockCtx({
       username,
       is_bot: isBot,
     },
-    message: { text },
+    message,
     callbackQuery: callbackData
-      ? { data: callbackData, from: { id: userId, is_bot: isBot } }
+      ? {
+          data: callbackData,
+          from: { id: userId, is_bot: isBot },
+          message: {
+            message_id: 5001,
+            chat: { id: chatId, type: chatType },
+            ...(messageThreadId != null
+              ? { message_thread_id: messageThreadId }
+              : {}),
+          },
+        }
       : undefined,
     replies,
     replyExtras,
@@ -229,7 +248,7 @@ async function main() {
     assert.ok(r.keyboard);
   });
 
-  await runTest("2-4. only group + admin start + non-admin denied", async () => {
+  await runTest("2-4. group + member start; bots/private rejected", async () => {
     const { service } = createService();
     const priv = createMockCtx({ chatType: "private", userId: ADMIN_ID });
     await handleTicTacToe(priv, {
@@ -238,30 +257,55 @@ async function main() {
     });
     assert.ok(priv.replies[0].includes("community group"));
 
-    const nonAdmin = createMockCtx({
+    const member = createMockCtx({
       userId: USER_A,
       memberStatus: "member",
       text: "/tictactoe",
     });
-    await handleTicTacToe(nonAdmin, {
+    await handleTicTacToe(member, {
       startChallengeFn: (p) => service.startChallenge(p),
-      canManageGroupFn: async () => false,
-      isBusyFn: () => false,
-    });
-    assert.ok(nonAdmin.replies[0].includes("admin"));
-
-    const admin = createMockCtx({
-      userId: ADMIN_ID,
-      memberStatus: "administrator",
-      text: "/tictactoe",
-    });
-    await handleTicTacToe(admin, {
-      startChallengeFn: (p) => service.startChallenge(p),
-      canManageGroupFn: async () => true,
       isBusyFn: () => false,
       setMessageIdFn: (id, mid) => service.setMessageId(id, mid),
     });
-    assert.ok(admin.replies[0].includes("TIC-TAC-TOE"));
+    assert.ok(member.replies[0].includes("TIC-TAC-TOE"));
+    assert.ok(!String(member.replies[0]).toLowerCase().includes("admin"));
+
+    service.reset();
+    const botCtx = createMockCtx({
+      userId: USER_A,
+      isBot: true,
+      memberStatus: "member",
+    });
+    await handleTicTacToe(botCtx, {
+      startChallengeFn: (p) => service.startChallenge(p),
+      isBusyFn: () => false,
+    });
+    assert.ok(botCtx.replies[0].includes("Bots cannot"));
+  });
+
+  await runTest("Games topic required for members when configured", async () => {
+    process.env.TELEGRAM_GAMES_TOPIC_ID = "123";
+    const { service } = createService();
+    const general = createMockCtx({ userId: USER_A, memberStatus: "member" });
+    await handleTicTacToe(general, {
+      startChallengeFn: (p) => service.startChallenge(p),
+      isBusyFn: () => false,
+      canManageGroupFn: async () => false,
+    });
+    assert.ok(general.replies[0].includes("Games topic"));
+
+    const inTopic = createMockCtx({
+      userId: USER_A,
+      memberStatus: "member",
+      messageThreadId: "123",
+    });
+    await handleTicTacToe(inTopic, {
+      startChallengeFn: (p) => service.startChallenge(p),
+      isBusyFn: () => false,
+      setMessageIdFn: (id, mid) => service.setMessageId(id, mid),
+    });
+    assert.ok(inTopic.replies[0].includes("TIC-TAC-TOE"));
+    assert.strictEqual(String(inTopic.replyExtras[0].message_thread_id), "123");
   });
 
   await runTest("wrong configured TELEGRAM_CHAT_ID denied", async () => {

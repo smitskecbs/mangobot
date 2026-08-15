@@ -1,10 +1,8 @@
 /**
- * /tictactoe — admin-start PvP Tic-Tac-Toe challenge in the community group.
+ * /tictactoe — member-start PvP Tic-Tac-Toe challenge in the community group.
  */
 
 const { isPrivateChat, isGroupChat } = require("../utils/botMenu");
-const { canManageGroup } = require("../utils/admin");
-const { isAllowedChatFightChat } = require("../services/chatFight");
 const {
   isCommunityChallengeBusy,
   getCommunityBusyReason,
@@ -13,16 +11,17 @@ const {
   startTicTacToeChallenge,
   getTicTacToeRuntime,
 } = require("../services/ticTacToe");
+const {
+  GAMES_TOPIC_REQUIRED_MESSAGE,
+  assertCanStartInteractiveGame,
+  withCtxThreadExtra,
+} = require("../utils/gameTopic");
 
 async function handleTicTacToe(ctx, options = {}) {
   const startFn =
     typeof options.startChallengeFn === "function"
       ? options.startChallengeFn
       : startTicTacToeChallenge;
-  const canManageFn =
-    typeof options.canManageGroupFn === "function"
-      ? options.canManageGroupFn
-      : canManageGroup;
   const busyFn =
     typeof options.isBusyFn === "function"
       ? options.isBusyFn
@@ -36,47 +35,38 @@ async function handleTicTacToe(ctx, options = {}) {
       ? options.setMessageIdFn
       : (sessionId, messageId) =>
           getTicTacToeRuntime().setMessageId(sessionId, messageId);
+  const assertStartFn =
+    typeof options.assertCanStartFn === "function"
+      ? options.assertCanStartFn
+      : assertCanStartInteractiveGame;
 
   if (!ctx || !ctx.from) {
     return;
   }
 
-  if (isPrivateChat(ctx)) {
+  if (isPrivateChat(ctx) || !isGroupChat(ctx)) {
     return ctx.reply("🎮 Tic-Tac-Toe is played in the ManGo community group.");
   }
 
-  if (!isGroupChat(ctx)) {
-    return ctx.reply("🎮 Tic-Tac-Toe is played in the ManGo community group.");
-  }
-
-  if (!isAllowedChatFightChat(ctx.chat.id)) {
+  const gate = await assertStartFn(ctx, options);
+  if (!gate.ok) {
+    if (gate.reason === "bot") {
+      return ctx.reply("🎮 Bots cannot start Tic-Tac-Toe.");
+    }
+    if (gate.reason === "wrong-topic") {
+      return ctx.reply(GAMES_TOPIC_REQUIRED_MESSAGE);
+    }
     return ctx.reply("🎮 Tic-Tac-Toe is not available in this group.");
   }
 
-  let allowed = false;
-  try {
-    allowed = Boolean(
-      await canManageFn(ctx, {
-        isAdminFn: options.isAdminFn,
-        getChatMember: options.getChatMember,
-      })
-    );
-  } catch (_err) {
-    allowed = false;
-  }
-
-  if (!allowed) {
-    return ctx.reply(
-      "🎮 Tic-Tac-Toe can currently only be started by an admin."
-    );
-  }
-
-    if (busyFn({
+  if (
+    busyFn({
       isChatFightOpenFn: options.isChatFightOpenFn,
       isTicTacToeOpenFn: options.isTicTacToeOpenFn,
       isConnectFourOpenFn: options.isConnectFourOpenFn,
       isTriviaOpenFn: options.isTriviaOpenFn,
-    })) {
+    })
+  ) {
     const reason = busyReasonFn({
       isChatFightOpenFn: options.isChatFightOpenFn,
       isTicTacToeOpenFn: options.isTicTacToeOpenFn,
@@ -106,7 +96,10 @@ async function handleTicTacToe(ctx, options = {}) {
     return ctx.reply("🎮 Could not start Tic-Tac-Toe.");
   }
 
-  const sent = await ctx.reply(result.text, result.keyboard || undefined);
+  const sent = await ctx.reply(
+    result.text,
+    withCtxThreadExtra(ctx, result.keyboard || undefined)
+  );
   if (sent && sent.message_id != null && result.session) {
     setMessageIdFn(result.session.id, sent.message_id);
   }

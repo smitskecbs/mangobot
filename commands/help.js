@@ -16,9 +16,9 @@ const HELP_MESSAGE = `🥭 Commands
 /weekly
 /weeklywinners
 /chatfight
-/tictactoe — Start Tic-Tac-Toe PvP
-/connect4 — Start Connect Four PvP
-/trivia — Start a 5-question Trivia round
+/tictactoe — Start Tic-Tac-Toe
+/connect4 — Start Connect Four
+/trivia — Start a Trivia round
 /streak — Active streak leaderboard
 /streakrecord — Longest streak leaderboard
 

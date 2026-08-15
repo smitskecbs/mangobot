@@ -1,12 +1,10 @@
 /**
- * /trivia | /quiz — admin-start 5-question community Trivia round.
- * Auto Trivia uses the same runtime via Activity Engine (no admin).
+ * /trivia | /quiz — member-start 5-question community Trivia round.
+ * Auto Trivia uses the same runtime via Activity Engine.
  * Callbacks: trivia:<sessionId>:<answerIndex>
  */
 
 const { isPrivateChat, isGroupChat } = require("../utils/botMenu");
-const { canManageGroup } = require("../utils/admin");
-const { isAllowedChatFightChat } = require("../services/chatFight");
 const {
   isCommunityChallengeBusy,
   getCommunityBusyReason,
@@ -22,6 +20,11 @@ const { logError } = require("../utils/logger");
 const {
   emptyInlineKeyboardExtra,
 } = require("../utils/expiredMessageCleanup");
+const {
+  GAMES_TOPIC_REQUIRED_MESSAGE,
+  assertCanStartInteractiveGame,
+  withCtxThreadExtra,
+} = require("../utils/gameTopic");
 
 function busyOptions(options = {}) {
   return {
@@ -87,10 +90,6 @@ async function handleTrivia(ctx, options = {}) {
     typeof options.startTriviaFn === "function"
       ? options.startTriviaFn
       : startTrivia;
-  const canManageFn =
-    typeof options.canManageGroupFn === "function"
-      ? options.canManageGroupFn
-      : canManageGroup;
   const busyFn =
     typeof options.isBusyFn === "function"
       ? options.isBusyFn
@@ -104,6 +103,10 @@ async function handleTrivia(ctx, options = {}) {
       ? options.setMessageIdFn
       : (sessionId, messageId) =>
           getTriviaRuntime().setMessageId(sessionId, messageId);
+  const assertStartFn =
+    typeof options.assertCanStartFn === "function"
+      ? options.assertCanStartFn
+      : assertCanStartInteractiveGame;
 
   if (!ctx || !ctx.from) {
     return;
@@ -113,24 +116,15 @@ async function handleTrivia(ctx, options = {}) {
     return ctx.reply("🧠 Trivia is played in the ManGo community group.");
   }
 
-  if (!isAllowedChatFightChat(ctx.chat.id)) {
+  const gate = await assertStartFn(ctx, options);
+  if (!gate.ok) {
+    if (gate.reason === "bot") {
+      return ctx.reply("🧠 Bots cannot start Trivia.");
+    }
+    if (gate.reason === "wrong-topic") {
+      return ctx.reply(GAMES_TOPIC_REQUIRED_MESSAGE);
+    }
     return ctx.reply("🧠 Trivia is not available in this group.");
-  }
-
-  let allowed = false;
-  try {
-    allowed = Boolean(
-      await canManageFn(ctx, {
-        isAdminFn: options.isAdminFn,
-        getChatMember: options.getChatMember,
-      })
-    );
-  } catch (_err) {
-    allowed = false;
-  }
-
-  if (!allowed) {
-    return ctx.reply("🧠 Trivia can currently only be started by an admin.");
   }
 
   if (busyFn(busyOptions(options))) {
@@ -158,7 +152,10 @@ async function handleTrivia(ctx, options = {}) {
     return ctx.reply("🧠 Could not start Trivia.");
   }
 
-  const sent = await ctx.reply(result.text, result.keyboard || undefined);
+  const sent = await ctx.reply(
+    result.text,
+    withCtxThreadExtra(ctx, result.keyboard || undefined)
+  );
   if (sent && sent.message_id != null && result.session) {
     setMessageIdFn(result.session.id, sent.message_id);
   }

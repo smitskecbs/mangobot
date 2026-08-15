@@ -725,13 +725,26 @@ async function processCommunityActivitySlot({
       return { ok: false, reason: started.reason || "start-failed" };
     }
     try {
-      const announce =
-        typeof announceTrivia === "function" ? announceTrivia : sendMessage;
-      const sentMsg = await announce(
-        chatId,
-        started.text,
-        started.keyboard || undefined
-      );
+      const { applyGamesTopicToExtra } = require("../utils/gameTopic");
+      let sentMsg;
+      if (typeof announceTrivia === "function") {
+        sentMsg = await announceTrivia(
+          chatId,
+          started.text,
+          started.keyboard || undefined
+        );
+      } else {
+        const extra = applyGamesTopicToExtra(
+          started.keyboard && typeof started.keyboard === "object"
+            ? { ...started.keyboard }
+            : {}
+        );
+        sentMsg = await sendMessage(
+          chatId,
+          started.text,
+          Object.keys(extra).length ? extra : undefined
+        );
+      }
       const messageId =
         sentMsg &&
         (sentMsg.message_id != null ? sentMsg.message_id : sentMsg.messageId);

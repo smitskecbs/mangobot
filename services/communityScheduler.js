@@ -1130,9 +1130,10 @@ function startCommunityScheduler(telegram, options = {}) {
       return telegram.sendMessage(chatId, teaser, extra);
     },
     announceTrivia: async (chatId, text, keyboard) => {
-      const extra = {
+      const { applyGamesTopicToExtra } = require("../utils/gameTopic");
+      const extra = applyGamesTopicToExtra({
         disable_web_page_preview: true,
-      };
+      });
       if (keyboard && keyboard.reply_markup) {
         extra.reply_markup = keyboard.reply_markup;
       } else if (keyboard) {

@@ -814,112 +814,110 @@ runTest("Back fallback replies when edit unavailable", async () => {
   assert.strictEqual(ctx.replies[0].text, GROUP_MENU_TEXT);
 });
 
-runTest("Tic-Tac-Toe menu uses existing authorization (non-admin denied)", async () => {
+runTest("Tic-Tac-Toe menu lets members start (no admin required)", async () => {
+  const prevChat = process.env.TELEGRAM_CHAT_ID;
+  process.env.TELEGRAM_CHAT_ID = String(-1003916996602);
+  delete process.env.TELEGRAM_GAMES_TOPIC_ID;
+  try {
+    const ctx = createMockCtx({
+      chatType: "supergroup",
+      callbackData: GROUP_MENU_CALLBACK.TICTACTOE,
+    });
+    let started = false;
+    await handleGroupMenuCallback(ctx, {
+      isBusyFn: () => false,
+      startChallengeFn: () => {
+        started = true;
+        return {
+          ok: true,
+          text: "🎮 Tic-Tac-Toe challenge open",
+          session: { id: "ttt-1" },
+        };
+      },
+      setMessageIdFn: () => {},
+    });
+    assert.strictEqual(started, true);
+    assert.ok(ctx.replies[0].text.includes("Tic-Tac-Toe"));
+  } finally {
+    if (prevChat === undefined) delete process.env.TELEGRAM_CHAT_ID;
+    else process.env.TELEGRAM_CHAT_ID = prevChat;
+  }
+});
+
+runTest("Tic-Tac-Toe menu respects Games topic gate", async () => {
   const ctx = createMockCtx({
     chatType: "supergroup",
     callbackData: GROUP_MENU_CALLBACK.TICTACTOE,
   });
   await handleGroupMenuCallback(ctx, {
-    canManageGroupFn: async () => false,
     isBusyFn: () => false,
-  });
-  assert.ok(
-    ctx.replies[0].text.includes("only be started by an admin")
-  );
-});
-
-runTest("Tic-Tac-Toe menu admin can start via existing flow", async () => {
-  const ctx = createMockCtx({
-    chatType: "supergroup",
-    callbackData: GROUP_MENU_CALLBACK.TICTACTOE,
-  });
-  let started = false;
-  await handleGroupMenuCallback(ctx, {
-    canManageGroupFn: async () => true,
-    isBusyFn: () => false,
+    assertCanStartFn: async () => ({ ok: false, reason: "wrong-topic" }),
     startChallengeFn: () => {
-      started = true;
-      return {
-        ok: true,
-        text: "🎮 Tic-Tac-Toe challenge open",
-        session: { id: "ttt-1" },
-      };
+      throw new Error("must not start");
     },
-    setMessageIdFn: () => {},
   });
-  assert.strictEqual(started, true);
-  assert.ok(ctx.replies[0].text.includes("Tic-Tac-Toe"));
+  assert.ok(ctx.replies[0].text.includes("Games topic"));
 });
 
-runTest("Connect Four menu uses existing authorization (non-admin denied)", async () => {
-  const ctx = createMockCtx({
-    chatType: "supergroup",
-    callbackData: GROUP_MENU_CALLBACK.CONNECT4,
-  });
-  await handleGroupMenuCallback(ctx, {
-    canManageGroupFn: async () => false,
-    isBusyFn: () => false,
-  });
-  assert.ok(ctx.replies[0].text.includes("only be started by an admin"));
+runTest("Connect Four menu lets members start (no admin required)", async () => {
+  const prevChat = process.env.TELEGRAM_CHAT_ID;
+  process.env.TELEGRAM_CHAT_ID = String(-1003916996602);
+  delete process.env.TELEGRAM_GAMES_TOPIC_ID;
+  try {
+    const ctx = createMockCtx({
+      chatType: "supergroup",
+      callbackData: GROUP_MENU_CALLBACK.CONNECT4,
+    });
+    let started = false;
+    await handleGroupMenuCallback(ctx, {
+      isBusyFn: () => false,
+      startChallengeFn: () => {
+        started = true;
+        return {
+          ok: true,
+          text: "🟡 Connect Four challenge open",
+          session: { id: "c4-1" },
+        };
+      },
+      setMessageIdFn: () => {},
+    });
+    assert.strictEqual(started, true);
+    assert.ok(ctx.replies[0].text.includes("Connect Four"));
+  } finally {
+    if (prevChat === undefined) delete process.env.TELEGRAM_CHAT_ID;
+    else process.env.TELEGRAM_CHAT_ID = prevChat;
+  }
 });
 
-runTest("Connect Four menu admin can start via existing flow", async () => {
-  const ctx = createMockCtx({
-    chatType: "supergroup",
-    callbackData: GROUP_MENU_CALLBACK.CONNECT4,
-  });
-  let started = false;
-  await handleGroupMenuCallback(ctx, {
-    canManageGroupFn: async () => true,
-    isBusyFn: () => false,
-    startChallengeFn: () => {
-      started = true;
-      return {
-        ok: true,
-        text: "🟡 Connect Four challenge open",
-        session: { id: "c4-1" },
-      };
-    },
-    setMessageIdFn: () => {},
-  });
-  assert.strictEqual(started, true);
-  assert.ok(ctx.replies[0].text.includes("Connect Four"));
-});
-
-runTest("Trivia menu uses existing authorization (non-admin denied)", async () => {
-  const ctx = createMockCtx({
-    chatType: "supergroup",
-    callbackData: GROUP_MENU_CALLBACK.TRIVIA,
-  });
-  await handleGroupMenuCallback(ctx, {
-    canManageGroupFn: async () => false,
-    isBusyFn: () => false,
-  });
-  assert.ok(ctx.replies[0].text.includes("only be started by an admin"));
-});
-
-runTest("Trivia menu admin can start via existing flow", async () => {
-  const ctx = createMockCtx({
-    chatType: "supergroup",
-    callbackData: GROUP_MENU_CALLBACK.TRIVIA,
-  });
-  let started = false;
-  await handleGroupMenuCallback(ctx, {
-    canManageGroupFn: async () => true,
-    isBusyFn: () => false,
-    startTriviaFn: () => {
-      started = true;
-      return {
-        ok: true,
-        text: "🧠 Trivia round",
-        session: { id: "tr-1" },
-        keyboard: {},
-      };
-    },
-    setMessageIdFn: () => {},
-  });
-  assert.strictEqual(started, true);
-  assert.ok(ctx.replies[0].text.includes("Trivia"));
+runTest("Trivia menu lets members start (no admin required)", async () => {
+  const prevChat = process.env.TELEGRAM_CHAT_ID;
+  process.env.TELEGRAM_CHAT_ID = String(-1003916996602);
+  delete process.env.TELEGRAM_GAMES_TOPIC_ID;
+  try {
+    const ctx = createMockCtx({
+      chatType: "supergroup",
+      callbackData: GROUP_MENU_CALLBACK.TRIVIA,
+    });
+    let started = false;
+    await handleGroupMenuCallback(ctx, {
+      isBusyFn: () => false,
+      startTriviaFn: () => {
+        started = true;
+        return {
+          ok: true,
+          text: "🧠 Trivia round",
+          session: { id: "tr-1" },
+          keyboard: {},
+        };
+      },
+      setMessageIdFn: () => {},
+    });
+    assert.strictEqual(started, true);
+    assert.ok(ctx.replies[0].text.includes("Trivia"));
+  } finally {
+    if (prevChat === undefined) delete process.env.TELEGRAM_CHAT_ID;
+    else process.env.TELEGRAM_CHAT_ID = prevChat;
+  }
 });
 
 runTest("/start streak private → persoonlijke streak, geen uid", () => {

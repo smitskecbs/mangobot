@@ -64,6 +64,7 @@ const OWNER_ID = 999001;
 
 const originalAdmin = process.env.ADMIN_USER_ID;
 const originalChatId = process.env.TELEGRAM_CHAT_ID;
+const originalGamesTopic = process.env.TELEGRAM_GAMES_TOPIC_ID;
 
 function pointsFile() {
   testCounter += 1;
@@ -73,6 +74,7 @@ function pointsFile() {
 function resetEnv() {
   process.env.ADMIN_USER_ID = String(OWNER_ID);
   process.env.TELEGRAM_CHAT_ID = String(COMMUNITY_CHAT);
+  delete process.env.TELEGRAM_GAMES_TOPIC_ID;
 }
 
 function restoreEnv() {
@@ -80,6 +82,8 @@ function restoreEnv() {
   else process.env.ADMIN_USER_ID = originalAdmin;
   if (originalChatId === undefined) delete process.env.TELEGRAM_CHAT_ID;
   else process.env.TELEGRAM_CHAT_ID = originalChatId;
+  if (originalGamesTopic === undefined) delete process.env.TELEGRAM_GAMES_TOPIC_ID;
+  else process.env.TELEGRAM_GAMES_TOPIC_ID = originalGamesTopic;
 }
 
 async function runTest(name, fn) {
@@ -202,18 +206,36 @@ function createMockCtx({
   isBot = false,
   memberStatus = "member",
   callbackData,
+  messageThreadId,
 } = {}) {
   const replies = [];
+  const replyExtras = [];
   const cbAnswers = [];
   const edited = [];
+  const message = { text };
+  if (messageThreadId != null) {
+    message.message_thread_id = messageThreadId;
+  }
+  const callbackQuery = callbackData
+    ? {
+        data: callbackData,
+        from: { id: userId, is_bot: isBot },
+        message: {
+          message_id: 9001,
+          chat: { id: chatId, type: chatType },
+          ...(messageThreadId != null
+            ? { message_thread_id: messageThreadId }
+            : {}),
+        },
+      }
+    : undefined;
   return {
     chat: { type: chatType, id: chatId },
     from: { id: userId, first_name: firstName, is_bot: isBot },
-    message: { text },
-    callbackQuery: callbackData
-      ? { data: callbackData, from: { id: userId, is_bot: isBot } }
-      : undefined,
+    message,
+    callbackQuery,
     replies,
+    replyExtras,
     cbAnswers,
     edited,
     telegram: {
@@ -223,6 +245,7 @@ function createMockCtx({
     },
     reply(msg, extra) {
       replies.push(msg);
+      replyExtras.push(extra);
       return Promise.resolve({ message_id: 9001, extra });
     },
     answerCbQuery(msg) {
@@ -535,7 +558,7 @@ async function main() {
     void announced;
   });
 
-  await runTest("auto starts same 5-question runtime without admin", async () => {
+  await runTest("auto starts same 5-question runtime; members can start manual", async () => {
     const { service } = createService();
     const started = service.startTrivia({
       chatId: COMMUNITY_CHAT,
@@ -546,13 +569,112 @@ async function main() {
     assert.ok(started.text.includes("5-question community round"));
     assert.ok(started.text.includes("Question 1 / 5"));
     assert.strictEqual(started.session.totalQuestions, 5);
+    service.reset();
 
     const member = createMockCtx({ userId: USER_A, memberStatus: "member" });
     await handleTrivia(member, {
-      startTriviaFn: () => ({ ok: false }),
+      startTriviaFn: (p) => service.startTrivia(p),
+      isBusyFn: () => false,
+      setMessageIdFn: (id, mid) => service.setMessageId(id, mid),
+    });
+    assert.ok(member.replies[0].includes("Question 1 / 5"));
+    assert.ok(!String(member.replies[0]).toLowerCase().includes("admin"));
+  });
+
+  await runTest("member start blocked outside Games topic when configured", async () => {
+    process.env.TELEGRAM_GAMES_TOPIC_ID = "123";
+    const { service } = createService();
+    const general = createMockCtx({ userId: USER_A, memberStatus: "member" });
+    await handleTrivia(general, {
+      startTriviaFn: (p) => service.startTrivia(p),
+      isBusyFn: () => false,
       canManageGroupFn: async () => false,
     });
-    assert.ok(member.replies[0].includes("admin"));
+    assert.ok(general.replies[0].includes("Games topic"));
+    assert.strictEqual(service.isTriviaOpen(), false);
+
+    const wrong = createMockCtx({
+      userId: USER_A,
+      memberStatus: "member",
+      messageThreadId: 999,
+    });
+    await handleTrivia(wrong, {
+      startTriviaFn: (p) => service.startTrivia(p),
+      isBusyFn: () => false,
+      canManageGroupFn: async () => false,
+    });
+    assert.ok(wrong.replies[0].includes("Games topic"));
+
+    const ok = createMockCtx({
+      userId: USER_A,
+      memberStatus: "member",
+      messageThreadId: 123,
+    });
+    await handleTrivia(ok, {
+      startTriviaFn: (p) => service.startTrivia(p),
+      isBusyFn: () => false,
+      setMessageIdFn: (id, mid) => service.setMessageId(id, mid),
+    });
+    assert.ok(ok.replies[0].includes("Question 1"));
+    assert.strictEqual(ok.replyExtras[0].message_thread_id, 123);
+
+    const adminBypass = createMockCtx({
+      userId: OWNER_ID,
+      memberStatus: "administrator",
+    });
+    service.reset();
+    await handleTrivia(adminBypass, {
+      startTriviaFn: (p) => service.startTrivia(p),
+      isBusyFn: () => false,
+      canManageGroupFn: async () => true,
+      setMessageIdFn: (id, mid) => service.setMessageId(id, mid),
+    });
+    assert.ok(adminBypass.replies[0].includes("Question 1"));
+  });
+
+  await runTest("auto Trivia announce uses Games topic thread when configured", async () => {
+    process.env.TELEGRAM_GAMES_TOPIC_ID = "123";
+    const { applyGamesTopicToExtra } = require("../utils/gameTopic");
+    assert.strictEqual(applyGamesTopicToExtra({}).message_thread_id, 123);
+
+    const { service } = createService();
+    const announced = [];
+    const fight = createChatFightService({ cooldownMs: 0 });
+    const config = {
+      enabled: true,
+      autoFightEnabled: false,
+      autoFightMinGapMs: 0,
+      skipRecentMs: 0,
+      fightTypes: ["type_rush"],
+      slots: [{ id: "s1", label: "00:00", hour: 0, minute: 0 }],
+    };
+    const result = await processCommunityActivitySlot({
+      chatId: COMMUNITY_CHAT,
+      slot: config.slots[0],
+      dayKey: "2026-08-15-topic",
+      config,
+      state: { sent: {}, autoChatFight: {}, recentActivityTypes: [] },
+      chatFight: fight,
+      triviaRuntime: service,
+      sendMessage: async () => true,
+      announceTrivia: async (chatId, text, keyboard) => {
+        const extra = applyGamesTopicToExtra(
+          keyboard && keyboard.reply_markup
+            ? { reply_markup: keyboard.reply_markup }
+            : {}
+        );
+        announced.push({ chatId, text, extra });
+        return { message_id: 77 };
+      },
+      nowMs: Date.now(),
+      random: () => 0,
+      wasActiveWithinFn: () => true,
+    });
+    assert.strictEqual(result.action, ACTION_IDS.TRIVIA);
+    assert.strictEqual(announced.length, 1);
+    assert.strictEqual(announced[0].chatId, COMMUNITY_CHAT);
+    assert.strictEqual(announced[0].extra.message_thread_id, 123);
+    service.reset();
   });
 
   await runTest("cleanup helper schedules delete; failure safe", async () => {
@@ -590,7 +712,7 @@ async function main() {
       sessionId: "abc123",
       answerIndex: 1,
     });
-    assert.ok(HELP_MESSAGE.includes("5-question Trivia round"));
+    assert.ok(HELP_MESSAGE.includes("Start a Trivia round"));
   });
 
   await runTest("anti-repeat window", () => {
