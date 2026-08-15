@@ -29,6 +29,8 @@ const {
   parseActivityEngineConfig,
   processCommunityActivitySlot,
   nextActivitySlotLabel,
+  emptyCommunityQuestionState,
+  normalizeCommunityQuestionState,
 } = require("./communityActivityEngine");
 const { chatFightRuntime } = require("./chatFight");
 const {
@@ -239,6 +241,7 @@ function emptyState() {
       lastTickAt: null,
     },
     autoChatFight: emptyAutoChatFightState(),
+    communityQuestion: emptyCommunityQuestionState(),
   };
 }
 
@@ -301,6 +304,9 @@ function loadState(stateFile) {
         typeof parsed.lastCheckedAt === "number" ? parsed.lastCheckedAt : null,
       runtime: normalizeRuntime(parsed.runtime, parsed),
       autoChatFight: normalizeAutoChatFightState(parsed.autoChatFight),
+      communityQuestion: normalizeCommunityQuestionState(
+        parsed.communityQuestion
+      ),
     };
   } catch (err) {
     logError("[community-scheduler] Failed to read state:", err);
@@ -361,6 +367,7 @@ function pruneState(state, keepDays = 14) {
       normalizeAutoChatFightState(state.autoChatFight),
       keepDays
     ),
+    communityQuestion: normalizeCommunityQuestionState(state.communityQuestion),
   };
 }
 

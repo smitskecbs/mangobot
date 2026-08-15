@@ -23,6 +23,15 @@ const {
   emptyAutoChatFightState,
   normalizeAutoChatFightState,
 } = require("./autoChatFight");
+const {
+  COMMUNITY_QUESTIONS,
+  ANTI_REPEAT_WINDOW,
+  DEFAULT_QUESTION_MIN_GAP_MINUTES,
+  pickCommunityQuestion,
+  formatCommunityQuestionMessage,
+  emptyCommunityQuestionState,
+  normalizeCommunityQuestionState,
+} = require("./communityQuestions");
 
 const DEFAULT_ACTIVITY_INTERVAL_MINUTES = 30;
 const DEFAULT_AUTO_FIGHT_MIN_GAP_MINUTES = 120;
@@ -31,6 +40,7 @@ const QUIET_GROUP_MS = 60 * 60 * 1000;
 const ACTION_IDS = Object.freeze({
   CHATFIGHT: "chatfight",
   TRIVIA: "trivia",
+  QUESTION: "question",
   GAME: "game",
   COMMUNITY: "community",
   WEEKLY: "weekly",
@@ -44,20 +54,21 @@ const ACTION_IDS = Object.freeze({
 
 /**
  * Exact total weight 100.
- * Before Trivia: chatfight 25, game 12, community 12, weekly 8, snake 9,
- * bounch 9, gmgn 7, leaderboard 7, checkin 7, skip 4.
+ * Before question: chatfight 18, trivia 15, game 11, community 10, weekly 8,
+ * snake 8, bounch 8, gmgn 6, leaderboard 6, checkin 6, skip 4.
  */
 const ACTION_WEIGHTS = Object.freeze({
   [ACTION_IDS.CHATFIGHT]: 18,
   [ACTION_IDS.TRIVIA]: 15,
-  [ACTION_IDS.GAME]: 11,
-  [ACTION_IDS.COMMUNITY]: 10,
-  [ACTION_IDS.WEEKLY]: 8,
-  [ACTION_IDS.SNAKE]: 8,
+  [ACTION_IDS.QUESTION]: 11,
+  [ACTION_IDS.GAME]: 10,
+  [ACTION_IDS.COMMUNITY]: 7,
+  [ACTION_IDS.WEEKLY]: 7,
+  [ACTION_IDS.SNAKE]: 7,
   [ACTION_IDS.BOUNCH]: 8,
-  [ACTION_IDS.GMGN]: 6,
-  [ACTION_IDS.LEADERBOARD]: 6,
-  [ACTION_IDS.CHECKIN]: 6,
+  [ACTION_IDS.LEADERBOARD]: 5,
+  [ACTION_IDS.GMGN]: 4,
+  [ACTION_IDS.CHECKIN]: 4,
   [ACTION_IDS.SKIP]: 4,
 });
 
@@ -75,6 +86,7 @@ const PASSIVE_ACTIONS = new Set([
   ACTION_IDS.COMMUNITY,
   ACTION_IDS.CHECKIN,
   ACTION_IDS.GMGN,
+  ACTION_IDS.QUESTION,
 ]);
 
 const ACTION_REGISTRY = Object.freeze({
@@ -87,6 +99,12 @@ const ACTION_REGISTRY = Object.freeze({
     id: ACTION_IDS.TRIVIA,
     mode: "race",
     category: "trivia",
+    enabledForAuto: true,
+  }),
+  [ACTION_IDS.QUESTION]: Object.freeze({
+    id: ACTION_IDS.QUESTION,
+    mode: "prompt",
+    category: "question",
     enabledForAuto: true,
   }),
   [ACTION_IDS.GAME]: Object.freeze({
@@ -152,6 +170,12 @@ const ACTION_REGISTRY = Object.freeze({
     id: "trivia",
     mode: "race",
     category: "trivia",
+    enabledForAuto: true,
+  }),
+  question: Object.freeze({
+    id: "question",
+    mode: "prompt",
+    category: "question",
     enabledForAuto: true,
   }),
 });
@@ -341,6 +365,13 @@ function parseActivityEngineConfig(env = process.env, options = {}) {
     10
   );
 
+  const questionMinGapMinutes = parsePositiveInt(
+    options.questionMinGapMinutes !== undefined
+      ? options.questionMinGapMinutes
+      : env.COMMUNITY_QUESTION_MIN_GAP_MINUTES,
+    DEFAULT_QUESTION_MIN_GAP_MINUTES
+  );
+
   const slots =
     options.slots ||
     buildActivitySlots(intervalMinutes, {
@@ -362,6 +393,8 @@ function parseActivityEngineConfig(env = process.env, options = {}) {
     autoFightMinGapMinutes,
     autoFightMinGapMs: autoFightMinGapMinutes * 60_000,
     skipRecentMs: skipRecentMinutes * 60_000,
+    questionMinGapMinutes,
+    questionMinGapMs: questionMinGapMinutes * 60_000,
     slots,
     fightTypes: fightTypes.length ? fightTypes : [...RACE_FIGHT_TYPES],
   };
@@ -408,6 +441,9 @@ function buildWeights(config, context) {
       weights[ACTION_IDS.CHATFIGHT] * 1.4
     );
     weights[ACTION_IDS.TRIVIA] = Math.round(weights[ACTION_IDS.TRIVIA] * 1.3);
+    weights[ACTION_IDS.QUESTION] = Math.round(
+      weights[ACTION_IDS.QUESTION] * 1.4
+    );
     weights[ACTION_IDS.SNAKE] = Math.round(weights[ACTION_IDS.SNAKE] * 1.3);
     weights[ACTION_IDS.BOUNCH] = Math.round(weights[ACTION_IDS.BOUNCH] * 1.3);
     weights[ACTION_IDS.GAME] = Math.round(weights[ACTION_IDS.GAME] * 1.2);
@@ -478,6 +514,21 @@ function isActionEligible(actionId, context) {
       }
     } catch (_err) {
       /* ignore */
+    }
+    return true;
+  }
+  if (actionId === ACTION_IDS.QUESTION) {
+    const gapMs =
+      context.config && typeof context.config.questionMinGapMs === "number"
+        ? context.config.questionMinGapMs
+        : DEFAULT_QUESTION_MIN_GAP_MINUTES * 60_000;
+    const last =
+      context.questionState &&
+      typeof context.questionState.lastStartedAt === "number"
+        ? context.questionState.lastStartedAt
+        : null;
+    if (last != null && gapMs > 0 && context.nowMs - last < gapMs) {
+      return false;
     }
     return true;
   }
@@ -562,6 +613,7 @@ async function processCommunityActivitySlot({
   nowMs = Date.now(),
   random = Math.random,
   wasActiveWithinFn = wasActiveWithin,
+  forceAction = null,
 } = {}) {
   if (!config || !config.enabled) {
     if (slot && slot.label) {
@@ -589,6 +641,13 @@ async function processCommunityActivitySlot({
   } else {
     state.autoChatFight = normalizeAutoChatFightState(state.autoChatFight);
   }
+  if (!state.communityQuestion) {
+    state.communityQuestion = emptyCommunityQuestionState();
+  } else {
+    state.communityQuestion = normalizeCommunityQuestionState(
+      state.communityQuestion
+    );
+  }
   if (!Array.isArray(state.recentActivityTypes)) {
     state.recentActivityTypes = [];
   }
@@ -606,6 +665,7 @@ async function processCommunityActivitySlot({
     config,
     chatFight,
     autoState: state.autoChatFight,
+    questionState: state.communityQuestion,
     nowMs,
     recentActivity: true,
     wasActiveWithin: wasActiveWithinFn,
@@ -613,13 +673,34 @@ async function processCommunityActivitySlot({
     recentActivityTypes: state.recentActivityTypes,
   };
 
-  let action = chooseAction(config, context, random);
+  let action =
+    typeof forceAction === "string" && forceAction
+      ? forceAction
+      : chooseAction(config, context, random);
   let fallbackFrom = null;
 
   // Always mark processed to prevent restart spam / catch-up.
   markSlotProcessed(state, dayKey, slot.id);
   state.lastProcessedActivitySlot = `${dayKey} ${slot.label}`;
   state.lastProcessedActivityAt = nowMs;
+
+  function safeSendErrorTag(err) {
+    const name =
+      err && typeof err.name === "string" && err.name.trim()
+        ? err.name.trim()
+        : "Error";
+    const codeRaw =
+      err && err.code != null
+        ? err.code
+        : err && err.error_code != null
+          ? err.error_code
+          : null;
+    if (codeRaw === undefined || codeRaw === null || codeRaw === "") {
+      return name;
+    }
+    const code = String(codeRaw).replace(/[^\w.-]/g, "").slice(0, 32);
+    return code ? `${name}/${code}` : name;
+  }
 
   async function sendPrompt(actionId) {
     const text = pickPoolMessage(actionId, state.lastMessageKey, random);
@@ -634,8 +715,10 @@ async function processCommunityActivitySlot({
       if (!ok) {
         return { action: actionId, sent: false, reason: "send-failed" };
       }
-    } catch (_err) {
-      logError("[activity-engine] send failed");
+    } catch (err) {
+      logError(
+        `[activity-engine] send failed action=${actionId} error=${safeSendErrorTag(err)}`
+      );
       return { action: actionId, sent: false, reason: "send-failed" };
     }
     state.lastMessageKey = text.slice(0, 80);
@@ -769,6 +852,51 @@ async function processCommunityActivitySlot({
     return { ok: true, reason: "started" };
   }
 
+  async function tryQuestion() {
+    if (!isActionEligible(ACTION_IDS.QUESTION, context)) {
+      return { ok: false, reason: "cooldown" };
+    }
+    if (typeof sendMessage !== "function") {
+      return { ok: false, reason: "missing-sender" };
+    }
+    state.communityQuestion = normalizeCommunityQuestionState(
+      state.communityQuestion
+    );
+    let picked;
+    try {
+      picked = pickCommunityQuestion(
+        COMMUNITY_QUESTIONS,
+        state.communityQuestion.recentQuestionIds,
+        random,
+        ANTI_REPEAT_WINDOW
+      );
+    } catch (_err) {
+      return { ok: false, reason: "empty-pool" };
+    }
+    const text = formatCommunityQuestionMessage(picked.question);
+    try {
+      // Always General / root chat — never attach Games topic thread.
+      const ok = await sendMessage(chatId, text);
+      if (!ok) {
+        return { ok: false, reason: "send-failed" };
+      }
+    } catch (err) {
+      logError(
+        `[activity-engine] send failed action=${ACTION_IDS.QUESTION} error=${safeSendErrorTag(err)}`
+      );
+      return { ok: false, reason: "send-failed" };
+    }
+    state.communityQuestion.lastStartedAt = nowMs;
+    state.communityQuestion.recentQuestionIds = picked.recentIds;
+    state.lastMessageKey = text.slice(0, 80);
+    state.lastActivityType = ACTION_IDS.QUESTION;
+    state.recentActivityTypes = [
+      ...state.recentActivityTypes.slice(-4),
+      ACTION_IDS.QUESTION,
+    ];
+    return { ok: true, reason: "sent", questionId: picked.question.id };
+  }
+
   if (action === ACTION_IDS.SKIP) {
     state.lastActivityType = ACTION_IDS.SKIP;
     log(`[activity-engine] skipped slot=${slot.label} reason=skip`);
@@ -828,6 +956,40 @@ async function processCommunityActivitySlot({
     }
   }
 
+  if (action === ACTION_IDS.QUESTION) {
+    const questionResult = await tryQuestion();
+    if (questionResult.ok) {
+      if (fallbackFrom) {
+        log(
+          `[activity-engine] action=question slot=${slot.label} fallback=${fallbackFrom}`
+        );
+        return {
+          action: ACTION_IDS.QUESTION,
+          sent: true,
+          reason: "sent",
+          fallback: fallbackFrom,
+        };
+      }
+      log(`[activity-engine] action=question slot=${slot.label}`);
+      return { action: ACTION_IDS.QUESTION, sent: true, reason: "sent" };
+    }
+    fallbackFrom = fallbackFrom || `question-${questionResult.reason}`;
+    const weights = buildWeights(config, context);
+    weights[ACTION_IDS.QUESTION] = 0;
+    weights[ACTION_IDS.CHATFIGHT] = 0;
+    weights[ACTION_IDS.TRIVIA] = 0;
+    action = pickWeightedAction(weights, random);
+    if (
+      action === ACTION_IDS.QUESTION ||
+      action === ACTION_IDS.TRIVIA ||
+      action === ACTION_IDS.CHATFIGHT ||
+      action === ACTION_IDS.SKIP ||
+      !isActionEligible(action, context)
+    ) {
+      action = pickPromptFallback();
+    }
+  }
+
   const promptResult = await sendPrompt(action);
   if (promptResult.sent) {
     if (fallbackFrom) {
@@ -868,6 +1030,7 @@ module.exports = {
   DEFAULT_ACTIVITY_INTERVAL_MINUTES,
   DEFAULT_AUTO_FIGHT_MIN_GAP_MINUTES,
   QUIET_GROUP_MS,
+  DEFAULT_QUESTION_MIN_GAP_MINUTES,
   parseActivityEngineConfig,
   buildActivitySlots,
   pickWeightedAction,
@@ -877,5 +1040,7 @@ module.exports = {
   processCommunityActivitySlot,
   nextActivitySlotLabel,
   // re-export for tests / avoid unused import lint
+  emptyCommunityQuestionState,
+  normalizeCommunityQuestionState,
   tryStartAutoChatFight,
 };
