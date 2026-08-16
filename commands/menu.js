@@ -14,6 +14,8 @@ const { handleHelp } = require("./help");
 const { handleTicTacToe } = require("./tictactoe");
 const { handleConnectFour } = require("./connect4");
 const { handleTrivia } = require("./trivia");
+const { handleWallet } = require("./wallet");
+const { handleRewards } = require("./rewards");
 const {
   handleStreak,
   handleStreakRecord,
@@ -175,6 +177,20 @@ module.exports = (bot) => {
       return;
     }
     return handleMyStreak(ctx);
+  });
+
+  bot.hears(MENU_LABELS.WALLET, (ctx) => {
+    if (!isPrivateChat(ctx)) {
+      return;
+    }
+    return handleWallet(ctx);
+  });
+
+  bot.hears(MENU_LABELS.REWARDS, (ctx) => {
+    if (!isPrivateChat(ctx)) {
+      return;
+    }
+    return handleRewards(ctx);
   });
 
   bot.hears(MENU_LABELS.SNAKE, (ctx) => {

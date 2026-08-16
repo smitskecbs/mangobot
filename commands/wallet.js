@@ -23,6 +23,8 @@ const {
   disconnectWallet,
 } = require("../services/walletLinks");
 const { createLinkToken } = require("../services/walletVerification");
+const { getMemberWalletProfile } = require("../services/memberWalletProfile");
+const { formatPresaleWalletLines } = require("../services/presaleParticipation");
 
 const WALLET_CALLBACK = Object.freeze({
   DISCONNECT: "w:d",
@@ -47,15 +49,35 @@ const DISCONNECT_DONE = "🥭 Your Solana wallet has been disconnected.";
 const CONNECT_UNAVAILABLE =
   "🥭 Wallet link is temporarily unavailable. Please try again later.";
 
-function buildVerifiedText(record) {
+function formatRewardsWalletLines(summary) {
+  if (!summary || !summary.pending) {
+    return ["Rewards:", "No pending rewards"];
+  }
+  const pending = summary.pending;
+  const delivered = summary.delivered || 0;
+  if (delivered > 0) {
+    return ["Rewards:", `${pending} pending · ${delivered} delivered`];
+  }
+  return ["Rewards:", `${pending} pending`];
+}
+
+function buildVerifiedText(record, extras = {}) {
   const short = shortenWallet(record.wallet);
   const date = formatVerifiedDate(record.verifiedAt);
   const dateLine = date ? `Verified: ${date}` : "Verified:";
-  return `🥭 Your ManGo Wallet
-
-✅ Verified
-Wallet: ${short}
-${dateLine}`;
+  const presaleLines = formatPresaleWalletLines(extras.presale);
+  const rewardLines = formatRewardsWalletLines(extras.rewards);
+  return [
+    "🥭 Your ManGo Wallet",
+    "",
+    "✅ Verified",
+    `Wallet: ${short}`,
+    dateLine,
+    "",
+    ...presaleLines,
+    "",
+    ...rewardLines,
+  ].join("\n");
 }
 
 function getGroupWalletExtra(ctx) {
@@ -126,6 +148,10 @@ function handleWallet(ctx, options = {}) {
   const userId = ctx.from.id;
   const record = getVerifiedWalletForUser(userId, options.walletFile);
   const url = createConnectUrl(userId, options);
+  const profile = getMemberWalletProfile(userId, {
+    walletFile: options.walletFile,
+    rewardsFile: options.rewardsFile,
+  });
 
   if (!record) {
     if (!url) {
@@ -134,7 +160,13 @@ function handleWallet(ctx, options = {}) {
     return ctx.reply(UNVERIFIED_TEXT, privateExtra(buildConnectExtra(url)));
   }
 
-  return ctx.reply(buildVerifiedText(record), privateExtra(buildVerifiedExtra(url)));
+  return ctx.reply(
+    buildVerifiedText(record, {
+      presale: profile.presale,
+      rewards: profile.rewards,
+    }),
+    privateExtra(buildVerifiedExtra(url))
+  );
 }
 
 function isWalletCallback(data) {
@@ -197,7 +229,18 @@ async function handleWalletCallback(ctx, options = {}) {
       return safeEdit(ctx, DISCONNECT_CANCELLED);
     }
     const url = createConnectUrl(userId, options);
-    return safeEdit(ctx, buildVerifiedText(record), buildVerifiedExtra(url));
+    const profile = getMemberWalletProfile(userId, {
+      walletFile: options.walletFile,
+      rewardsFile: options.rewardsFile,
+    });
+    return safeEdit(
+      ctx,
+      buildVerifiedText(record, {
+        presale: profile.presale,
+        rewards: profile.rewards,
+      }),
+      buildVerifiedExtra(url)
+    );
   }
 
   if (data === WALLET_CALLBACK.CONFIRM) {

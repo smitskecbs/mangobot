@@ -7,6 +7,8 @@ const { Markup } = require("telegraf");
 const MENU_LABELS = Object.freeze({
   POINTS: "🥭 My Points",
   MY_STREAK: "🔥 My Streak",
+  WALLET: "💼 Wallet",
+  REWARDS: "🎁 Rewards",
   SNAKE: "🎮 Play Snake",
   BOUNCH: "🏀 Play Bounch",
   LEADERBOARD: "🏆 Leaderboard",
@@ -184,6 +186,7 @@ function appendHighscoreAnnouncementPlayCta(
 function getPrivateMenuKeyboard() {
   return Markup.keyboard([
     [MENU_LABELS.POINTS, MENU_LABELS.MY_STREAK],
+    [MENU_LABELS.WALLET, MENU_LABELS.REWARDS],
     [MENU_LABELS.SNAKE, MENU_LABELS.BOUNCH],
     [MENU_LABELS.HELP],
   ]).resize();
@@ -306,6 +309,7 @@ function getGroupProgressMenuExtra(ctx) {
   const pointsUrl = buildPrivateDeepLink(username, "points");
   const streakUrl = buildPrivateDeepLink(username, "streak");
   const walletUrl = buildPrivateDeepLink(username, "wallet");
+  const rewardsUrl = buildPrivateDeepLink(username, "rewards");
 
   const personalRow = [];
   if (pointsUrl) {
@@ -324,8 +328,13 @@ function getGroupProgressMenuExtra(ctx) {
   if (walletUrl) {
     walletRow.push(Markup.button.url("Wallet", walletUrl));
   }
-  walletRow.push(Markup.button.callback("⬅️ Back", GROUP_MENU_CALLBACK.BACK));
-  rows.push(walletRow);
+  if (rewardsUrl) {
+    walletRow.push(Markup.button.url("Rewards", rewardsUrl));
+  }
+  if (walletRow.length) {
+    rows.push(walletRow);
+  }
+  rows.push([Markup.button.callback("⬅️ Back", GROUP_MENU_CALLBACK.BACK)]);
 
   return Markup.inlineKeyboard(rows);
 }

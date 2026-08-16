@@ -14,6 +14,7 @@ const HELP_MESSAGE = `🥭 Commands
 /points
 /wallet
 /mywallet
+/rewards
 /leaderboard
 /weekly
 /weeklywinners

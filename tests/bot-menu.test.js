@@ -326,6 +326,8 @@ runTest("menu bevat private opties zonder PvP", () => {
   assert.deepStrictEqual(MENU_LABEL_LIST, [
     MENU_LABELS.POINTS,
     MENU_LABELS.MY_STREAK,
+    MENU_LABELS.WALLET,
+    MENU_LABELS.REWARDS,
     MENU_LABELS.SNAKE,
     MENU_LABELS.BOUNCH,
     MENU_LABELS.LEADERBOARD,
@@ -337,6 +339,7 @@ runTest("menu bevat private opties zonder PvP", () => {
   const rows = kb.reply_markup.keyboard;
   assert.deepStrictEqual(rows, [
     [MENU_LABELS.POINTS, MENU_LABELS.MY_STREAK],
+    [MENU_LABELS.WALLET, MENU_LABELS.REWARDS],
     [MENU_LABELS.SNAKE, MENU_LABELS.BOUNCH],
     [MENU_LABELS.HELP],
   ]);
@@ -643,6 +646,8 @@ runTest("My Progress submenu deep-links", () => {
   assert.strictEqual(myStreak.url, `https://t.me/${BOT_USERNAME}?start=streak`);
   const wallet = buttons.find((b) => b.text === "Wallet");
   assert.strictEqual(wallet.url, `https://t.me/${BOT_USERNAME}?start=wallet`);
+  const rewards = buttons.find((b) => b.text === "Rewards");
+  assert.strictEqual(rewards.url, `https://t.me/${BOT_USERNAME}?start=rewards`);
   assert.ok(buttons.some((b) => b.callback_data === GROUP_MENU_CALLBACK.BACK));
   assert.strictEqual(
     buttons.filter((b) => /streak/i.test(b.text)).length,
@@ -652,7 +657,8 @@ runTest("My Progress submenu deep-links", () => {
     rows.map((row) => row.map((b) => b.text)),
     [
       ["My Points", "My Streak"],
-      ["Wallet", "⬅️ Back"],
+      ["Wallet", "Rewards"],
+      ["⬅️ Back"],
     ]
   );
 });
@@ -665,6 +671,7 @@ runTest("/menu private toont reply-keyboard hint", () => {
   const rows = ctx.replies[0].extra.reply_markup.keyboard;
   assert.deepStrictEqual(rows, [
     [MENU_LABELS.POINTS, MENU_LABELS.MY_STREAK],
+    [MENU_LABELS.WALLET, MENU_LABELS.REWARDS],
     [MENU_LABELS.SNAKE, MENU_LABELS.BOUNCH],
     [MENU_LABELS.HELP],
   ]);

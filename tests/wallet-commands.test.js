@@ -349,12 +349,17 @@ runTest("menu Wallet deep-link", () => {
     rows.map((row) => row.map((b) => b.text)),
     [
       ["My Points", "My Streak"],
-      ["Wallet", "⬅️ Back"],
+      ["Wallet", "Rewards"],
+      ["⬅️ Back"],
     ]
   );
   assert.strictEqual(
     rows[1][0].url,
     "https://t.me/ManGoMemeFunCommunityBot?start=wallet"
+  );
+  assert.strictEqual(
+    rows[1][1].url,
+    "https://t.me/ManGoMemeFunCommunityBot?start=rewards"
   );
 });
 
@@ -363,6 +368,7 @@ runTest("help lists /wallet /mywallet", () => {
   handleHelp(ctx);
   assert.ok(HELP_MESSAGE.includes("/wallet"));
   assert.ok(HELP_MESSAGE.includes("/mywallet"));
+  assert.ok(HELP_MESSAGE.includes("/rewards"));
   assert.strictEqual(ctx.replies[0].text, HELP_MESSAGE);
 });
 
