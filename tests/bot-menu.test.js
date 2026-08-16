@@ -641,10 +641,19 @@ runTest("My Progress submenu deep-links", () => {
   const myStreak = buttons.find((b) => b.text === "My Streak");
   assert.strictEqual(points.url, `https://t.me/${BOT_USERNAME}?start=points`);
   assert.strictEqual(myStreak.url, `https://t.me/${BOT_USERNAME}?start=streak`);
+  const wallet = buttons.find((b) => b.text === "Wallet");
+  assert.strictEqual(wallet.url, `https://t.me/${BOT_USERNAME}?start=wallet`);
   assert.ok(buttons.some((b) => b.callback_data === GROUP_MENU_CALLBACK.BACK));
   assert.strictEqual(
     buttons.filter((b) => /streak/i.test(b.text)).length,
     1
+  );
+  assert.deepStrictEqual(
+    rows.map((row) => row.map((b) => b.text)),
+    [
+      ["My Points", "My Streak"],
+      ["Wallet", "⬅️ Back"],
+    ]
   );
 });
 

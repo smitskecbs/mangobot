@@ -7,6 +7,7 @@ const {
   getUserRecord,
   formatPointsCard,
 } = require("../services/points");
+const { isWalletVerified } = require("../services/walletLinks");
 const {
   isPrivateChat,
   getPrivateMenuKeyboard,
@@ -15,7 +16,8 @@ const {
 function handlePoints(ctx, options = {}) {
   const data = loadPoints(options.pointsFile);
   const user = getUserRecord(data, ctx.from.id);
-  const text = formatPointsCard(user);
+  const walletVerified = isWalletVerified(ctx.from.id, options.walletFile);
+  const text = formatPointsCard(user, { walletVerified });
 
   if (isPrivateChat(ctx)) {
     return ctx.reply(text, getPrivateMenuKeyboard());

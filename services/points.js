@@ -534,11 +534,12 @@ function formatPersonalStreakMessage(user) {
   return lines.join("\n");
 }
 
-function formatPointsCard(user) {
+function formatPointsCard(user, options = {}) {
   const points = user && typeof user.points === "number" ? user.points : 0;
   const rank = getRank(points);
   const weeklyPoints = getEffectiveWeeklyPoints(user || {});
   const streak = readStreak(user);
+  const walletVerified = Boolean(options && options.walletVerified);
   return [
     "🥭 Your ManGo Progress",
     "",
@@ -548,6 +549,8 @@ function formatPointsCard(user) {
     "",
     `🔥 Current streak: ${streak.current} days`,
     `🏆 Longest streak: ${streak.longest} days`,
+    "",
+    `Wallet: ${walletVerified ? "✅ Verified" : "⬜ Not connected"}`,
     "",
     "Claimed today:",
     formatClaimedTodayLines(user),

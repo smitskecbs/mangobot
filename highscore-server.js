@@ -16,7 +16,11 @@ loadAppEnv({ envPath: path.join(__dirname, ".env") });
  * Endpoints:
  *   POST /snake-highscore
  *   POST /bounch-highscore
+ *   POST /wallet/challenge
+ *   POST /wallet/verify
  *   GET  /health
+ *
+ * Wallet link tokens are created by the Telegram bot, not by a public HTTP route.
  */
 
 const http = require("node:http");
@@ -36,6 +40,7 @@ const {
   awardBounchGameXp,
   emptyGameXpPayload,
 } = require("./services/points");
+const { tryHandleWalletRequest } = require("./services/walletApi");
 
 const PORT = Number.parseInt(process.env.PORT || "8787", 10);
 const BOT_TOKEN = process.env.BOT_TOKEN?.trim();
@@ -526,6 +531,10 @@ const server = http.createServer(async (req, res) => {
 
   if (url === "/bounch-highscore" && req.method === "POST") {
     await handleBounchHighscore(req, res, origin);
+    return;
+  }
+
+  if (await tryHandleWalletRequest(req, res, origin, url, req.method)) {
     return;
   }
 

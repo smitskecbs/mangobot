@@ -12,6 +12,8 @@ const HELP_MESSAGE = `🥭 Commands
 🥭 Community
 /menu
 /points
+/wallet
+/mywallet
 /leaderboard
 /weekly
 /weeklywinners

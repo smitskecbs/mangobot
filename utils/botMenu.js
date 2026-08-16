@@ -305,6 +305,7 @@ function getGroupProgressMenuExtra(ctx) {
   const username = resolveBotUsername(ctx);
   const pointsUrl = buildPrivateDeepLink(username, "points");
   const streakUrl = buildPrivateDeepLink(username, "streak");
+  const walletUrl = buildPrivateDeepLink(username, "wallet");
 
   const personalRow = [];
   if (pointsUrl) {
@@ -318,7 +319,13 @@ function getGroupProgressMenuExtra(ctx) {
   if (personalRow.length) {
     rows.push(personalRow);
   }
-  rows.push([Markup.button.callback("⬅️ Back", GROUP_MENU_CALLBACK.BACK)]);
+
+  const walletRow = [];
+  if (walletUrl) {
+    walletRow.push(Markup.button.url("Wallet", walletUrl));
+  }
+  walletRow.push(Markup.button.callback("⬅️ Back", GROUP_MENU_CALLBACK.BACK));
+  rows.push(walletRow);
 
   return Markup.inlineKeyboard(rows);
 }
