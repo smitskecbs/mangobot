@@ -130,6 +130,7 @@ runTest("wallet-verify logs have no secrets", () => {
   );
   assert.ok(src.includes("[wallet-verify] verified persistence success"));
   assert.ok(src.includes("[wallet-verify] persistence failed error="));
+  assert.ok(src.includes("notifyTelegramUserId"));
   assert.ok(src.includes("[wallet-link] created fingerprint="));
   assert.ok(src.includes("[wallet-challenge] received fingerprint="));
   assert.equal(/console\.(log|error)\([^)]*token/.test(src), false);

@@ -505,7 +505,12 @@ pending.push(
       origin,
       "/wallet/verify",
       "POST",
-      { walletFile: file, now: now + 2, rateLimiter: limiter }
+      {
+        walletFile: file,
+        now: now + 2,
+        rateLimiter: limiter,
+        fetchImpl: async () => ({ ok: true }),
+      }
     );
     assert.strictEqual(verifyRes.statusCode, 200);
     assert.strictEqual(JSON.parse(verifyRes.body).ok, true);

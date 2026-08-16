@@ -14,6 +14,7 @@ const {
   ERRORS,
 } = require("./walletVerification");
 const { applyCorsHeaders, handleCorsPreflight } = require("./httpCors");
+const { notifyWalletVerified } = require("./walletVerifiedNotify");
 
 const MAX_BODY_BYTES = 16 * 1024;
 const TEMPORARY_ERROR = ERRORS.temporary;
@@ -146,6 +147,22 @@ async function handleWalletVerify(req, res, origin, options = {}) {
   const result = verifyWalletSignature(body, options);
   const mapped = publicVerifyResult(result);
   sendJson(res, mapped.status, mapped.body, origin);
+
+  if (result && result.ok === true && result.notifyTelegramUserId && result.notifyWallet) {
+    try {
+      const notify = options.sendVerifiedNotification || notifyWalletVerified;
+      await notify(
+        {
+          telegramUserId: result.notifyTelegramUserId,
+          wallet: result.notifyWallet,
+        },
+        options
+      );
+    } catch (err) {
+      const code = (err && err.code) || (err && err.name) || "Error";
+      console.error(`[wallet-verify] notify failed error=${code}`);
+    }
+  }
 }
 
 /**

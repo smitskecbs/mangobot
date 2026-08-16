@@ -418,16 +418,22 @@ function verifyWalletSignature(body, options = {}) {
   }
 
   try {
-    const persisted = getVerifiedWalletForUser(
-      result.persistedUserId,
-      options.walletFile
-    );
+    const confirmMapping =
+      typeof options.confirmVerifiedMapping === "function"
+        ? options.confirmVerifiedMapping
+        : getVerifiedWalletForUser;
+    const persisted = confirmMapping(result.persistedUserId, options.walletFile);
     if (!persisted || persisted.wallet !== result.persistedWallet) {
       console.error("[wallet-verify] persistence failed error=missing_mapping");
       return errorResult("failed", 500);
     }
     console.log("[wallet-verify] verified persistence success");
-    return { ok: true, status: 200 };
+    return {
+      ok: true,
+      status: 200,
+      notifyTelegramUserId: result.persistedUserId,
+      notifyWallet: result.persistedWallet,
+    };
   } catch (err) {
     const code = (err && err.code) || (err && err.name) || "Error";
     console.error(`[wallet-verify] persistence failed error=${code}`);
