@@ -128,7 +128,7 @@ function normalizeStore(raw) {
   return store;
 }
 
-function readWalletSnapshot(walletFile) {
+function readWalletSnapshot(walletFile, options = {}) {
   try {
     if (!fs.existsSync(walletFile)) {
       return emptyStore();
@@ -140,6 +140,10 @@ function readWalletSnapshot(walletFile) {
     return normalizeStore(JSON.parse(raw));
   } catch (err) {
     logError("Error reading wallet-links.json:", err);
+    if (options.strict) {
+      const message = err && err.message ? err.message : String(err);
+      throw new Error(`Failed to read wallet-links.json: ${message}`);
+    }
     return emptyStore();
   }
 }
@@ -195,7 +199,7 @@ function mutateWalletStore(mutator, walletFile) {
   const release = acquireWalletLock(filePath);
 
   try {
-    const data = readWalletSnapshot(filePath);
+    const data = readWalletSnapshot(filePath, { strict: true });
     const result = mutator(data);
 
     try {
@@ -288,6 +292,16 @@ function isWalletVerified(userId, walletFile) {
   return getVerifiedWalletForUser(userId, walletFile) !== null;
 }
 
+function getWalletStoreCounts(walletFile) {
+  const store = loadWalletStore(walletFile);
+  return {
+    users: Object.keys(store.users || {}).length,
+    wallets: Object.keys(store.wallets || {}).length,
+    linkTokens: Object.keys(store.linkTokens || {}).length,
+    challenges: Object.keys(store.challenges || {}).length,
+  };
+}
+
 /**
  * Remove the mapping for this Telegram user. No-op if none.
  * @param {string|number} userId
@@ -365,6 +379,7 @@ module.exports = {
   pruneExpired,
   getVerifiedWalletForUser,
   isWalletVerified,
+  getWalletStoreCounts,
   disconnectWallet,
   applyVerifiedWallet,
   normalizeUserId,

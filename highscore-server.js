@@ -41,6 +41,7 @@ const {
   emptyGameXpPayload,
 } = require("./services/points");
 const { tryHandleWalletRequest } = require("./services/walletApi");
+const { resolveWalletFile } = require("./services/walletLinks");
 
 const PORT = Number.parseInt(process.env.PORT || "8787", 10);
 const BOT_TOKEN = process.env.BOT_TOKEN?.trim();
@@ -550,6 +551,7 @@ server.listen(PORT, () => {
   console.log(`ManGo high-score API listening on port ${PORT}`);
   console.log(`Snake scores file: ${SCORES_FILE}`);
   console.log(`Bounch scores file: ${BOUNCH_SCORES_FILE}`);
+  console.log(`Wallet links file: ${resolveWalletFile()}`);
 
   if (!BOT_TOKEN || !TELEGRAM_CHAT_ID) {
     console.log("Telegram not configured — scores will be saved but not posted.");

@@ -253,6 +253,17 @@ runTest("mutateWalletStore lock + atomic write", () => {
   assert.strictEqual(loadWalletStore(file).users["1"].wallet, "x");
 });
 
+runTest("corrupt wallet-links.json is not overwritten with empty store", () => {
+  const file = walletFile();
+  fs.writeFileSync(file, "{not-json", "utf8");
+  assert.throws(() => {
+    mutateWalletStore((store) => {
+      store.users["1"] = { wallet: "x", verifiedAt: 1, updatedAt: 1 };
+    }, file);
+  }, /Failed to read wallet-links.json/);
+  assert.strictEqual(fs.readFileSync(file, "utf8"), "{not-json");
+});
+
 runTest("LINK_TTL_MS is 10 minutes", () => {
   assert.strictEqual(LINK_TTL_MS, 10 * 60 * 1000);
 });

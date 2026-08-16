@@ -16,6 +16,7 @@ const {
   applyVerifiedWallet,
   normalizeUserId,
   resolveWalletFile,
+  getVerifiedWalletForUser,
 } = require("./walletLinks");
 
 const LINK_TTL_MS = 10 * 60 * 1000;
@@ -293,7 +294,7 @@ function verifyWalletSignature(body, options = {}) {
     return errorResult("invalid", 400);
   }
 
-  return mutateWalletStore((store) => {
+  const result = mutateWalletStore((store) => {
     pruneExpired(store, now);
 
     const challenge = store.challenges[challengeId];
@@ -346,8 +347,34 @@ function verifyWalletSignature(body, options = {}) {
     delete challenge.message;
     delete challenge.nonce;
 
-    return { ok: true, status: 200 };
+    return {
+      ok: true,
+      status: 200,
+      persistedUserId: uid,
+      persistedWallet: wallet,
+    };
   }, options.walletFile);
+
+  if (!result || result.ok !== true) {
+    return result;
+  }
+
+  try {
+    const persisted = getVerifiedWalletForUser(
+      result.persistedUserId,
+      options.walletFile
+    );
+    if (!persisted || persisted.wallet !== result.persistedWallet) {
+      console.error("[wallet-verify] persistence failed error=missing_mapping");
+      return errorResult("failed", 500);
+    }
+    console.log("[wallet-verify] verified persistence success");
+    return { ok: true, status: 200 };
+  } catch (err) {
+    const code = (err && err.code) || (err && err.name) || "Error";
+    console.error(`[wallet-verify] persistence failed error=${code}`);
+    return errorResult("failed", 500);
+  }
 }
 
 module.exports = {
