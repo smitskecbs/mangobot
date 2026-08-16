@@ -1,7 +1,7 @@
 /**
  * /menu — private reply keyboard, or compact inline group menu with submenus.
- * Rankings / Help use public replies; Snake/Bounch/Points/Streak use private deep-links.
- * Tic-Tac-Toe / Connect Four / Trivia reuse command handlers (same admin policy).
+ * Rankings / Help use public replies; Snake/Bounch/Points/Streak/Wallet/Rewards
+ * use private deep-links. Tic-Tac-Toe / Connect Four / Trivia reuse command handlers.
  */
 
 const { handlePoints } = require("./points");
@@ -16,6 +16,7 @@ const { handleConnectFour } = require("./connect4");
 const { handleTrivia } = require("./trivia");
 const { handleWallet } = require("./wallet");
 const { handleRewards } = require("./rewards");
+const { handlePresale } = require("./presale");
 const {
   handleStreak,
   handleStreakRecord,
@@ -26,25 +27,32 @@ const {
   GROUP_MENU_TEXT,
   GROUP_RANKINGS_TEXT,
   GROUP_GAMES_TEXT,
-  GROUP_PROGRESS_TEXT,
+  GROUP_PROFILE_TEXT,
   PRIVATE_MENU_HINT,
   GROUP_MENU_CALLBACK,
+  PRIVATE_HUB_CALLBACK,
   isPrivateChat,
   isGroupChat,
   getPrivateMenuKeyboard,
+  getPrivateProfileMenuExtra,
   getGroupMenuExtra,
   getGroupRankingsMenuExtra,
   getGroupGamesMenuExtra,
-  getGroupProgressMenuExtra,
+  getGroupProfileMenuExtra,
   isGroupMenuCallback,
   isGroupMenuNavCallback,
+  isPrivateHubCallback,
 } = require("../utils/botMenu");
 
 const GROUP_MENU_ACTION_RE = new RegExp(
   `^(${[
     GROUP_MENU_CALLBACK.RANKINGS,
     GROUP_MENU_CALLBACK.GAMES,
+    GROUP_MENU_CALLBACK.PROFILE,
     GROUP_MENU_CALLBACK.PROGRESS,
+    GROUP_MENU_CALLBACK.WALLET,
+    GROUP_MENU_CALLBACK.REWARDS,
+    GROUP_MENU_CALLBACK.PRESALE,
     GROUP_MENU_CALLBACK.BACK,
     GROUP_MENU_CALLBACK.LEADERBOARD,
     GROUP_MENU_CALLBACK.WEEKLY,
@@ -55,6 +63,16 @@ const GROUP_MENU_ACTION_RE = new RegExp(
     GROUP_MENU_CALLBACK.TICTACTOE,
     GROUP_MENU_CALLBACK.CONNECT4,
     GROUP_MENU_CALLBACK.TRIVIA,
+  ].join("|")})$`
+);
+
+const PRIVATE_HUB_ACTION_RE = new RegExp(
+  `^(${[
+    PRIVATE_HUB_CALLBACK.PROFILE_BACK,
+    PRIVATE_HUB_CALLBACK.POINTS,
+    PRIVATE_HUB_CALLBACK.STREAK,
+    PRIVATE_HUB_CALLBACK.WALLET_STATUS,
+    PRIVATE_HUB_CALLBACK.REWARDS,
   ].join("|")})$`
 );
 
@@ -91,6 +109,60 @@ function handleMenu(ctx) {
 }
 
 /**
+ * Private My Profile submenu.
+ * @param {object} ctx
+ */
+function handlePrivateProfile(ctx) {
+  if (!isPrivateChat(ctx)) {
+    return undefined;
+  }
+  return ctx.reply(GROUP_PROFILE_TEXT, getPrivateProfileMenuExtra());
+}
+
+/**
+ * @param {object} ctx
+ * @param {object} [options]
+ */
+async function handlePrivateHubCallback(ctx, options = {}) {
+  const data =
+    ctx && ctx.callbackQuery && typeof ctx.callbackQuery.data === "string"
+      ? ctx.callbackQuery.data
+      : "";
+
+  if (!isPrivateHubCallback(data)) {
+    return;
+  }
+
+  try {
+    if (typeof ctx.answerCbQuery === "function") {
+      await ctx.answerCbQuery();
+    }
+  } catch {
+    // Non-fatal: still try to deliver the private reply.
+  }
+
+  if (!isPrivateChat(ctx)) {
+    return;
+  }
+
+  if (data === PRIVATE_HUB_CALLBACK.PROFILE_BACK) {
+    return ctx.reply(PRIVATE_MENU_HINT, getPrivateMenuKeyboard());
+  }
+  if (data === PRIVATE_HUB_CALLBACK.POINTS) {
+    return handlePoints(ctx, options);
+  }
+  if (data === PRIVATE_HUB_CALLBACK.STREAK) {
+    return handleMyStreak(ctx, options);
+  }
+  if (data === PRIVATE_HUB_CALLBACK.WALLET_STATUS) {
+    return handleWallet(ctx, options);
+  }
+  if (data === PRIVATE_HUB_CALLBACK.REWARDS) {
+    return handleRewards(ctx, options);
+  }
+}
+
+/**
  * @param {object} ctx
  * @param {object} [options]
  */
@@ -119,11 +191,14 @@ async function handleGroupMenuCallback(ctx, options = {}) {
     if (data === GROUP_MENU_CALLBACK.GAMES) {
       return showMenuView(ctx, GROUP_GAMES_TEXT, getGroupGamesMenuExtra(ctx));
     }
-    if (data === GROUP_MENU_CALLBACK.PROGRESS) {
+    if (
+      data === GROUP_MENU_CALLBACK.PROFILE ||
+      data === GROUP_MENU_CALLBACK.PROGRESS
+    ) {
       return showMenuView(
         ctx,
-        GROUP_PROGRESS_TEXT,
-        getGroupProgressMenuExtra(ctx)
+        GROUP_PROFILE_TEXT,
+        getGroupProfileMenuExtra(ctx)
       );
     }
     if (data === GROUP_MENU_CALLBACK.BACK) {
@@ -131,6 +206,15 @@ async function handleGroupMenuCallback(ctx, options = {}) {
     }
   }
 
+  if (data === GROUP_MENU_CALLBACK.WALLET) {
+    return handleWallet(ctx, options);
+  }
+  if (data === GROUP_MENU_CALLBACK.REWARDS) {
+    return handleRewards(ctx, options);
+  }
+  if (data === GROUP_MENU_CALLBACK.PRESALE) {
+    return handlePresale(ctx, options);
+  }
   if (data === GROUP_MENU_CALLBACK.LEADERBOARD) {
     return handleLeaderboard(ctx, options);
   }
@@ -164,6 +248,14 @@ module.exports = (bot) => {
   bot.command("menu", handleMenu);
 
   bot.action(GROUP_MENU_ACTION_RE, (ctx) => handleGroupMenuCallback(ctx));
+  bot.action(PRIVATE_HUB_ACTION_RE, (ctx) => handlePrivateHubCallback(ctx));
+
+  bot.hears(MENU_LABELS.MY_PROFILE, (ctx) => {
+    if (!isPrivateChat(ctx)) {
+      return;
+    }
+    return handlePrivateProfile(ctx);
+  });
 
   bot.hears(MENU_LABELS.POINTS, (ctx) => {
     if (!isPrivateChat(ctx)) {
@@ -191,6 +283,13 @@ module.exports = (bot) => {
       return;
     }
     return handleRewards(ctx);
+  });
+
+  bot.hears(MENU_LABELS.PRESALE, (ctx) => {
+    if (!isPrivateChat(ctx)) {
+      return;
+    }
+    return handlePresale(ctx);
   });
 
   bot.hears(MENU_LABELS.SNAKE, (ctx) => {
@@ -231,4 +330,6 @@ module.exports = (bot) => {
 
 module.exports.handleMenu = handleMenu;
 module.exports.handleGroupMenuCallback = handleGroupMenuCallback;
+module.exports.handlePrivateProfile = handlePrivateProfile;
+module.exports.handlePrivateHubCallback = handlePrivateHubCallback;
 module.exports.showMenuView = showMenuView;

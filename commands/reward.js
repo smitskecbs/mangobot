@@ -19,8 +19,9 @@ const USAGE_REWARD = "Reply to a member's message with /reward or /reward myster
 const USAGE_HISTORY = "Reply to a member's message with /memberrewards.";
 
 function formatRewardPrepared(reward, displayName) {
+  const mystery = reward.type === "mystery-gift";
   return [
-    "🎁 Reward prepared",
+    mystery ? "🎁 Mystery Gift prepared" : "🎁 Reward prepared",
     "",
     `Member: ${displayName}`,
     `Wallet: ${shortenWallet(reward.walletSnapshot)}`,

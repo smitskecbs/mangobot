@@ -134,8 +134,9 @@ runTest("11. admin-only creation", () => {
     text: "/reward mystery",
   });
   handleReward(ctx, { walletFile, rewardsFile, now: 50, pointsFile });
-  assert.ok(ctx.replies[0].text.includes("Reward prepared"));
-  assert.ok(ctx.replies[0].text.includes("Mystery Gift"));
+  assert.ok(ctx.replies[0].text.includes("Mystery Gift prepared"));
+  assert.ok(ctx.replies[0].text.includes("Status: Pending"));
+  assert.ok(ctx.replies[0].text.includes("Reward ID:"));
   assert.ok(ctx.replies[0].text.includes(shortenWallet(wallet.address)));
   assert.ok(!ctx.replies[0].text.includes(wallet.address));
 });
@@ -191,10 +192,8 @@ runTest("18. user cannot inspect someone else", () => {
   });
   handleRewards(ctx, { rewardsFile });
   assert.ok(!ctx.replies[0].text.includes("Reward ID"));
-  assert.ok(
-    ctx.replies[0].text.includes("No pending rewards") ||
-      ctx.replies[0].text.includes("Your ManGo Rewards")
-  );
+  assert.ok(ctx.replies[0].text.includes("No rewards yet"));
+  assert.ok(ctx.replies[0].text.includes("ManGo Rewards"));
 });
 
 runTest("group /rewards has no personal dump", () => {
@@ -228,6 +227,13 @@ runTest("membercheck admin reply", () => {
   assert.ok(ctx.replies[0].text.includes(shortenWallet(wallet.address)));
   assert.ok(!ctx.replies[0].text.includes(wallet.address));
   assert.ok(ctx.replies[0].text.includes("Presale:"));
+  assert.ok(ctx.replies[0].text.includes("Weekly XP:"));
+  assert.ok(ctx.replies[0].text.includes("Lifetime XP:"));
+  assert.ok(ctx.replies[0].text.includes("Current streak:"));
+  assert.ok(ctx.replies[0].text.includes("Longest streak:"));
+  assert.ok(ctx.replies[0].text.includes("Last active:"));
+  assert.ok(ctx.replies[0].text.includes("Pending rewards:"));
+  assert.ok(ctx.replies[0].text.includes("Sent rewards:"));
 });
 
 runTest("membercheck non-admin private rejected", () => {
@@ -258,14 +264,19 @@ runTest("/start rewards private", () => {
     startPayload: "rewards",
   });
   handleStart(ctx, { rewardsFile, pointsFile });
-  assert.ok(ctx.replies[0].text.includes("Your ManGo Rewards"));
+  assert.ok(ctx.replies[0].text.includes("ManGo Rewards"));
+  assert.ok(ctx.replies[0].text.includes("No rewards yet"));
 });
 
-runTest("help lists /rewards not admin reward internals", () => {
+runTest("help lists /rewards /presale not admin reward internals", () => {
   handleHelp(createMockCtx());
   assert.ok(HELP_MESSAGE.includes("/rewards"));
+  assert.ok(HELP_MESSAGE.includes("/presale"));
   assert.ok(!HELP_MESSAGE.includes("/membercheck"));
   assert.ok(!HELP_MESSAGE.includes("/memberrewards"));
+  assert.ok(
+    !HELP_MESSAGE.split("\n").some((line) => line.trim() === "/reward")
+  );
 });
 
 Promise.all(pending).then(() => {

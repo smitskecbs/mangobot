@@ -1,9 +1,9 @@
 /**
- * /wallet and /mywallet — Solana wallet verification status and connect links.
+ * /wallet and /mywallet — Solana wallet hub and management.
  *
  * Group: private deep-link only (no wallet dump).
- * Private: status + connect / replace / disconnect (disconnect requires confirm).
- * Callbacks are opaque: w:d / w:dy / w:dn — never uid or wallet address.
+ * Private: hub + connect / replace / disconnect (disconnect requires confirm).
+ * Callbacks are opaque: w:d / w:dy / w:dn / whub:* — never uid or wallet address.
  */
 
 const { Markup } = require("telegraf");
@@ -13,6 +13,7 @@ const {
   getPrivateMenuKeyboard,
   resolveBotUsername,
   buildPrivateDeepLink,
+  PRIVATE_MENU_HINT,
 } = require("../utils/botMenu");
 const {
   shortenWallet,
@@ -25,6 +26,8 @@ const {
 const { createLinkToken } = require("../services/walletVerification");
 const { getMemberWalletProfile } = require("../services/memberWalletProfile");
 const { formatPresaleWalletLines } = require("../services/presaleParticipation");
+const { handleRewards } = require("./rewards");
+const { handlePresale } = require("./presale");
 
 const WALLET_CALLBACK = Object.freeze({
   DISCONNECT: "w:d",
@@ -32,13 +35,21 @@ const WALLET_CALLBACK = Object.freeze({
   CANCEL: "w:dn",
 });
 
+const WALLET_HUB_CALLBACK = Object.freeze({
+  OPEN: "whub:open",
+  MANAGE: "whub:manage",
+  REWARDS: "whub:rewards",
+  PRESALE: "whub:presale",
+  BACK: "whub:back",
+});
+
 const GROUP_WALLET_TEXT = "🥭 Manage your wallet privately.";
 
 const UNVERIFIED_TEXT = `🥭 ManGo Wallet
 
-No wallet connected yet.
+⬜ No wallet connected
 
-Connect and verify a Solana wallet to link it to your ManGo profile.`;
+Connect your Solana wallet to unlock ManGo member features.`;
 
 const DISCONNECT_PROMPT = "Disconnect your verified wallet?";
 
@@ -80,6 +91,11 @@ function buildVerifiedText(record, extras = {}) {
   ].join("\n");
 }
 
+function buildVerifiedHubText(record) {
+  const short = shortenWallet(record.wallet);
+  return ["🥭 ManGo Wallet", "", "✅ Verified", `Wallet: ${short}`].join("\n");
+}
+
 function getGroupWalletExtra(ctx) {
   const username = resolveBotUsername(ctx);
   const url = buildPrivateDeepLink(username, "wallet");
@@ -89,11 +105,26 @@ function getGroupWalletExtra(ctx) {
   return Markup.inlineKeyboard([[Markup.button.url("Open Wallet", url)]]);
 }
 
-function buildConnectExtra(url) {
-  if (!url) {
-    return undefined;
+function buildUnverifiedHubExtra(url) {
+  const rows = [];
+  if (url) {
+    rows.push([Markup.button.url("Connect Wallet", url)]);
   }
-  return Markup.inlineKeyboard([[Markup.button.url("Connect Wallet", url)]]);
+  rows.push([Markup.button.callback("⬅️ Back", WALLET_HUB_CALLBACK.BACK)]);
+  return Markup.inlineKeyboard(rows);
+}
+
+function buildVerifiedHubExtra() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("Manage Wallet", WALLET_HUB_CALLBACK.MANAGE)],
+    [Markup.button.callback("Rewards", WALLET_HUB_CALLBACK.REWARDS)],
+    [Markup.button.callback("Presale", WALLET_HUB_CALLBACK.PRESALE)],
+    [Markup.button.callback("⬅️ Back", WALLET_HUB_CALLBACK.BACK)],
+  ]);
+}
+
+function buildConnectExtra(url) {
+  return buildUnverifiedHubExtra(url);
 }
 
 function buildVerifiedExtra(replaceUrl) {
@@ -104,6 +135,7 @@ function buildVerifiedExtra(replaceUrl) {
   rows.push([
     Markup.button.callback("Disconnect Wallet", WALLET_CALLBACK.DISCONNECT),
   ]);
+  rows.push([Markup.button.callback("⬅️ Back", WALLET_HUB_CALLBACK.OPEN)]);
   return Markup.inlineKeyboard(rows);
 }
 
@@ -133,6 +165,21 @@ function privateExtra(inlineExtra) {
   return getPrivateMenuKeyboard();
 }
 
+function replyWalletHub(ctx, options = {}) {
+  const userId = ctx.from.id;
+  const record = getVerifiedWalletForUser(userId, options.walletFile);
+  const url = createConnectUrl(userId, options);
+
+  if (!record) {
+    if (!url) {
+      return ctx.reply(CONNECT_UNAVAILABLE, getPrivateMenuKeyboard());
+    }
+    return ctx.reply(UNVERIFIED_TEXT, privateExtra(buildUnverifiedHubExtra(url)));
+  }
+
+  return ctx.reply(buildVerifiedHubText(record), privateExtra(buildVerifiedHubExtra()));
+}
+
 function handleWallet(ctx, options = {}) {
   if (!ctx || !ctx.from) {
     return undefined;
@@ -145,35 +192,19 @@ function handleWallet(ctx, options = {}) {
     return ctx.reply(GROUP_WALLET_TEXT);
   }
 
-  const userId = ctx.from.id;
-  const record = getVerifiedWalletForUser(userId, options.walletFile);
-  const url = createConnectUrl(userId, options);
-  const profile = getMemberWalletProfile(userId, {
-    walletFile: options.walletFile,
-    rewardsFile: options.rewardsFile,
-  });
-
-  if (!record) {
-    if (!url) {
-      return ctx.reply(CONNECT_UNAVAILABLE, getPrivateMenuKeyboard());
-    }
-    return ctx.reply(UNVERIFIED_TEXT, privateExtra(buildConnectExtra(url)));
-  }
-
-  return ctx.reply(
-    buildVerifiedText(record, {
-      presale: profile.presale,
-      rewards: profile.rewards,
-    }),
-    privateExtra(buildVerifiedExtra(url))
-  );
+  return replyWalletHub(ctx, options);
 }
 
 function isWalletCallback(data) {
   return (
     data === WALLET_CALLBACK.DISCONNECT ||
     data === WALLET_CALLBACK.CONFIRM ||
-    data === WALLET_CALLBACK.CANCEL
+    data === WALLET_CALLBACK.CANCEL ||
+    data === WALLET_HUB_CALLBACK.OPEN ||
+    data === WALLET_HUB_CALLBACK.MANAGE ||
+    data === WALLET_HUB_CALLBACK.REWARDS ||
+    data === WALLET_HUB_CALLBACK.PRESALE ||
+    data === WALLET_HUB_CALLBACK.BACK
   );
 }
 
@@ -186,6 +217,19 @@ async function safeEdit(ctx, text, extra) {
     }
   }
   return ctx.reply(text, extra);
+}
+
+async function showWalletHub(ctx, options = {}) {
+  const userId = ctx.from.id;
+  const record = getVerifiedWalletForUser(userId, options.walletFile);
+  const url = createConnectUrl(userId, options);
+  if (!record) {
+    if (!url) {
+      return safeEdit(ctx, CONNECT_UNAVAILABLE, getPrivateMenuKeyboard());
+    }
+    return safeEdit(ctx, UNVERIFIED_TEXT, buildUnverifiedHubExtra(url));
+  }
+  return safeEdit(ctx, buildVerifiedHubText(record), buildVerifiedHubExtra());
 }
 
 async function handleWalletCallback(ctx, options = {}) {
@@ -213,6 +257,42 @@ async function handleWalletCallback(ctx, options = {}) {
   const userId = ctx.from && ctx.from.id;
   if (!userId) {
     return;
+  }
+
+  if (data === WALLET_HUB_CALLBACK.BACK) {
+    return ctx.reply(PRIVATE_MENU_HINT, getPrivateMenuKeyboard());
+  }
+
+  if (data === WALLET_HUB_CALLBACK.OPEN) {
+    return showWalletHub(ctx, options);
+  }
+
+  if (data === WALLET_HUB_CALLBACK.REWARDS) {
+    return handleRewards(ctx, options);
+  }
+
+  if (data === WALLET_HUB_CALLBACK.PRESALE) {
+    return handlePresale(ctx, options);
+  }
+
+  if (data === WALLET_HUB_CALLBACK.MANAGE) {
+    const record = getVerifiedWalletForUser(userId, options.walletFile);
+    if (!record) {
+      return showWalletHub(ctx, options);
+    }
+    const url = createConnectUrl(userId, options);
+    const profile = getMemberWalletProfile(userId, {
+      walletFile: options.walletFile,
+      rewardsFile: options.rewardsFile,
+    });
+    return safeEdit(
+      ctx,
+      buildVerifiedText(record, {
+        presale: profile.presale,
+        rewards: profile.rewards,
+      }),
+      buildVerifiedExtra(url)
+    );
   }
 
   if (data === WALLET_CALLBACK.DISCONNECT) {
@@ -253,17 +333,21 @@ async function handleWalletCallback(ctx, options = {}) {
 module.exports = (bot) => {
   bot.command("wallet", (ctx) => handleWallet(ctx));
   bot.command("mywallet", (ctx) => handleWallet(ctx));
-  bot.action(/^w:d(y|n)?$/, (ctx) => handleWalletCallback(ctx));
+  bot.action(/^(w:d(y|n)?|whub:(open|manage|rewards|presale|back))$/, (ctx) =>
+    handleWalletCallback(ctx)
+  );
 };
 
 module.exports.handleWallet = handleWallet;
 module.exports.handleWalletCallback = handleWalletCallback;
 module.exports.WALLET_CALLBACK = WALLET_CALLBACK;
+module.exports.WALLET_HUB_CALLBACK = WALLET_HUB_CALLBACK;
 module.exports.GROUP_WALLET_TEXT = GROUP_WALLET_TEXT;
 module.exports.UNVERIFIED_TEXT = UNVERIFIED_TEXT;
 module.exports.DISCONNECT_PROMPT = DISCONNECT_PROMPT;
 module.exports.DISCONNECT_DONE = DISCONNECT_DONE;
 module.exports.DISCONNECT_CANCELLED = DISCONNECT_CANCELLED;
 module.exports.buildVerifiedText = buildVerifiedText;
+module.exports.buildVerifiedHubText = buildVerifiedHubText;
 module.exports.createConnectUrl = createConnectUrl;
 module.exports.getGroupWalletExtra = getGroupWalletExtra;

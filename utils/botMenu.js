@@ -5,15 +5,17 @@
 const { Markup } = require("telegraf");
 
 const MENU_LABELS = Object.freeze({
-  POINTS: "🥭 My Points",
-  MY_STREAK: "🔥 My Streak",
-  WALLET: "💼 Wallet",
+  MY_PROFILE: "👤 My Profile",
+  WALLET: "👛 Wallet",
   REWARDS: "🎁 Rewards",
+  HELP: "ℹ️ Help",
   SNAKE: "🎮 Play Snake",
   BOUNCH: "🏀 Play Bounch",
+  POINTS: "🥭 My Points",
+  MY_STREAK: "🔥 My Streak",
+  PRESALE: "🥭 Presale",
   LEADERBOARD: "🏆 Leaderboard",
   WEEKLY: "📅 Weekly",
-  HELP: "ℹ️ Help",
 });
 
 const MENU_LABEL_LIST = Object.freeze(Object.values(MENU_LABELS));
@@ -30,17 +32,23 @@ const GROUP_GAMES_TEXT = `🎮 Games
 
 Play, compete and challenge the community.`;
 
-const GROUP_PROGRESS_TEXT = `👤 My Progress
+const GROUP_PROFILE_TEXT = `👤 My Profile
 
-Check your XP and activity streak.`;
+Check your XP, streak, wallet status and rewards.`;
+
+const GROUP_PROGRESS_TEXT = GROUP_PROFILE_TEXT;
 
 const PRIVATE_MENU_HINT =
-  "🥭 Use the menu below to check points, play, or get help.";
+  "🥭 Use the menu below to open your profile, wallet, rewards, or play.";
 
 const GROUP_MENU_CALLBACK = Object.freeze({
   RANKINGS: "gmenu:rankings",
   GAMES: "gmenu:games",
+  PROFILE: "gmenu:profile",
   PROGRESS: "gmenu:progress",
+  WALLET: "gmenu:wallet",
+  REWARDS: "gmenu:rewards",
+  PRESALE: "gmenu:presale",
   BACK: "gmenu:back",
   LEADERBOARD: "gmenu:lb",
   WEEKLY: "gmenu:weekly",
@@ -51,6 +59,14 @@ const GROUP_MENU_CALLBACK = Object.freeze({
   TICTACTOE: "gmenu:tictactoe",
   CONNECT4: "gmenu:connect4",
   TRIVIA: "gmenu:trivia",
+});
+
+const PRIVATE_HUB_CALLBACK = Object.freeze({
+  PROFILE_BACK: "phub:back",
+  POINTS: "phub:points",
+  STREAK: "phub:streak",
+  WALLET_STATUS: "phub:wallet",
+  REWARDS: "phub:rewards",
 });
 
 const GROUP_SNAKE_MESSAGE =
@@ -185,10 +201,9 @@ function appendHighscoreAnnouncementPlayCta(
 
 function getPrivateMenuKeyboard() {
   return Markup.keyboard([
-    [MENU_LABELS.POINTS, MENU_LABELS.MY_STREAK],
-    [MENU_LABELS.WALLET, MENU_LABELS.REWARDS],
+    [MENU_LABELS.MY_PROFILE, MENU_LABELS.WALLET],
+    [MENU_LABELS.REWARDS, MENU_LABELS.HELP],
     [MENU_LABELS.SNAKE, MENU_LABELS.BOUNCH],
-    [MENU_LABELS.HELP],
   ]).resize();
 }
 
@@ -228,14 +243,27 @@ function getGroupGameGateExtra(ctx, game) {
  * @param {object} [_ctx]
  * @returns {object} Telegraf reply extra
  */
-function getGroupMenuExtra(_ctx) {
+function privateDeepLinkButton(ctx, label, payload, fallbackCallback) {
+  const username = resolveBotUsername(ctx);
+  const url = buildPrivateDeepLink(username, payload);
+  if (url) {
+    return Markup.button.url(label, url);
+  }
+  return Markup.button.callback(label, fallbackCallback);
+}
+
+function getGroupMenuExtra(ctx) {
   return Markup.inlineKeyboard([
     [
       Markup.button.callback("🏆 Rankings", GROUP_MENU_CALLBACK.RANKINGS),
       Markup.button.callback("🎮 Games", GROUP_MENU_CALLBACK.GAMES),
     ],
     [
-      Markup.button.callback("👤 My Progress", GROUP_MENU_CALLBACK.PROGRESS),
+      Markup.button.callback("👤 My Profile", GROUP_MENU_CALLBACK.PROFILE),
+      privateDeepLinkButton(ctx, "👛 Wallet", "wallet", GROUP_MENU_CALLBACK.WALLET),
+    ],
+    [
+      privateDeepLinkButton(ctx, "🎁 Rewards", "rewards", GROUP_MENU_CALLBACK.REWARDS),
       Markup.button.callback("ℹ️ Help", GROUP_MENU_CALLBACK.HELP),
     ],
   ]);
@@ -300,11 +328,12 @@ function getGroupGamesMenuExtra(ctx) {
 }
 
 /**
- * Personal progress deep-links (token minted only in private /start).
+ * Personal profile deep-links (token minted only in private /start).
  * @param {object} [ctx]
+ * @param {string} [backCallback]
  * @returns {object}
  */
-function getGroupProgressMenuExtra(ctx) {
+function getGroupProfileMenuExtra(ctx, backCallback = GROUP_MENU_CALLBACK.BACK) {
   const username = resolveBotUsername(ctx);
   const pointsUrl = buildPrivateDeepLink(username, "points");
   const streakUrl = buildPrivateDeepLink(username, "streak");
@@ -324,25 +353,57 @@ function getGroupProgressMenuExtra(ctx) {
     rows.push(personalRow);
   }
 
-  const walletRow = [];
+  const statusRow = [];
   if (walletUrl) {
-    walletRow.push(Markup.button.url("Wallet", walletUrl));
+    statusRow.push(Markup.button.url("Wallet Status", walletUrl));
   }
   if (rewardsUrl) {
-    walletRow.push(Markup.button.url("Rewards", rewardsUrl));
+    statusRow.push(Markup.button.url("Rewards", rewardsUrl));
   }
-  if (walletRow.length) {
-    rows.push(walletRow);
+  if (statusRow.length) {
+    rows.push(statusRow);
   }
-  rows.push([Markup.button.callback("⬅️ Back", GROUP_MENU_CALLBACK.BACK)]);
+  rows.push([Markup.button.callback("⬅️ Back", backCallback)]);
 
   return Markup.inlineKeyboard(rows);
+}
+
+function getGroupProgressMenuExtra(ctx) {
+  return getGroupProfileMenuExtra(ctx);
+}
+
+function getPrivateProfileMenuExtra() {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback("My Points", PRIVATE_HUB_CALLBACK.POINTS),
+      Markup.button.callback("My Streak", PRIVATE_HUB_CALLBACK.STREAK),
+    ],
+    [
+      Markup.button.callback(
+        "Wallet Status",
+        PRIVATE_HUB_CALLBACK.WALLET_STATUS
+      ),
+      Markup.button.callback("Rewards", PRIVATE_HUB_CALLBACK.REWARDS),
+    ],
+    [Markup.button.callback("⬅️ Back", PRIVATE_HUB_CALLBACK.PROFILE_BACK)],
+  ]);
+}
+
+function isPrivateHubCallback(data) {
+  return (
+    data === PRIVATE_HUB_CALLBACK.PROFILE_BACK ||
+    data === PRIVATE_HUB_CALLBACK.POINTS ||
+    data === PRIVATE_HUB_CALLBACK.STREAK ||
+    data === PRIVATE_HUB_CALLBACK.WALLET_STATUS ||
+    data === PRIVATE_HUB_CALLBACK.REWARDS
+  );
 }
 
 function isGroupMenuNavCallback(data) {
   return (
     data === GROUP_MENU_CALLBACK.RANKINGS ||
     data === GROUP_MENU_CALLBACK.GAMES ||
+    data === GROUP_MENU_CALLBACK.PROFILE ||
     data === GROUP_MENU_CALLBACK.PROGRESS ||
     data === GROUP_MENU_CALLBACK.BACK
   );
@@ -351,6 +412,9 @@ function isGroupMenuNavCallback(data) {
 function isGroupMenuCallback(data) {
   return (
     isGroupMenuNavCallback(data) ||
+    data === GROUP_MENU_CALLBACK.WALLET ||
+    data === GROUP_MENU_CALLBACK.REWARDS ||
+    data === GROUP_MENU_CALLBACK.PRESALE ||
     data === GROUP_MENU_CALLBACK.LEADERBOARD ||
     data === GROUP_MENU_CALLBACK.WEEKLY ||
     data === GROUP_MENU_CALLBACK.WEEKLY_WINNERS ||
@@ -369,9 +433,11 @@ module.exports = {
   GROUP_MENU_TEXT,
   GROUP_RANKINGS_TEXT,
   GROUP_GAMES_TEXT,
+  GROUP_PROFILE_TEXT,
   GROUP_PROGRESS_TEXT,
   PRIVATE_MENU_HINT,
   GROUP_MENU_CALLBACK,
+  PRIVATE_HUB_CALLBACK,
   GROUP_SNAKE_MESSAGE,
   GROUP_BOUNCH_MESSAGE,
   GROUP_SNAKE_BUTTON_LABEL,
@@ -392,7 +458,10 @@ module.exports = {
   getGroupMenuExtra,
   getGroupRankingsMenuExtra,
   getGroupGamesMenuExtra,
+  getGroupProfileMenuExtra,
   getGroupProgressMenuExtra,
+  getPrivateProfileMenuExtra,
+  isPrivateHubCallback,
   isGroupMenuNavCallback,
   isGroupMenuCallback,
 };

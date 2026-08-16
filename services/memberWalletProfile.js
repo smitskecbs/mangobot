@@ -15,7 +15,7 @@ const {
 } = require("./presaleParticipation");
 
 function emptyRewardsSummary() {
-  return { pending: 0, delivered: 0, cancelled: 0, total: 0 };
+  return { pending: 0, delivered: 0, cancelled: 0, mysteryPending: 0, total: 0 };
 }
 
 /**

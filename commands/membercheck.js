@@ -19,12 +19,14 @@ function formatMemberCheck(profile, displayName) {
     : "Wallet: ⬜ Not connected";
   const verifiedDate = formatVerifiedDate(profile.wallet.verifiedAt);
   const lastActive = profile.streak.lastActiveLabel || "—";
-  const presale = profile.presalePublic && profile.presalePublic.live
-    ? profile.presale.recorded
-      ? "Participating"
-      : "No participation recorded"
-    : "Not started / No participation recorded";
-  const rewards = `Rewards: ${profile.rewards.delivered} delivered / ${profile.rewards.pending} pending`;
+  const presale =
+    profile.presalePublic && profile.presalePublic.live
+      ? profile.presale.recorded
+        ? "Participating"
+        : "No participation recorded"
+      : "Coming soon";
+  const pending = (profile.rewards && profile.rewards.pending) || 0;
+  const sent = (profile.rewards && profile.rewards.delivered) || 0;
 
   const lines = [
     "🥭 ManGo Member Profile",
@@ -38,15 +40,15 @@ function formatMemberCheck(profile, displayName) {
   }
   lines.push(
     "",
-    `🔥 Current streak: ${profile.streak.current} days`,
-    `🏆 Longest streak: ${profile.streak.longest} days`,
-    `⭐ Lifetime XP: ${profile.xp.lifetime}`,
-    `📅 Weekly XP: ${profile.xp.weekly}`,
-    `Rank: ${profile.rank.emoji} ${profile.rank.title}`,
-    `🥭 Last active: ${lastActive}`,
+    `Weekly XP: ${profile.xp.weekly}`,
+    `Lifetime XP: ${profile.xp.lifetime}`,
+    `Current streak: ${profile.streak.current} days`,
+    `Longest streak: ${profile.streak.longest} days`,
+    `Last active: ${lastActive}`,
     "",
-    `Presale: ${presale}`,
-    rewards
+    `Pending rewards: ${pending}`,
+    `Sent rewards: ${sent}`,
+    `Presale: ${presale}`
   );
   return lines.join("\n");
 }

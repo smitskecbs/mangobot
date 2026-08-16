@@ -15,6 +15,7 @@ const {
   handleWallet,
   handleWalletCallback,
   WALLET_CALLBACK,
+  WALLET_HUB_CALLBACK,
   GROUP_WALLET_TEXT,
   UNVERIFIED_TEXT,
   DISCONNECT_PROMPT,
@@ -23,7 +24,7 @@ const {
 const { handleStart } = require("../commands/start");
 const { handlePoints } = require("../commands/points");
 const { handleHelp, HELP_MESSAGE } = require("../commands/help");
-const { getGroupProgressMenuExtra } = require("../utils/botMenu");
+const { getGroupProfileMenuExtra } = require("../utils/botMenu");
 const {
   createLinkToken,
   createChallenge,
@@ -169,20 +170,46 @@ runTest("2. /wallet private unverified", () => {
   assert.strictEqual(buttons[0].text, "Connect Wallet");
   assert.ok(buttons[0].url.includes("https://mangomeme.fun/wallet-connect?t="));
   assert.ok(!buttons[0].url.includes("222"));
+  assert.strictEqual(buttons[1].text, "⬅️ Back");
+  assert.strictEqual(buttons[1].callback_data, WALLET_HUB_CALLBACK.BACK);
 });
 
-runTest("3. /wallet private verified", () => {
+runTest("3. /wallet private verified hub", () => {
   const file = walletFile();
   const wallet = generateSolanaWallet();
   connectUser(file, 333, wallet, 2000);
   const ctx = createMockCtx({ chatType: "private", userId: 333 });
   handleWallet(ctx, { walletFile: file, now: 3000 });
+  assert.ok(ctx.replies[0].text.includes("🥭 ManGo Wallet"));
   assert.ok(ctx.replies[0].text.includes("✅ Verified"));
   assert.ok(ctx.replies[0].text.includes("..."));
   assert.ok(!ctx.replies[0].text.includes(wallet.address));
   const labels = getButtons(ctx.replies[0]).map((b) => b.text);
+  assert.deepStrictEqual(labels, [
+    "Manage Wallet",
+    "Rewards",
+    "Presale",
+    "⬅️ Back",
+  ]);
+  assert.ok(!labels.includes("Replace Wallet"));
+  assert.ok(!labels.includes("Disconnect Wallet"));
+});
+
+runTest("Manage Wallet shows replace/disconnect", async () => {
+  const file = walletFile();
+  const wallet = generateSolanaWallet();
+  connectUser(file, 334, wallet, 2000);
+  const ctx = createMockCtx({
+    chatType: "private",
+    userId: 334,
+    callbackData: WALLET_HUB_CALLBACK.MANAGE,
+  });
+  await handleWalletCallback(ctx, { walletFile: file, now: 3000 });
+  const labels = getButtons(ctx.edits[0]).map((b) => b.text);
   assert.ok(labels.includes("Replace Wallet"));
   assert.ok(labels.includes("Disconnect Wallet"));
+  assert.ok(ctx.edits[0].text.includes("Presale:"));
+  assert.ok(ctx.edits[0].text.includes("Coming soon"));
 });
 
 runTest("4. /start wallet", () => {
@@ -341,15 +368,15 @@ runTest("20. bot callbacks no uid/wallet", async () => {
   );
 });
 
-runTest("menu Wallet deep-link", () => {
+runTest("menu Wallet Status deep-link", () => {
   const ctx = createMockCtx({ chatType: "group" });
-  const extra = getGroupProgressMenuExtra(ctx);
+  const extra = getGroupProfileMenuExtra(ctx);
   const rows = extra.reply_markup.inline_keyboard;
   assert.deepStrictEqual(
     rows.map((row) => row.map((b) => b.text)),
     [
       ["My Points", "My Streak"],
-      ["Wallet", "Rewards"],
+      ["Wallet Status", "Rewards"],
       ["⬅️ Back"],
     ]
   );
@@ -363,12 +390,13 @@ runTest("menu Wallet deep-link", () => {
   );
 });
 
-runTest("help lists /wallet /mywallet", () => {
+runTest("help lists /wallet /mywallet /presale", () => {
   const ctx = createMockCtx();
   handleHelp(ctx);
   assert.ok(HELP_MESSAGE.includes("/wallet"));
   assert.ok(HELP_MESSAGE.includes("/mywallet"));
   assert.ok(HELP_MESSAGE.includes("/rewards"));
+  assert.ok(HELP_MESSAGE.includes("/presale"));
   assert.strictEqual(ctx.replies[0].text, HELP_MESSAGE);
 });
 

@@ -16,8 +16,10 @@ const {
   GROUP_RANKINGS_TEXT,
   GROUP_GAMES_TEXT,
   GROUP_PROGRESS_TEXT,
+  GROUP_PROFILE_TEXT,
   PRIVATE_MENU_HINT,
   GROUP_MENU_CALLBACK,
+  PRIVATE_HUB_CALLBACK,
   GROUP_SNAKE_MESSAGE,
   GROUP_BOUNCH_MESSAGE,
   GROUP_SNAKE_BUTTON_LABEL,
@@ -34,6 +36,8 @@ const {
   getGroupRankingsMenuExtra,
   getGroupGamesMenuExtra,
   getGroupProgressMenuExtra,
+  getGroupProfileMenuExtra,
+  getPrivateProfileMenuExtra,
 } = require("../utils/botMenu");
 const { handleSnake } = require("../commands/snake");
 const { handleBounch } = require("../commands/bounch");
@@ -45,6 +49,8 @@ const { handleHelp, HELP_MESSAGE } = require("../commands/help");
 const {
   handleMenu,
   handleGroupMenuCallback,
+  handlePrivateProfile,
+  handlePrivateHubCallback,
 } = require("../commands/menu");
 const {
   shouldSkipCommunityActivity,
@@ -324,25 +330,27 @@ runTest("menu niet zichtbaar in group /start", () => {
 
 runTest("menu bevat private opties zonder PvP", () => {
   assert.deepStrictEqual(MENU_LABEL_LIST, [
-    MENU_LABELS.POINTS,
-    MENU_LABELS.MY_STREAK,
+    MENU_LABELS.MY_PROFILE,
     MENU_LABELS.WALLET,
     MENU_LABELS.REWARDS,
+    MENU_LABELS.HELP,
     MENU_LABELS.SNAKE,
     MENU_LABELS.BOUNCH,
+    MENU_LABELS.POINTS,
+    MENU_LABELS.MY_STREAK,
+    MENU_LABELS.PRESALE,
     MENU_LABELS.LEADERBOARD,
     MENU_LABELS.WEEKLY,
-    MENU_LABELS.HELP,
   ]);
 
   const kb = getPrivateMenuKeyboard();
   const rows = kb.reply_markup.keyboard;
   assert.deepStrictEqual(rows, [
-    [MENU_LABELS.POINTS, MENU_LABELS.MY_STREAK],
-    [MENU_LABELS.WALLET, MENU_LABELS.REWARDS],
+    [MENU_LABELS.MY_PROFILE, MENU_LABELS.WALLET],
+    [MENU_LABELS.REWARDS, MENU_LABELS.HELP],
     [MENU_LABELS.SNAKE, MENU_LABELS.BOUNCH],
-    [MENU_LABELS.HELP],
   ]);
+  assert.ok(rows.every((row) => row.length <= 2));
   assert.strictEqual(kb.reply_markup.resize_keyboard, true);
 });
 
@@ -563,28 +571,36 @@ runTest("Points menu-button includes game claimed + unlock lines", () => {
 });
 
 runTest("isPrivateMenuLabel exact match only", () => {
+  assert.strictEqual(isPrivateMenuLabel(MENU_LABELS.MY_PROFILE), true);
+  assert.strictEqual(isPrivateMenuLabel(MENU_LABELS.WALLET), true);
   assert.strictEqual(isPrivateMenuLabel(MENU_LABELS.POINTS), true);
   assert.strictEqual(isPrivateMenuLabel("My Points"), false);
   assert.strictEqual(isPrivateMenuLabel("/points"), false);
   assert.strictEqual(isPrivateMenuLabel("gmango"), false);
 });
 
-runTest("/menu group toont exact 4 hoofdknoppen", () => {
+runTest("/menu group toont Wallet en Rewards op hoofdmenu", () => {
   const ctx = createMockCtx({ chatType: "supergroup" });
   handleMenu(ctx);
   assert.strictEqual(ctx.replies[0].text, GROUP_MENU_TEXT);
   const rows = getInlineRows(ctx.replies[0].extra);
-  assert.strictEqual(rows.length, 2);
+  assert.strictEqual(rows.length, 3);
   assert.ok(rows.every((row) => row.length <= 2));
   const labels = rows.flat().map((b) => b.text);
   assert.deepStrictEqual(labels, [
     "🏆 Rankings",
     "🎮 Games",
-    "👤 My Progress",
+    "👤 My Profile",
+    "👛 Wallet",
+    "🎁 Rewards",
     "ℹ️ Help",
   ]);
   const streakLabels = labels.filter((t) => /streak/i.test(t));
   assert.strictEqual(streakLabels.length, 0);
+  const wallet = rows[1][1];
+  const rewards = rows[2][0];
+  assert.strictEqual(wallet.url, `https://t.me/${BOT_USERNAME}?start=wallet`);
+  assert.strictEqual(rewards.url, `https://t.me/${BOT_USERNAME}?start=rewards`);
 });
 
 runTest("group hoofdmenu callbacks bevatten geen uid/token", () => {
@@ -635,16 +651,16 @@ runTest("Games submenu Snake/Bounch safe deep-links", () => {
   assert.ok(!blob.includes("uid="));
 });
 
-runTest("My Progress submenu deep-links", () => {
+runTest("My Profile submenu deep-links", () => {
   const ctx = createMockCtx({ chatType: "group" });
-  const rows = getInlineRows(getGroupProgressMenuExtra(ctx));
+  const rows = getInlineRows(getGroupProfileMenuExtra(ctx));
   assert.ok(rows.every((row) => row.length <= 2));
   const buttons = rows.flat();
   const points = buttons.find((b) => b.text === "My Points");
   const myStreak = buttons.find((b) => b.text === "My Streak");
   assert.strictEqual(points.url, `https://t.me/${BOT_USERNAME}?start=points`);
   assert.strictEqual(myStreak.url, `https://t.me/${BOT_USERNAME}?start=streak`);
-  const wallet = buttons.find((b) => b.text === "Wallet");
+  const wallet = buttons.find((b) => b.text === "Wallet Status");
   assert.strictEqual(wallet.url, `https://t.me/${BOT_USERNAME}?start=wallet`);
   const rewards = buttons.find((b) => b.text === "Rewards");
   assert.strictEqual(rewards.url, `https://t.me/${BOT_USERNAME}?start=rewards`);
@@ -657,7 +673,17 @@ runTest("My Progress submenu deep-links", () => {
     rows.map((row) => row.map((b) => b.text)),
     [
       ["My Points", "My Streak"],
-      ["Wallet", "Rewards"],
+      ["Wallet Status", "Rewards"],
+      ["⬅️ Back"],
+    ]
+  );
+  assert.deepStrictEqual(
+    getInlineRows(getGroupProgressMenuExtra(ctx)).map((row) =>
+      row.map((b) => b.text)
+    ),
+    [
+      ["My Points", "My Streak"],
+      ["Wallet Status", "Rewards"],
       ["⬅️ Back"],
     ]
   );
@@ -670,11 +696,11 @@ runTest("/menu private toont reply-keyboard hint", () => {
   assert.ok(ctx.replies[0].extra.reply_markup.keyboard);
   const rows = ctx.replies[0].extra.reply_markup.keyboard;
   assert.deepStrictEqual(rows, [
-    [MENU_LABELS.POINTS, MENU_LABELS.MY_STREAK],
-    [MENU_LABELS.WALLET, MENU_LABELS.REWARDS],
+    [MENU_LABELS.MY_PROFILE, MENU_LABELS.WALLET],
+    [MENU_LABELS.REWARDS, MENU_LABELS.HELP],
     [MENU_LABELS.SNAKE, MENU_LABELS.BOUNCH],
-    [MENU_LABELS.HELP],
   ]);
+  assert.ok(rows.every((row) => row.length <= 2));
 });
 
 runTest("/start points private → persoonlijke points", () => {
@@ -781,7 +807,7 @@ runTest("Streak Record callback toont longest board", async () => {
   assert.ok(ctx.replies[0].text.includes("Longest ManGo Streaks"));
 });
 
-runTest("Rankings / Games / Progress / Back navigation edits menu", async () => {
+runTest("Rankings / Games / Profile / Back navigation edits menu", async () => {
   const rankingsCtx = createMockCtx({
     chatType: "group",
     callbackData: GROUP_MENU_CALLBACK.RANKINGS,
@@ -801,6 +827,13 @@ runTest("Rankings / Games / Progress / Back navigation edits menu", async () => 
   await handleGroupMenuCallback(gamesCtx);
   assert.strictEqual(gamesCtx.edits[0].text, GROUP_GAMES_TEXT);
 
+  const profileCtx = createMockCtx({
+    chatType: "group",
+    callbackData: GROUP_MENU_CALLBACK.PROFILE,
+  });
+  await handleGroupMenuCallback(profileCtx);
+  assert.strictEqual(profileCtx.edits[0].text, GROUP_PROFILE_TEXT);
+
   const progressCtx = createMockCtx({
     chatType: "group",
     callbackData: GROUP_MENU_CALLBACK.PROGRESS,
@@ -816,7 +849,14 @@ runTest("Rankings / Games / Progress / Back navigation edits menu", async () => 
   assert.strictEqual(backCtx.edits[0].text, GROUP_MENU_TEXT);
   assert.deepStrictEqual(
     getInlineButtons(backCtx.edits[0].extra).map((b) => b.text),
-    ["🏆 Rankings", "🎮 Games", "👤 My Progress", "ℹ️ Help"]
+    [
+      "🏆 Rankings",
+      "🎮 Games",
+      "👤 My Profile",
+      "👛 Wallet",
+      "🎁 Rewards",
+      "ℹ️ Help",
+    ]
   );
 });
 
@@ -961,6 +1001,33 @@ runTest("/start streak group → geen persoonlijke streak dump", () => {
 
 runTest("/menu command skips daily activity", () => {
   assert.strictEqual(shouldSkipCommunityActivity(createMockCtx(), "/menu"), true);
+});
+
+runTest("private My Profile submenu layout and Back", async () => {
+  const ctx = createMockCtx({ chatType: "private" });
+  handlePrivateProfile(ctx);
+  assert.strictEqual(ctx.replies[0].text, GROUP_PROFILE_TEXT);
+  const rows = getInlineRows(ctx.replies[0].extra);
+  assert.ok(rows.every((row) => row.length <= 2));
+  assert.deepStrictEqual(
+    rows.map((row) => row.map((b) => b.text)),
+    [
+      ["My Points", "My Streak"],
+      ["Wallet Status", "Rewards"],
+      ["⬅️ Back"],
+    ]
+  );
+  assert.strictEqual(
+    rows[2][0].callback_data,
+    PRIVATE_HUB_CALLBACK.PROFILE_BACK
+  );
+
+  const backCtx = createMockCtx({
+    chatType: "private",
+    callbackData: PRIVATE_HUB_CALLBACK.PROFILE_BACK,
+  });
+  await handlePrivateHubCallback(backCtx);
+  assert.strictEqual(backCtx.replies[0].text, PRIVATE_MENU_HINT);
 });
 
 Promise.all(pendingAsyncTests)

@@ -17,7 +17,7 @@ const {
   getVerifiedWalletForUser,
   normalizeUserId,
 } = require("./walletLinks");
-const { normalizeSolanaPublicKey } = require("../utils/solanaWallet");
+const { normalizeSolanaPublicKey, shortenWallet } = require("../utils/solanaWallet");
 
 const DEFAULT_REWARDS_FILE = path.resolve(__dirname, "..", "data", "member-rewards.json");
 
@@ -270,16 +270,20 @@ function countRewardsForUser(userId, rewardsFile) {
   let pending = 0;
   let delivered = 0;
   let cancelled = 0;
+  let mysteryPending = 0;
   for (const item of list) {
     if (item.status === "pending" || item.status === "prepared") {
       pending += 1;
+      if (item.type === "mystery-gift") {
+        mysteryPending += 1;
+      }
     } else if (item.status === "sent") {
       delivered += 1;
     } else if (item.status === "cancelled") {
       cancelled += 1;
     }
   }
-  return { pending, delivered, cancelled, total: list.length };
+  return { pending, delivered, cancelled, mysteryPending, total: list.length };
 }
 
 function listRewardsForUser(userId, rewardsFile) {
@@ -481,12 +485,20 @@ function transitionReward(rewardId, nextStatus, options = {}) {
   }, options.rewardsFile);
 }
 
+function formatCreatedDate(ts) {
+  const value = Number(ts);
+  if (!Number.isFinite(value) || value <= 0) {
+    return "";
+  }
+  return new Date(value).toISOString().slice(0, 10);
+}
+
 function userFacingRewardLine(reward) {
   if (!reward) {
     return "";
   }
   const title =
-    reward.type === "mystery-gift" ? "🎁 Mystery Gift" : `🎁 ${defaultLabelForType(reward.type)}`;
+    reward.type === "mystery-gift" ? "Mystery Gift" : defaultLabelForType(reward.type);
   const statusLabel =
     reward.status === "sent"
       ? "Delivered"
@@ -495,7 +507,26 @@ function userFacingRewardLine(reward) {
         : reward.status === "prepared"
           ? "Prepared"
           : "Pending";
-  return `${title}\nStatus: ${statusLabel}`;
+  const lines = [`Type: ${title}`, `Status: ${statusLabel}`];
+  const created = formatCreatedDate(reward.createdAt);
+  if (created) {
+    lines.push(`Created: ${created}`);
+  }
+  if (reward.status === "sent" && typeof reward.txSignature === "string" && reward.txSignature) {
+    lines.push(`Tx: ${shortenWallet(reward.txSignature)}`);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Future on-chain delivery hook. Does not send assets or hold keys.
+ */
+function deliverReward(_rewardId) {
+  return {
+    ok: false,
+    error: "On-chain delivery is not implemented.",
+    reason: "not-implemented",
+  };
 }
 
 module.exports = {
@@ -516,6 +547,7 @@ module.exports = {
   listRewardsForUser,
   countRewardsForUser,
   userFacingRewardLine,
+  deliverReward,
   defaultLabelForType,
   normalizeRewardType,
   isPlausibleTxSignature,
