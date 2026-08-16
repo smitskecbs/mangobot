@@ -42,6 +42,10 @@ const {
 } = require("./services/points");
 const { tryHandleWalletRequest } = require("./services/walletApi");
 const { resolveWalletFile } = require("./services/walletLinks");
+const {
+  resolveAllowedOrigin,
+  applyCorsHeaders,
+} = require("./services/httpCors");
 
 const PORT = Number.parseInt(process.env.PORT || "8787", 10);
 const BOT_TOKEN = process.env.BOT_TOKEN?.trim();
@@ -50,17 +54,6 @@ const SCORES_FILE = getScoresFilePath();
 const BOUNCH_SCORES_FILE = bounchScores.getScoresFilePath();
 
 const RATE_LIMIT_MS = 30_000;
-
-const ALLOWED_ORIGINS = new Set([
-  "https://mangomeme.fun",
-  "https://www.mangomeme.fun",
-  "http://mangomeme.fun",
-  "http://www.mangomeme.fun",
-  "http://localhost:5173",
-  "http://127.0.0.1:5173",
-  "http://localhost:4173",
-  "http://127.0.0.1:4173",
-]);
 
 /** @type {Map<string, number>} */
 const lastSubmitByIp = new Map();
@@ -113,28 +106,7 @@ function isRateLimited(ip) {
 }
 
 function corsOrigin(req) {
-  const origin = req.headers.origin;
-
-  if (typeof origin === "string") {
-    const normalized = origin.trim();
-
-    if (ALLOWED_ORIGINS.has(normalized)) {
-      return normalized;
-    }
-  }
-
-  return null;
-}
-
-function applyCorsHeaders(res, origin) {
-  if (!origin) {
-    return;
-  }
-
-  res.setHeader("Access-Control-Allow-Origin", origin);
-  res.setHeader("Vary", "Origin");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  return resolveAllowedOrigin(req && req.headers ? req.headers.origin : "");
 }
 
 function sendJson(res, statusCode, body, origin, identity, xp) {

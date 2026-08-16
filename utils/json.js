@@ -71,6 +71,17 @@ function writeJsonFileAtomic(filePath, data) {
     }
 
     fs.renameSync(tempFile, filePath);
+
+    try {
+      const dirFd = fs.openSync(dir, "r");
+      try {
+        fs.fsyncSync(dirFd);
+      } finally {
+        fs.closeSync(dirFd);
+      }
+    } catch {
+      // Directory fsync is best-effort; not supported on every platform.
+    }
   } catch (err) {
     try {
       if (fs.existsSync(tempFile)) {

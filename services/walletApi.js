@@ -11,19 +11,12 @@
 const {
   createChallenge,
   verifyWalletSignature,
+  ERRORS,
 } = require("./walletVerification");
+const { applyCorsHeaders, handleCorsPreflight } = require("./httpCors");
 
 const MAX_BODY_BYTES = 16 * 1024;
-
-function applyCorsHeaders(res, origin) {
-  if (!origin) {
-    return;
-  }
-  res.setHeader("Access-Control-Allow-Origin", origin);
-  res.setHeader("Vary", "Origin");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-}
+const TEMPORARY_ERROR = ERRORS.temporary;
 
 function sendJson(res, statusCode, body, origin) {
   res.statusCode = statusCode;
@@ -163,6 +156,11 @@ async function tryHandleWalletRequest(req, res, origin, url, method, options = {
     return false;
   }
 
+  if (method === "OPTIONS") {
+    handleCorsPreflight(res, origin);
+    return true;
+  }
+
   if (method !== "POST") {
     sendJson(res, 405, { ok: false, error: "Method not allowed." }, origin);
     return true;
@@ -177,7 +175,7 @@ async function tryHandleWalletRequest(req, res, origin, url, method, options = {
     await handleWalletVerify(req, res, origin, options);
     return true;
   } catch {
-    sendJson(res, 500, { ok: false, error: "Invalid request." }, origin);
+    sendJson(res, 500, { ok: false, error: TEMPORARY_ERROR }, origin);
     return true;
   }
 }

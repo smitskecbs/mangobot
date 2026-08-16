@@ -2,7 +2,9 @@
  * Persistent Telegram ↔ verified Solana wallet mappings.
  *
  * File: data/wallet-links.json
- * All mutations use exclusive cross-process lock + atomic write.
+ * Shared by mangobot.service and mango-highscore.service.
+ * All reads and writes use an exclusive cross-process lock + a fresh disk
+ * snapshot. There is no process-local cached store.
  * Never stores private keys, seed phrases, signatures, or IP addresses.
  */
 
@@ -130,15 +132,15 @@ function normalizeStore(raw) {
 
 function readWalletSnapshot(walletFile, options = {}) {
   try {
-    if (!fs.existsSync(walletFile)) {
-      return emptyStore();
-    }
     const raw = fs.readFileSync(walletFile, "utf8").trim();
     if (!raw) {
       return emptyStore();
     }
     return normalizeStore(JSON.parse(raw));
   } catch (err) {
+    if (err && err.code === "ENOENT") {
+      return emptyStore();
+    }
     logError("Error reading wallet-links.json:", err);
     if (options.strict) {
       const message = err && err.message ? err.message : String(err);
@@ -148,14 +150,27 @@ function readWalletSnapshot(walletFile, options = {}) {
   }
 }
 
-function acquireWalletLock(walletFile) {
+function ensureWalletFileExists(walletFile) {
   const dir = path.dirname(walletFile);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
-  if (!fs.existsSync(walletFile)) {
-    writeJsonFileAtomic(walletFile, emptyStore());
+  try {
+    fs.writeFileSync(walletFile, `${JSON.stringify(emptyStore(), null, 2)}\n`, {
+      encoding: "utf8",
+      flag: "wx",
+    });
+  } catch (err) {
+    if (err && err.code === "EEXIST") {
+      return;
+    }
+    const message = err && err.message ? err.message : String(err);
+    throw new Error(`Failed to initialize wallet-links.json: ${message}`);
   }
+}
+
+function acquireWalletLock(walletFile) {
+  ensureWalletFileExists(walletFile);
 
   let lastError;
   let timeoutMs = LOCK_RETRY.minTimeoutMs;
@@ -184,29 +199,40 @@ function acquireWalletLock(walletFile) {
 }
 
 /**
- * Exclusive cross-process mutation.
+ * Exclusive cross-process access.
+ * Always lock → fresh disk read → mutator → atomic write if persist and changed → unlock.
+ * There is no process-local store cache.
+ *
  * @template T
  * @param {(data: ReturnType<typeof emptyStore>) => T} mutator
  * @param {string} [walletFile]
+ * @param {{ persist?: boolean }} [options]
  * @returns {T}
  */
-function mutateWalletStore(mutator, walletFile) {
+function withWalletStore(mutator, walletFile, options = {}) {
   if (typeof mutator !== "function") {
-    throw new TypeError("mutateWalletStore requires a mutator function");
+    throw new TypeError("withWalletStore requires a mutator function");
   }
 
+  const persist = options.persist !== false;
   const filePath = resolveWalletFile(walletFile);
   const release = acquireWalletLock(filePath);
 
   try {
     const data = readWalletSnapshot(filePath, { strict: true });
+    const before = persist ? JSON.stringify(data) : null;
     const result = mutator(data);
 
-    try {
-      writeJsonFileAtomic(filePath, data);
-    } catch (err) {
-      const message = err && err.message ? err.message : String(err);
-      throw new Error(`Failed to write wallet-links.json: ${message}`);
+    if (persist) {
+      const after = JSON.stringify(data);
+      if (after !== before) {
+        try {
+          writeJsonFileAtomic(filePath, data);
+        } catch (err) {
+          const message = err && err.message ? err.message : String(err);
+          throw new Error(`Failed to write wallet-links.json: ${message}`);
+        }
+      }
     }
 
     return result;
@@ -219,8 +245,23 @@ function mutateWalletStore(mutator, walletFile) {
   }
 }
 
+/**
+ * Exclusive cross-process mutation.
+ * @template T
+ * @param {(data: ReturnType<typeof emptyStore>) => T} mutator
+ * @param {string} [walletFile]
+ * @returns {T}
+ */
+function mutateWalletStore(mutator, walletFile) {
+  return withWalletStore(mutator, walletFile, { persist: true });
+}
+
 function loadWalletStore(walletFile) {
-  return readWalletSnapshot(resolveWalletFile(walletFile));
+  return withWalletStore(
+    (store) => normalizeStore(JSON.parse(JSON.stringify(store))),
+    walletFile,
+    { persist: false }
+  );
 }
 
 function normalizeUserId(userId) {
@@ -376,6 +417,7 @@ module.exports = {
   setWalletFileForTests,
   loadWalletStore,
   mutateWalletStore,
+  withWalletStore,
   pruneExpired,
   getVerifiedWalletForUser,
   isWalletVerified,

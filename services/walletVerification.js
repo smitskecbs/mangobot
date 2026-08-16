@@ -24,6 +24,8 @@ const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 const TOKEN_BYTES = 32;
 const NONCE_BYTES = 16;
 const CHALLENGE_ID_BYTES = 16;
+const TOKEN_FINGERPRINT_LENGTH = 12;
+const BASE64URL_CHARSET = /^[A-Za-z0-9_-]+$/;
 const CHALLENGE_DOMAIN = "mangomeme.fun";
 const DEFAULT_CONNECT_URL = "https://mangomeme.fun/wallet-connect";
 
@@ -32,6 +34,30 @@ const VERIFY_LIMIT = Object.freeze({ max: 10, windowMs: 10 * 60 * 1000 });
 
 function hashToken(token) {
   return crypto.createHash("sha256").update(String(token), "utf8").digest("hex");
+}
+
+function tokenFingerprint(token) {
+  if (typeof token !== "string" || token.length === 0) {
+    return "none";
+  }
+  return hashToken(token).slice(0, TOKEN_FINGERPRINT_LENGTH);
+}
+
+function isBase64UrlCharset(token) {
+  return typeof token === "string" && token.length > 0 && BASE64URL_CHARSET.test(token);
+}
+
+function lookupStatusLabel(status) {
+  if (status === "ok") {
+    return "hit";
+  }
+  if (status === "invalid") {
+    return "miss";
+  }
+  if (status === "expired" || status === "used") {
+    return status;
+  }
+  return "miss";
 }
 
 function getWalletConnectBaseUrl(options = {}) {
@@ -133,21 +159,25 @@ function createLinkToken(telegramUserId, options = {}) {
     };
   }, options.walletFile);
 
+  const fingerprint = tokenFingerprint(rawToken);
+  const n = rawToken.length;
+  console.log(`[wallet-link] created fingerprint=${fingerprint} length=${n}`);
+
   return { token: rawToken, url, expiresAt, tokenHash };
 }
 
 function lookupLinkToken(store, rawToken, now) {
-  if (typeof rawToken !== "string" || !rawToken.trim()) {
-    return { status: "expired" };
+  if (typeof rawToken !== "string" || rawToken.length === 0) {
+    return { status: "invalid" };
   }
   if (rawToken.length > 128) {
-    return { status: "expired" };
+    return { status: "invalid" };
   }
 
-  const tokenHash = hashToken(rawToken.trim());
+  const tokenHash = hashToken(rawToken);
   const record = store.linkTokens[tokenHash];
   if (!record || typeof record !== "object") {
-    return { status: "expired", tokenHash };
+    return { status: "invalid", tokenHash };
   }
   if (record.usedAt) {
     return { status: "used", tokenHash, record };
@@ -179,8 +209,10 @@ function buildChallengeMessage({ nonce, issuedAt, expiresAt }) {
 const ERRORS = Object.freeze({
   expired: "This verification link has expired.",
   used: "This verification link has already been used.",
+  invalidLink: "This verification link is invalid.",
   invalid: "Invalid request.",
   failed: "Verification failed.",
+  temporary: "Verification is temporarily unavailable. Please try again.",
   taken: "This wallet is already linked to another ManGo profile.",
   rate: "Too many attempts. Try again later.",
 });
@@ -196,26 +228,46 @@ function errorResult(kind, status) {
 function createChallenge(body, options = {}) {
   const now = options.now === undefined ? Date.now() : options.now;
   const limiter = resolveLimiter(options);
-  const rawToken = typeof body.token === "string" ? body.token.trim() : "";
+  const rawToken = typeof body.token === "string" ? body.token : "";
+  const fingerprint = tokenFingerprint(rawToken);
+  const n = rawToken.length;
+  const charsetValid = isBase64UrlCharset(rawToken) ? "YES" : "NO";
   const tokenKey = rawToken ? hashToken(rawToken) : "missing";
 
   if (limiter.hitChallenge(tokenKey, now)) {
+    console.log(
+      `[wallet-challenge] received fingerprint=${fingerprint} length=${n} charset-valid=${charsetValid} lookup=rate`
+    );
     return errorResult("rate", 429);
   }
 
   const wallet = normalizeSolanaPublicKey(body.wallet);
   if (!wallet) {
+    console.log(
+      `[wallet-challenge] received fingerprint=${fingerprint} length=${n} charset-valid=${charsetValid}`
+    );
     return errorResult("invalid", 400);
   }
 
   return mutateWalletStore((store) => {
-    pruneExpired(store, now);
+    const stored = Object.keys(store.linkTokens || {}).length;
     const lookup = lookupLinkToken(store, rawToken, now);
+    const lookupLabel = lookupStatusLabel(lookup.status);
+    console.log(
+      `[wallet-challenge] received fingerprint=${fingerprint} length=${n} charset-valid=${charsetValid} stored=${stored} lookup=${lookupLabel}`
+    );
+    pruneExpired(store, now);
     if (lookup.status === "used") {
       return errorResult("used", 400);
     }
-    if (lookup.status !== "ok") {
+    if (lookup.status === "invalid") {
+      return errorResult("invalidLink", 400);
+    }
+    if (lookup.status === "expired") {
       return errorResult("expired", 400);
+    }
+    if (lookup.status !== "ok") {
+      return errorResult("invalidLink", 400);
     }
 
     const challengeId = crypto.randomBytes(CHALLENGE_ID_BYTES).toString("base64url");
@@ -283,7 +335,7 @@ function verifyWalletSignature(body, options = {}) {
 
   const wallet = normalizeSolanaPublicKey(body.wallet);
   const signature = decodeSignature(body.signature);
-  const rawToken = typeof body.token === "string" ? body.token.trim() : "";
+  const rawToken = typeof body.token === "string" ? body.token : "";
 
   if (!wallet || !signature || !rawToken || !challengeId || challengeId.length > 128) {
     return errorResult("invalid", 400);
@@ -295,6 +347,7 @@ function verifyWalletSignature(body, options = {}) {
   }
 
   const result = mutateWalletStore((store) => {
+    const lookup = lookupLinkToken(store, rawToken, now);
     pruneExpired(store, now);
 
     const challenge = store.challenges[challengeId];
@@ -311,12 +364,17 @@ function verifyWalletSignature(body, options = {}) {
       return errorResult("failed", 400);
     }
 
-    const lookup = lookupLinkToken(store, rawToken, now);
     if (lookup.status === "used") {
       return errorResult("used", 400);
     }
-    if (lookup.status !== "ok") {
+    if (lookup.status === "invalid") {
+      return errorResult("invalidLink", 400);
+    }
+    if (lookup.status === "expired") {
       return errorResult("expired", 400);
+    }
+    if (lookup.status !== "ok") {
+      return errorResult("invalidLink", 400);
     }
     if (lookup.tokenHash !== challenge.tokenHash) {
       return errorResult("failed", 400);
@@ -386,6 +444,10 @@ module.exports = {
   VERIFY_LIMIT,
   ERRORS,
   hashToken,
+  tokenFingerprint,
+  isBase64UrlCharset,
+  TOKEN_BYTES,
+  TOKEN_FINGERPRINT_LENGTH,
   createMemoryRateLimiter,
   createLinkToken,
   createChallenge,

@@ -112,6 +112,7 @@ runTest("5. opaque token no uid in URL", () => {
     walletConnectUrl: "https://mangomeme.fun/wallet-connect",
   });
   assert.ok(created.url.startsWith("https://mangomeme.fun/wallet-connect?t="));
+  assert.strictEqual(new URL(created.url).searchParams.get("t"), created.token);
   assert.ok(!created.url.includes("987654321"));
   assert.ok(!created.url.includes("telegram"));
   assert.ok(!created.url.includes("uid"));
@@ -262,6 +263,26 @@ runTest("corrupt wallet-links.json is not overwritten with empty store", () => {
     }, file);
   }, /Failed to read wallet-links.json/);
   assert.strictEqual(fs.readFileSync(file, "utf8"), "{not-json");
+});
+
+runTest("lock init uses exclusive create and does not clobber existing bytes", () => {
+  const file = walletFile();
+  const payload = JSON.stringify({
+    users: { "7": { wallet: "keep-me", verifiedAt: 1, updatedAt: 1 } },
+    wallets: {},
+    linkTokens: { abc: { telegramUserId: "7", createdAt: 1, expiresAt: 9e12, usedAt: null } },
+    challenges: {},
+  });
+  fs.writeFileSync(file, payload, "utf8");
+  const src = fs.readFileSync(path.join(__dirname, "..", "services", "walletLinks.js"), "utf8");
+  assert.ok(src.includes('flag: "wx"'));
+  assert.ok(src.includes("withWalletStore"));
+  assert.ok(src.includes("persist: false"));
+  assert.equal(/let store\s*=/.test(src), false);
+  const loaded = loadWalletStore(file);
+  assert.strictEqual(loaded.users["7"].wallet, "keep-me");
+  assert.ok(loaded.linkTokens.abc);
+  assert.strictEqual(fs.readFileSync(file, "utf8"), payload);
 });
 
 runTest("LINK_TTL_MS is 10 minutes", () => {
