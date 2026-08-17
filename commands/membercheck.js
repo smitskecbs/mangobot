@@ -22,13 +22,21 @@ function formatMemberCheck(profile, displayName) {
   const lastActive = profile.streak.lastActiveLabel || "—";
   const publicLive = profile.presalePublic && profile.presalePublic.live;
   const recorded = profile.presale && profile.presale.recorded;
-  let presale = publicLive ? "No participation recorded" : "Coming soon";
-  if (recorded) {
-    const sol =
-      profile.presale.contributedLamports || profile.presale.confirmedLamports || "0";
-    const mango = profile.presale.allocation || "0";
-    presale = `${formatLamportsAsSol(sol)} SOL / ${mango} MANGO`;
-  }
+  const contributionLine = recorded
+    ? `${formatLamportsAsSol(
+        profile.presale.contributedLamports || profile.presale.confirmedLamports || "0"
+      )} SOL`
+    : publicLive
+      ? "None"
+      : "Coming soon";
+  const allocationLine = recorded
+    ? `${profile.presale.allocation || "0"} MANGO`
+    : "—";
+  const distributionLine = recorded
+    ? profile.presale.distributionStatus === "sent"
+      ? "Sent"
+      : "Pending"
+    : "—";
   const pending = (profile.rewards && profile.rewards.pending) || 0;
   const sent = (profile.rewards && profile.rewards.delivered) || 0;
 
@@ -52,7 +60,9 @@ function formatMemberCheck(profile, displayName) {
     "",
     `Pending rewards: ${pending}`,
     `Sent rewards: ${sent}`,
-    `Presale: ${presale}`
+    `Presale contribution: ${contributionLine}`,
+    `Presale allocation: ${allocationLine}`,
+    `Presale distribution: ${distributionLine}`
   );
   return lines.join("\n");
 }

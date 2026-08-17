@@ -226,7 +226,7 @@ runTest("membercheck admin reply", () => {
   assert.ok(ctx.replies[0].text.includes("✅ Verified"));
   assert.ok(ctx.replies[0].text.includes(shortenWallet(wallet.address)));
   assert.ok(!ctx.replies[0].text.includes(wallet.address));
-  assert.ok(ctx.replies[0].text.includes("Presale:"));
+  assert.ok(ctx.replies[0].text.includes("Presale contribution:"));
   assert.ok(ctx.replies[0].text.includes("Weekly XP:"));
   assert.ok(ctx.replies[0].text.includes("Lifetime XP:"));
   assert.ok(ctx.replies[0].text.includes("Current streak:"));

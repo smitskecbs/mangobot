@@ -52,7 +52,12 @@ function formatOwnRewards(rewards) {
     mysteryPending: 0,
   };
   for (const reward of rewards) {
-    if (reward.status === "pending" || reward.status === "prepared") {
+    if (
+      reward.status === "pending" ||
+      reward.status === "prepared" ||
+      reward.status === "delivery-ready" ||
+      reward.status === "submitted"
+    ) {
       summary.pending += 1;
       if (reward.type === "mystery-gift") {
         summary.mysteryPending += 1;

@@ -35,6 +35,8 @@ function emptyParticipation() {
     allocation: null,
     transactions: [],
     updatedAt: null,
+    distributionStatus: null,
+    distributionTxSignature: null,
   };
 }
 
@@ -58,6 +60,11 @@ function normalizeRecord(raw) {
           : null,
       transactions: raw.contributions.map((item) => item.transactionSignature).filter(Boolean),
       updatedAt: Number(last.confirmedAt) || null,
+      distributionStatus:
+        raw.contributions.every((item) => item && item.distributionStatus === "sent")
+          ? "sent"
+          : "pending",
+      distributionTxSignature: last.distributionTxSignature || null,
     };
   }
   const lamports = parseLamportsInteger(raw.contributedLamports);
@@ -75,6 +82,8 @@ function normalizeRecord(raw) {
         : null,
     transactions: txs,
     updatedAt: Number(raw.updatedAt) || null,
+    distributionStatus: raw.distributionStatus || (recorded ? "pending" : null),
+    distributionTxSignature: raw.distributionTxSignature || null,
   };
 }
 
@@ -115,6 +124,9 @@ function formatPresaleWalletLines(participation) {
     participation.allocation
       ? `Allocation: ${participation.allocation} MANGO`
       : "Allocation: pending",
+    participation.distributionStatus === "sent"
+      ? "Distribution: Sent"
+      : "Distribution: Pending",
   ];
 }
 
@@ -132,6 +144,8 @@ function toLegacyParticipation(summary) {
       .map((item) => item.transactionSignature)
       .filter(Boolean),
     updatedAt: summary.updatedAt,
+    distributionStatus: summary.distributionStatus || null,
+    distributionTxSignature: summary.distributionTxSignature || null,
   };
 }
 

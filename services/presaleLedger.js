@@ -301,6 +301,15 @@ function summarizeUser(uid, store, now = Date.now(), blockHeight = null) {
     allocation: formatMangoHuman(allocation),
     walletSnapshot: snapshots.length ? snapshots[snapshots.length - 1] : null,
     contributions,
+    distributionStatus: contributions.length
+      ? contributions.every((item) => item && item.distributionStatus === "sent")
+        ? "sent"
+        : "pending"
+      : null,
+    distributionTxSignature: (() => {
+      const sent = contributions.filter((item) => item && item.distributionTxSignature);
+      return sent.length ? sent[sent.length - 1].distributionTxSignature : null;
+    })(),
     updatedAt: contributions.length
       ? Number(contributions[contributions.length - 1].confirmedAt) || null
       : null,

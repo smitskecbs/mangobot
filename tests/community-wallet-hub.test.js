@@ -392,7 +392,7 @@ runTest("17. pending mystery gift", () => {
   handleRewards(ctx, { rewardsFile });
   assert.ok(ctx.replies[0].text.includes("Mystery Gift"));
   assert.ok(ctx.replies[0].text.includes("Pending:"));
-  assert.ok(ctx.replies[0].text.includes("Type: Mystery Gift"));
+  assert.ok(ctx.replies[0].text.includes("🎁 Mystery Gift"));
   assert.ok(ctx.replies[0].text.includes("Status: Pending"));
   assert.ok(ctx.replies[0].text.includes("Created:"));
   assert.ok(!ctx.replies[0].text.includes("1000 USDC"));
@@ -414,7 +414,7 @@ runTest("18. sent reward", () => {
   const ctx = createMockCtx({ userId: 18 });
   handleRewards(ctx, { rewardsFile });
   assert.ok(ctx.replies[0].text.includes("Sent:"));
-  assert.ok(ctx.replies[0].text.includes("Status: Delivered"));
+  assert.ok(ctx.replies[0].text.includes("Status: Sent"));
   assert.ok(ctx.replies[0].text.includes(`Tx: ${shortenWallet(TX_SIG)}`));
   assert.ok(!ctx.replies[0].text.includes(TX_SIG));
 });
@@ -471,7 +471,9 @@ runTest("21. membercheck metrics", () => {
   assert.ok(text.includes("Last active:"));
   assert.ok(text.includes("Pending rewards:"));
   assert.ok(text.includes("Sent rewards:"));
-  assert.ok(text.includes("Presale: Coming soon"));
+  assert.ok(text.includes("Presale contribution: Coming soon"));
+  assert.ok(text.includes("Presale allocation:"));
+  assert.ok(text.includes("Presale distribution:"));
   assert.ok(!/score/i.test(text));
 });
 
@@ -525,7 +527,10 @@ runTest("25. no private key/seed fields", () => {
     "commands/presale.js",
     "commands/reward.js",
     "commands/membercheck.js",
+    "commands/deliver.js",
     "services/memberRewards.js",
+    "services/rewardDelivery.js",
+    "services/deliveryConfig.js",
     "utils/botMenu.js",
   ].map((rel) => fs.readFileSync(path.join(__dirname, "..", rel), "utf8").toLowerCase());
   for (const src of sources) {
@@ -595,7 +600,7 @@ runTest("userFacingRewardLine hides mystery contents", () => {
     createdAt: 1_700_000_000_000,
     walletSnapshot: "should-not-appear",
   });
-  assert.ok(line.includes("Type: Mystery Gift"));
+  assert.ok(line.includes("🎁 Mystery Gift"));
   assert.ok(!line.includes("hidden jackpot"));
   assert.ok(!line.includes("should-not-appear"));
 });

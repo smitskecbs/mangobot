@@ -22,7 +22,14 @@ const { normalizeSolanaPublicKey, shortenWallet } = require("../utils/solanaWall
 const DEFAULT_REWARDS_FILE = path.resolve(__dirname, "..", "data", "member-rewards.json");
 
 const REWARD_TYPES = Object.freeze(["mystery-gift", "airdrop", "nft", "other"]);
-const STATUSES = Object.freeze(["pending", "prepared", "sent", "cancelled"]);
+const STATUSES = Object.freeze([
+  "pending",
+  "prepared",
+  "delivery-ready",
+  "submitted",
+  "sent",
+  "cancelled",
+]);
 
 const LOCK_OPTIONS = Object.freeze({
   stale: 10_000,
@@ -262,6 +269,11 @@ function publicReward(record) {
     sentAt: record.sentAt,
     cancelledAt: record.cancelledAt || null,
     txSignature: record.txSignature,
+    deliveryType: record.deliveryType || null,
+    assetType: record.assetType || null,
+    amountBaseUnits: record.amountBaseUnits || null,
+    mint: record.mint || null,
+    deliveryId: record.deliveryId || null,
   };
 }
 
@@ -276,7 +288,12 @@ function countRewardsForUser(userId, rewardsFile) {
   let cancelled = 0;
   let mysteryPending = 0;
   for (const item of list) {
-    if (item.status === "pending" || item.status === "prepared") {
+    if (
+      item.status === "pending" ||
+      item.status === "prepared" ||
+      item.status === "delivery-ready" ||
+      item.status === "submitted"
+    ) {
       pending += 1;
       if (item.type === "mystery-gift") {
         mysteryPending += 1;
@@ -450,11 +467,27 @@ function allowedTransition(from, to) {
   if (to === "prepared") {
     return from === "pending";
   }
+  if (to === "delivery-ready") {
+    return from === "pending" || from === "prepared" || from === "delivery-ready";
+  }
+  if (to === "submitted") {
+    return from === "delivery-ready" || from === "prepared";
+  }
   if (to === "sent") {
-    return from === "pending" || from === "prepared";
+    return (
+      from === "pending" ||
+      from === "prepared" ||
+      from === "delivery-ready" ||
+      from === "submitted"
+    );
   }
   if (to === "cancelled") {
-    return from === "pending" || from === "prepared";
+    return (
+      from === "pending" ||
+      from === "prepared" ||
+      from === "delivery-ready" ||
+      from === "submitted"
+    );
   }
   return false;
 }
@@ -505,13 +538,15 @@ function userFacingRewardLine(reward) {
     reward.type === "mystery-gift" ? "Mystery Gift" : defaultLabelForType(reward.type);
   const statusLabel =
     reward.status === "sent"
-      ? "Delivered"
+      ? "Sent"
       : reward.status === "cancelled"
         ? "Cancelled"
-        : reward.status === "prepared"
-          ? "Prepared"
-          : "Pending";
-  const lines = [`Type: ${title}`, `Status: ${statusLabel}`];
+        : reward.status === "prepared" || reward.status === "delivery-ready"
+          ? "Pending"
+          : reward.status === "submitted"
+            ? "Pending"
+            : "Pending";
+  const lines = [`🎁 ${title}`, `Status: ${statusLabel}`];
   const created = formatCreatedDate(reward.createdAt);
   if (created) {
     lines.push(`Created: ${created}`);

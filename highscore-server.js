@@ -22,6 +22,9 @@ loadAppEnv({ envPath: path.join(__dirname, ".env") });
  *   POST /presale/prepare
  *   POST /presale/payment
  *   POST /presale/confirm
+ *   POST /delivery/status
+ *   POST /delivery/payment
+ *   POST /delivery/confirm
  *   GET  /health
  *
  * Wallet link tokens are created by the Telegram bot, not by a public HTTP route.
@@ -46,6 +49,7 @@ const {
 } = require("./services/points");
 const { tryHandleWalletRequest } = require("./services/walletApi");
 const { tryHandlePresaleRequest, startPresaleReconciliationTimer, stopPresaleReconciliationTimer } = require("./services/presaleApi");
+const { tryHandleDeliveryRequest } = require("./services/deliveryApi");
 const { resolveWalletFile } = require("./services/walletLinks");
 const { buildApiHealthPayload } = require("./services/apiHealth");
 const {
@@ -555,6 +559,10 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (await tryHandlePresaleRequest(req, res, origin, url, req.method)) {
+      return;
+    }
+
+    if (await tryHandleDeliveryRequest(req, res, origin, url, req.method)) {
       return;
     }
 
