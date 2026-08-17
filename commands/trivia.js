@@ -228,12 +228,11 @@ async function handleTriviaAnswer(ctx, options = {}) {
     return;
   }
 
-  if (!result.correct) {
-    await answer(result.toast || "Wrong answer ❌");
-    return;
+  if (result.correct) {
+    await answer("Correct! 🏆");
+  } else {
+    await answer(result.toast || "❌ Wrong answer!");
   }
-
-  await answer("Correct! 🏆");
 
   if (result.rendered && typeof ctx.editMessageText === "function") {
     try {

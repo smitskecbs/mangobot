@@ -26,6 +26,7 @@ const {
 const TRIVIA_ROUND_QUESTIONS = 5;
 const TRIVIA_QUESTION_TIMEOUT_MS = 60 * 1000;
 const TRIVIA_NEXT_QUESTION_DELAY_MS = 5 * 1000;
+const TRIVIA_WRONG_ANSWER_NEXT_DELAY_MS = 2500;
 const LETTERS = Object.freeze(["A", "B", "C", "D"]);
 
 const STATUS = Object.freeze({
@@ -137,6 +138,21 @@ function buildQuestionWonText(session, winnerName) {
   ].join("\n");
 }
 
+function buildQuestionWrongText(session) {
+  const answer =
+    session && Array.isArray(session.answers)
+      ? session.answers[session.correctIndex]
+      : "";
+  return [
+    "❌ Wrong answer!",
+    "",
+    "Correct answer:",
+    `✅ ${answer}`,
+    "",
+    "Next question coming up... 🥭",
+  ].join("\n");
+}
+
 function buildQuestionTimeoutText(session) {
   return [
     "⏱ TIME'S UP",
@@ -227,6 +243,11 @@ function createTriviaService(options = {}) {
     options.nextQuestionDelayMs >= 0
       ? options.nextQuestionDelayMs
       : TRIVIA_NEXT_QUESTION_DELAY_MS;
+  const wrongAnswerNextDelayMs =
+    typeof options.wrongAnswerNextDelayMs === "number" &&
+    options.wrongAnswerNextDelayMs >= 0
+      ? options.wrongAnswerNextDelayMs
+      : TRIVIA_WRONG_ANSWER_NEXT_DELAY_MS;
   const totalQuestions =
     typeof options.totalQuestions === "number" && options.totalQuestions > 0
       ? options.totalQuestions
@@ -402,9 +423,11 @@ function createTriviaService(options = {}) {
     scheduleAdvance();
   }
 
-  function scheduleAdvance() {
+  function scheduleAdvance(delayMs) {
     clearAdvanceTimer();
     const target = session;
+    const wait =
+      typeof delayMs === "number" && delayMs >= 0 ? delayMs : nextQuestionDelayMs;
     advanceTimer = setTimeoutFn(() => {
       advanceTimer = null;
       if (!session || session !== target) {
@@ -414,7 +437,7 @@ function createTriviaService(options = {}) {
         return;
       }
       advanceRound();
-    }, nextQuestionDelayMs);
+    }, wait);
   }
 
   function computeRoundClaim() {
@@ -705,11 +728,19 @@ function createTriviaService(options = {}) {
     target.answeredUsers[uid] = { answerIndex, at: now() };
 
     if (answerIndex !== target.correctIndex) {
+      target.questionPhase = QUESTION_PHASE.RESOLVED;
+      clearQuestionTimer();
+      const rendered = {
+        text: buildQuestionWrongText(target),
+        extra: emptyInlineKeyboardExtra(),
+      };
+      scheduleAdvance(wrongAnswerNextDelayMs);
       return {
         ok: true,
         correct: false,
-        toast: "Wrong answer ❌",
+        toast: "❌ Wrong answer!",
         session: snapshot(true),
+        rendered,
       };
     }
 
@@ -786,6 +817,7 @@ function createTriviaService(options = {}) {
     TRIVIA_ROUND_QUESTIONS: totalQuestions,
     TRIVIA_QUESTION_TIMEOUT_MS: questionTimeoutMs,
     TRIVIA_NEXT_QUESTION_DELAY_MS: nextQuestionDelayMs,
+    TRIVIA_WRONG_ANSWER_NEXT_DELAY_MS: wrongAnswerNextDelayMs,
     TRIVIA_ROUND_WIN_XP,
     TRIVIA_TIE_XP,
     TRIVIA_DAILY_REWARD_CAP,
@@ -811,6 +843,7 @@ function createTriviaService(options = {}) {
     getPendingTimerCount,
     buildQuestionText,
     buildQuestionWonText,
+    buildQuestionWrongText,
     buildQuestionTimeoutText,
     buildFinalScoreboardText,
     buildAnswerKeyboard,
@@ -825,6 +858,7 @@ module.exports = {
   TRIVIA_ROUND_QUESTIONS,
   TRIVIA_QUESTION_TIMEOUT_MS,
   TRIVIA_NEXT_QUESTION_DELAY_MS,
+  TRIVIA_WRONG_ANSWER_NEXT_DELAY_MS,
   TRIVIA_TIMEOUT_MS: TRIVIA_QUESTION_TIMEOUT_MS,
   TRIVIA_ROUND_WIN_XP,
   TRIVIA_TIE_XP,
@@ -838,6 +872,7 @@ module.exports = {
   materializeQuestion,
   buildQuestionText,
   buildQuestionWonText,
+  buildQuestionWrongText,
   buildQuestionTimeoutText,
   buildFinalScoreboardText,
   buildAnswerKeyboard,

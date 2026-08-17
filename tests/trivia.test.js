@@ -154,6 +154,10 @@ function createService(overrides = {}) {
       overrides.questionTimeoutMs != null ? overrides.questionTimeoutMs : 60_000,
     nextQuestionDelayMs:
       overrides.nextQuestionDelayMs != null ? overrides.nextQuestionDelayMs : 5_000,
+    wrongAnswerNextDelayMs:
+      overrides.wrongAnswerNextDelayMs != null
+        ? overrides.wrongAnswerNextDelayMs
+        : 2_500,
     totalQuestions:
       overrides.totalQuestions != null
         ? overrides.totalQuestions
@@ -278,15 +282,16 @@ async function main() {
   });
 
   await runTest("one attempt per question; resets next question", () => {
-    const { service, timers } = createService({ nextQuestionDelayMs: 5_000 });
+    const { service, timers } = createService();
     const started = startRound(service);
     const wrong = answerWrong(service, started.session.id, USER_A, "Alice");
     assert.strictEqual(wrong.correct, false);
     const again = answerCorrect(service, started.session.id, USER_A, "Alice");
-    assert.strictEqual(again.reason, "already-answered");
+    assert.strictEqual(again.reason, "question-closed");
 
-    answerCorrect(service, started.session.id, USER_B, "Bob");
-    timers.advance(5_000);
+    const bob = answerCorrect(service, started.session.id, USER_B, "Bob");
+    assert.strictEqual(bob.reason, "question-closed");
+    timers.advance(2_500);
     assert.strictEqual(service.getSnapshot().questionNumber, 2);
     const next = answerCorrect(service, started.session.id, USER_A, "Alice");
     assert.strictEqual(next.questionWon, true);
@@ -295,7 +300,7 @@ async function main() {
 
   await runTest("first correct earns 1 round point; wrong 0; no lifetime XP yet", () => {
     const file = pointsFile();
-    const { service } = createService();
+    const { service, timers } = createService();
     const started = startRound(service);
     service.tryAnswer({
       sessionId: started.session.id,
@@ -304,10 +309,106 @@ async function main() {
       chatId: COMMUNITY_CHAT,
       displayName: "Alice",
     });
+    assert.strictEqual(service.getSnapshot().scores[String(USER_A)], undefined);
+    const closed = answerCorrect(service, started.session.id, USER_B, "Bob");
+    assert.strictEqual(closed.reason, "question-closed");
+    timers.advance(2_500);
     answerCorrect(service, started.session.id, USER_B, "Bob");
     assert.strictEqual(service.getSnapshot().scores[String(USER_B)].score, 1);
     assert.strictEqual(service.getSnapshot().scores[String(USER_A)], undefined);
     assert.strictEqual(loadPoints(file).users[String(USER_B)], undefined);
+  });
+
+  await runTest("wrong answer shows ❌ and correct answer; next question in 2.5s", () => {
+    const edits = [];
+    const { service, timers } = createService();
+    service.setEditMessageHandler((_c, _m, text, extra) => {
+      edits.push({ text, extra });
+    });
+    const started = startRound(service);
+    const snap = service.getSnapshot();
+    const correctText = snap.answers[snap.correctIndex];
+    const wrong = answerWrong(service, started.session.id, USER_A, "Alice");
+    assert.strictEqual(wrong.correct, false);
+    assert.ok(wrong.rendered.text.includes("❌ Wrong answer!"));
+    assert.ok(wrong.rendered.text.includes("Correct answer:"));
+    assert.ok(wrong.rendered.text.includes(`✅ ${correctText}`));
+    assert.ok(wrong.rendered.text.includes("Next question coming up"));
+    assert.strictEqual(wrong.toast, "❌ Wrong answer!");
+    assert.strictEqual(service.getPendingTimerCount(), 1);
+    timers.advance(2_499);
+    assert.strictEqual(service.getSnapshot().questionNumber, 1);
+    timers.advance(1);
+    assert.strictEqual(service.getSnapshot().questionNumber, 2);
+  });
+
+  await runTest("correct answer keeps 5s delay; wrong uses 2.5s", () => {
+    const { service, timers } = createService();
+    const started = startRound(service);
+    answerCorrect(service, started.session.id, USER_A, "Alice");
+    assert.ok(service.buildQuestionWonText(service.getSnapshot(), "Alice").includes("5 seconds"));
+    timers.advance(2_500);
+    assert.strictEqual(service.getSnapshot().questionNumber, 1);
+    timers.advance(2_500);
+    assert.strictEqual(service.getSnapshot().questionNumber, 2);
+  });
+
+  await runTest("repeated wrong callback does not duplicate next-question timer", () => {
+    const { service, timers } = createService();
+    const started = startRound(service);
+    const first = answerWrong(service, started.session.id, USER_A, "Alice");
+    assert.strictEqual(first.ok, true);
+    assert.strictEqual(service.getPendingTimerCount(), 1);
+    const second = answerWrong(service, started.session.id, USER_A, "Alice");
+    assert.strictEqual(second.ok, false);
+    assert.strictEqual(second.reason, "question-closed");
+    const third = answerWrong(service, started.session.id, USER_B, "Bob");
+    assert.strictEqual(third.reason, "question-closed");
+    assert.strictEqual(service.getPendingTimerCount(), 1);
+    timers.advance(2_500);
+    assert.strictEqual(service.getSnapshot().questionNumber, 2);
+    assert.strictEqual(service.getPendingTimerCount(), 1);
+  });
+
+  await runTest("wrong answer awards no round XP; correct XP unchanged", () => {
+    const file = pointsFile();
+    const { service, timers } = createService({ nextQuestionDelayMs: 1, wrongAnswerNextDelayMs: 1 });
+    service.setAwardXpHandler((uid, name, amount) =>
+      awardTriviaRoundXp(uid, name, amount, file)
+    );
+    service.setEditMessageHandler(() => {});
+    const started = startRound(service);
+    answerWrong(service, started.session.id, USER_A, "Alice");
+    timers.advance(1);
+    for (let q = 2; q <= 5; q += 1) {
+      answerCorrect(service, started.session.id, USER_B, "Bob");
+      timers.advance(1);
+    }
+    assert.strictEqual(service.isTriviaOpen(), false);
+    assert.strictEqual(loadPoints(file).users[String(USER_A)], undefined);
+    assert.strictEqual(loadPoints(file).users[String(USER_B)].points, 3);
+    assert.strictEqual(TRIVIA_ROUND_WIN_XP, 3);
+    assert.strictEqual(TRIVIA_TIE_XP, 2);
+  });
+
+  await runTest("handleTriviaAnswer edits wrong-answer message once", async () => {
+    const { service } = createService();
+    const started = startRound(service);
+    const snap = service.getSnapshot();
+    const wrongIndex = (snap.correctIndex + 1) % 4;
+    const ctx = createMockCtx({
+      userId: USER_A,
+      name: "Alice",
+      callbackData: buildAnswerCallbackData(started.session.id, wrongIndex),
+    });
+    await handleTriviaAnswer(ctx, { runtime: service });
+    assert.strictEqual(ctx.cbAnswers[0], "❌ Wrong answer!");
+    assert.strictEqual(ctx.edited.length, 1);
+    assert.ok(ctx.edited[0].text.includes("❌ Wrong answer!"));
+    assert.ok(ctx.edited[0].text.includes("Correct answer:"));
+    await handleTriviaAnswer(ctx, { runtime: service });
+    assert.strictEqual(ctx.cbAnswers[1], "This question is over.");
+    assert.strictEqual(ctx.edited.length, 1);
   });
 
   await runTest("question timeout continues round; 5th completes", () => {
