@@ -24,6 +24,7 @@ function handleWeeklyWinners(ctx, options = {}) {
     syncAndFinalizeWeeklyWinners({
       winnersFile: options.winnersFile,
       pointsFile: options.pointsFile,
+      now: options.now,
     });
   } catch (_err) {
     /* ignore — still show stored latest */

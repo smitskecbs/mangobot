@@ -403,8 +403,9 @@ async function main() {
       },
       wf
     );
+    const displayNow = new Date(Date.UTC(2026, 7, 12, 12, 0, 0));
     const ctx2 = mockCtx();
-    await handleWeeklyWinners(ctx2, { winnersFile: wf });
+    await handleWeeklyWinners(ctx2, { winnersFile: wf, now: displayNow });
     assert.ok(ctx2.replies[0].text.includes("ManGo Weekly Winners"));
     assert.ok(ctx2.replies[0].text.includes("Alice — 42 XP"));
     assert.ok(ctx2.replies[0].text.includes("Bob — 31 XP"));
@@ -818,11 +819,83 @@ async function main() {
       winnersFile: wf,
       pointsFile: pf,
     });
-    assert.strictEqual(result.ok, true);
-    assert.strictEqual(result.standingCount, 0);
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(fs.readFileSync(wf, "utf8"), "{not-json");
     const state = readWinnersState(wf);
-    assert.strictEqual(state.current.week, getWeekId());
-    assert.deepStrictEqual(state.current.standings, {});
+    assert.strictEqual(state.lastFinalizedWeek, null);
+  });
+
+  const sundayUtc = new Date(Date.UTC(2026, 7, 9, 23, 59, 0));
+  const mondayMidnightUtc = new Date(Date.UTC(2026, 7, 10, 0, 0, 0));
+  const mondayDayUtc = new Date(Date.UTC(2026, 7, 10, 15, 0, 0));
+
+  function seedAliceLatest(wf, currentWeek) {
+    writeWinnersState(
+      {
+        version: 1,
+        lastFinalizedWeek: "2026-08-03",
+        latest: {
+          week: "2026-08-03",
+          finalizedAt: 1,
+          announced: true,
+          winners: [
+            { telegramUserId: "1", name: "Alice", weeklyPoints: 42 },
+            { telegramUserId: "2", name: "Bob", weeklyPoints: 31 },
+          ],
+        },
+        current: { week: currentWeek, standings: {}, updatedAt: 1 },
+      },
+      wf
+    );
+  }
+
+  for (let i = 1; i <= 10; i += 1) {
+    await runTest(`deterministic Sunday 23:59 UTC display ${i}/10`, async () => {
+      const wf = winnersFile();
+      seedAliceLatest(wf, "2026-08-03");
+      const ctx = mockCtx();
+      await handleWeeklyWinners(ctx, { winnersFile: wf, now: sundayUtc });
+      assert.ok(ctx.replies[0].text.includes("Alice — 42 XP"));
+      assert.strictEqual(readWinnersState(wf).latest.week, "2026-08-03");
+    });
+  }
+
+  for (let i = 1; i <= 10; i += 1) {
+    await runTest(`deterministic Monday 00:00 UTC boundary ${i}/10`, async () => {
+      const wf = winnersFile();
+      seedAliceLatest(wf, "2026-08-10");
+      const result = syncAndFinalizeWeeklyWinners({
+        winnersFile: wf,
+        now: mondayMidnightUtc,
+      });
+      assert.strictEqual(getWeekId(mondayMidnightUtc), "2026-08-10");
+      assert.strictEqual(result.finalized, false);
+      const ctx = mockCtx();
+      await handleWeeklyWinners(ctx, { winnersFile: wf, now: mondayMidnightUtc });
+      assert.ok(ctx.replies[0].text.includes("Alice — 42 XP"));
+    });
+  }
+
+  for (let i = 1; i <= 10; i += 1) {
+    await runTest(`deterministic Monday daytime display ${i}/10`, async () => {
+      const wf = winnersFile();
+      seedAliceLatest(wf, "2026-08-10");
+      const ctx = mockCtx();
+      await handleWeeklyWinners(ctx, { winnersFile: wf, now: mondayDayUtc });
+      assert.ok(ctx.replies[0].text.includes("Alice — 42 XP"));
+      assert.ok(ctx.replies[0].text.includes("Bob — 31 XP"));
+    });
+  }
+
+  await runTest("corrupt winners file is not overwritten by sync", () => {
+    const wf = winnersFile();
+    fs.writeFileSync(wf, "{not-json", "utf8");
+    const result = syncAndFinalizeWeeklyWinners({
+      winnersFile: wf,
+      now: mondayDayUtc,
+    });
+    assert.strictEqual(result.finalized, false);
+    assert.strictEqual(fs.readFileSync(wf, "utf8"), "{not-json");
   });
 
   console.log("\nAll weekly-winners tests passed.");

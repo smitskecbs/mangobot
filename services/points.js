@@ -273,7 +273,7 @@ function emptyPointsData() {
  * @param {string} [pointsFile]
  * @returns {{ users: Record<string, object> }}
  */
-function readPointsSnapshot(pointsFile = POINTS_FILE) {
+function readPointsSnapshot(pointsFile = POINTS_FILE, options = {}) {
   try {
     if (!fs.existsSync(pointsFile)) {
       return emptyPointsData();
@@ -286,11 +286,18 @@ function readPointsSnapshot(pointsFile = POINTS_FILE) {
 
     const data = JSON.parse(raw);
     if (!data || typeof data !== "object" || !data.users || typeof data.users !== "object") {
+      if (options.strict) {
+        throw new Error("Failed to read points.json: invalid-shape");
+      }
       return emptyPointsData();
     }
 
     return data;
   } catch (err) {
+    if (options.strict && err && err.code !== "ENOENT") {
+      const message = err && err.message ? err.message : String(err);
+      throw new Error(`Failed to read points.json: ${message}`);
+    }
     logError(`Error reading ${path.basename(pointsFile)}:`, err);
     return emptyPointsData();
   }
@@ -321,7 +328,7 @@ function mutatePoints(mutator, pointsFile = POINTS_FILE) {
   const release = acquirePointsLock(pointsFile);
 
   try {
-    const data = readPointsSnapshot(pointsFile);
+    const data = readPointsSnapshot(pointsFile, { strict: true });
     const result = mutator(data);
 
     try {

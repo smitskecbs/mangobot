@@ -12,6 +12,8 @@
  * 3. start community scheduler
  */
 
+const { noteRuntimeEvent } = require("./runtimeHealth");
+
 function startBotRuntime({
   bot,
   startScheduler,
@@ -34,7 +36,7 @@ function startBotRuntime({
       return;
     }
     schedulerStarted = true;
-    logFn("🥭 ManGo Bot running...");
+    logFn("[startup] mango bot running");
 
     if (typeof beforeScheduler === "function") {
       try {
@@ -71,6 +73,8 @@ function startBotRuntime({
   });
 
   function shutdown(signal) {
+    noteRuntimeEvent("shutdown");
+    logFn(`[shutdown] bot signal=${signal}`);
     if (communityScheduler && typeof communityScheduler.stop === "function") {
       communityScheduler.stop("shutdown");
     }
@@ -91,7 +95,11 @@ function startBotRuntime({
     } catch (_err) {
       /* ignore */
     }
-    bot.stop(signal);
+    try {
+      bot.stop(signal);
+    } catch (_err) {
+      /* ignore */
+    }
   }
 
   return {

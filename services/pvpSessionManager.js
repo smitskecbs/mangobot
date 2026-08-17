@@ -193,8 +193,26 @@ function createPvpSessionManager(options = {}) {
   }
 
   function markPairCooldown(userIdA, userIdB, _game) {
+    const now = nowFn();
+    for (const [existingKey, until] of pairCooldowns.entries()) {
+      if (until <= now) {
+        pairCooldowns.delete(existingKey);
+      }
+    }
     const key = makePairKey(userIdA, userIdB);
-    pairCooldowns.set(key, nowFn() + pairCooldownMs);
+    pairCooldowns.set(key, now + pairCooldownMs);
+    const maxKeys = 2000;
+    if (pairCooldowns.size > maxKeys) {
+      const overflow = pairCooldowns.size - maxKeys;
+      const keys = pairCooldowns.keys();
+      for (let i = 0; i < overflow; i += 1) {
+        const next = keys.next();
+        if (next.done) {
+          break;
+        }
+        pairCooldowns.delete(next.value);
+      }
+    }
   }
 
   function getPairCooldownRemainingMs(userIdA, userIdB, _game) {

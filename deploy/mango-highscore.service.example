@@ -1,0 +1,28 @@
+# ManGo highscore / wallet / presale HTTP API systemd example
+#
+# Install on Hetzner next to mangobot.service. Do not set PRESALE_ENABLED=true
+# in this unit. Missing treasury/RPC must keep the API up with presale disabled.
+
+[Unit]
+Description=ManGo highscore wallet presale API
+Documentation=file:///home/adje/mangobot/deploy/PRODUCTION-RUNBOOK.md
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=12
+
+[Service]
+Type=simple
+User=adje
+Group=adje
+WorkingDirectory=/home/adje/mangobot
+EnvironmentFile=-/home/adje/mangobot/.env
+ExecStart=/usr/bin/node /home/adje/mangobot/highscore-server.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+KillMode=mixed
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

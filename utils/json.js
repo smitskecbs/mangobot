@@ -13,7 +13,7 @@ function resolveDefault(defaultValue) {
 
 /**
  * Read a JSON file, returning defaultValue when the file is missing, empty, or invalid.
- * May rewrite the file when recovering — prefer read-only helpers for shared mutable state.
+ * Never overwrites the file. Mutating stores must fail closed on corrupt JSON.
  */
 function readJsonFile(filePath, defaultValue, label = filePath) {
   try {
@@ -23,22 +23,14 @@ function readJsonFile(filePath, defaultValue, label = filePath) {
 
     const raw = fs.readFileSync(filePath, "utf8").trim();
     if (!raw) {
-      logError(`${label} is empty, resetting...`);
-      const fresh = resolveDefault(defaultValue);
-      writeJsonFile(filePath, fresh);
-      return fresh;
+      logError(`${label} is empty; using in-memory default (file not overwritten)`);
+      return resolveDefault(defaultValue);
     }
 
     return JSON.parse(raw);
   } catch (err) {
     logError(`Error reading ${label}:`, err);
-    const fresh = resolveDefault(defaultValue);
-    try {
-      writeJsonFile(filePath, fresh);
-    } catch (saveErr) {
-      logError(`Error resetting ${label}:`, saveErr);
-    }
-    return fresh;
+    return resolveDefault(defaultValue);
   }
 }
 

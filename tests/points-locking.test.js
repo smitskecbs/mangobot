@@ -297,24 +297,23 @@ runTest("bestaand points bestand blijft leesbaar terwijl writers serialiseren", 
   );
 });
 
-runTest("corrupt/empty recovery blijft veilig", () => {
+runTest("corrupt JSON is not overwritten; empty file can initialize", () => {
   fs.writeFileSync(testFile, "{not-json", "utf8");
   assert.deepStrictEqual(loadPoints(testFile), { users: {} });
-
-  mutatePoints((data) => {
-    data.users["1"] = {
-      points: 1,
-      weeklyPoints: 1,
-      weekId: "2026-08-04",
-      name: "Repair",
-      triggerDate: null,
-      triggersUsed: [],
-      activityDate: null,
-    };
-  }, testFile);
-
-  const repaired = JSON.parse(fs.readFileSync(testFile, "utf8"));
-  assert.strictEqual(repaired.users["1"].points, 1);
+  assert.throws(() => {
+    mutatePoints((data) => {
+      data.users["1"] = {
+        points: 1,
+        weeklyPoints: 1,
+        weekId: "2026-08-04",
+        name: "Repair",
+        triggerDate: null,
+        triggersUsed: [],
+        activityDate: null,
+      };
+    }, testFile);
+  }, /Failed to read points.json/);
+  assert.strictEqual(fs.readFileSync(testFile, "utf8"), "{not-json");
 
   fs.writeFileSync(testFile, "   \n", "utf8");
   assert.deepStrictEqual(loadPoints(testFile), { users: {} });

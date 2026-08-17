@@ -132,7 +132,7 @@ async function main() {
     assert.strictEqual(runtime.isSchedulerStarted(), true);
     assert.strictEqual(runtime.getCommunityScheduler(), fakeScheduler);
     assert.ok(
-      logs.some((line) => line.includes("🥭 ManGo Bot running...")),
+      logs.some((line) => line.includes("[startup] mango bot running")),
       "running log expected"
     );
 
@@ -156,7 +156,7 @@ async function main() {
       },
       logFn: (...args) => {
         const line = args.join(" ");
-        if (line.includes("🥭 ManGo Bot running...")) {
+        if (line.includes("[startup] mango bot running")) {
           order.push("running");
         }
       },

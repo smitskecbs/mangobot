@@ -113,7 +113,7 @@ function normalizeStore(raw) {
   return store;
 }
 
-function readRewardsSnapshot(rewardsFile) {
+function readRewardsSnapshot(rewardsFile, options = {}) {
   try {
     if (!fs.existsSync(rewardsFile)) {
       return emptyStore();
@@ -124,6 +124,10 @@ function readRewardsSnapshot(rewardsFile) {
     }
     return normalizeStore(JSON.parse(raw));
   } catch (err) {
+    if (options.strict && err && err.code !== "ENOENT") {
+      const message = err && err.message ? err.message : String(err);
+      throw new Error(`Failed to read member-rewards.json: ${message}`);
+    }
     logError("Error reading member-rewards.json:", err);
     return emptyStore();
   }
@@ -173,7 +177,7 @@ function mutateRewardsStore(mutator, rewardsFile) {
   const release = acquireRewardsLock(filePath);
 
   try {
-    const data = readRewardsSnapshot(filePath);
+    const data = readRewardsSnapshot(filePath, { strict: true });
     const result = mutator(data);
 
     try {

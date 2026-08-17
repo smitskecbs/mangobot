@@ -10,8 +10,15 @@ const {
 } = require("./services/communityScheduler");
 const { startBotRuntime } = require("./utils/botLifecycle");
 const { repairCurrentDayStreaks } = require("./services/points");
+const { installProcessGuards } = require("./utils/processGuards");
+const { noteRuntimeEvent } = require("./utils/runtimeHealth");
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
+
+bot.use((ctx, next) => {
+  noteRuntimeEvent("telegramUpdate");
+  return next();
+});
 
 function registerModules(dir) {
   const fullDir = path.join(__dirname, dir);
@@ -40,6 +47,16 @@ const runtime = startBotRuntime({
   bot,
   startScheduler: startCommunityScheduler,
   logFn: log,
+  onLaunchFailed: (err) => {
+    const code = (err && err.code) || (err && err.name) || "Error";
+    logError(`[startup] telegram launch failed code=${code}`);
+    try {
+      runtime.shutdown("launch-failed");
+    } catch (_err) {
+      /* ignore */
+    }
+    process.exit(1);
+  },
   beforeScheduler: () => {
     try {
       const streakRepair = repairCurrentDayStreaks();
@@ -78,3 +95,8 @@ const runtime = startBotRuntime({
 
 process.once("SIGINT", () => runtime.shutdown("SIGINT"));
 process.once("SIGTERM", () => runtime.shutdown("SIGTERM"));
+installProcessGuards({
+  name: "mangobot",
+  shutdown: () => runtime.shutdown("crash"),
+  logError,
+});

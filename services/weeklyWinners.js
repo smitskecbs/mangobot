@@ -224,7 +224,7 @@ function normalizeState(raw) {
   return state;
 }
 
-function readWinnersState(filePath = DEFAULT_WINNERS_FILE) {
+function readWinnersState(filePath = DEFAULT_WINNERS_FILE, options = {}) {
   try {
     if (!fs.existsSync(filePath)) {
       return emptyState();
@@ -235,6 +235,10 @@ function readWinnersState(filePath = DEFAULT_WINNERS_FILE) {
     }
     return normalizeState(JSON.parse(raw));
   } catch (err) {
+    if (options.strict && err && err.code !== "ENOENT") {
+      const message = err && err.message ? err.message : String(err);
+      throw new Error(`Failed to read weekly-winners.json: ${message}`);
+    }
     logError(
       "[weekly-winners] read failed:",
       err && err.message ? err.message : err
@@ -378,7 +382,7 @@ function noteWeeklyStanding(
   let release;
   try {
     release = acquireWinnersLock(filePath);
-    const state = readWinnersState(filePath);
+    const state = readWinnersState(filePath, { strict: true });
     const nowMs = Date.now();
 
     if (!state.current.week) {
@@ -460,7 +464,7 @@ function syncAndFinalizeWeeklyWinners(options = {}) {
   let release;
   try {
     release = acquireWinnersLock(winnersFile);
-    const state = readWinnersState(winnersFile);
+    const state = readWinnersState(winnersFile, { strict: true });
     const points = pointsFile
       ? readPointsSnapshot(pointsFile)
       : loadPoints();
@@ -616,7 +620,7 @@ function markWeeklyWinnersAnnounced(weekId, winnersFile) {
   let release;
   try {
     release = acquireWinnersLock(filePath);
-    const state = readWinnersState(filePath);
+    const state = readWinnersState(filePath, { strict: true });
     if (!state.latest || state.latest.week !== weekId) {
       return false;
     }
@@ -715,7 +719,7 @@ function reconstructCurrentStandingsFromPoints(options = {}) {
   let release;
   try {
     release = acquireWinnersLock(winnersFile);
-    const state = readWinnersState(winnersFile);
+    const state = readWinnersState(winnersFile, { strict: true });
     const beforeLatest = state.latest
       ? JSON.stringify(state.latest)
       : null;

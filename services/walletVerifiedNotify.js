@@ -5,6 +5,7 @@
 
 const { shortenWallet } = require("../utils/solanaWallet");
 const { normalizeUserId } = require("./walletLinks");
+const { fetchWithTimeout, TELEGRAM_TIMEOUT_MS } = require("../utils/safeFetch");
 
 function buildWalletVerifiedMessage(wallet) {
   const short = shortenWallet(wallet);
@@ -43,14 +44,21 @@ async function notifyWalletVerified(payload, options = {}) {
   const fetchFn = typeof options.fetchImpl === "function" ? options.fetchImpl : fetch;
 
   try {
-    const response = await fetchFn(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+    const response = await fetchWithTimeout(`https://api.telegram.org/bot${botToken}/sendMessage`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+      },
       body: JSON.stringify({
         chat_id: uid,
         text,
         disable_web_page_preview: true,
       }),
+      timeoutMs:
+        Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
+          ? options.timeoutMs
+          : TELEGRAM_TIMEOUT_MS,
+      fetchImpl: fetchFn,
     });
     if (!response || response.ok !== true) {
       console.error("[wallet-verify] notify failed error=telegram_http");

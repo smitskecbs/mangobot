@@ -45,12 +45,18 @@ const {
   emptyGameXpPayload,
 } = require("./services/points");
 const { tryHandleWalletRequest } = require("./services/walletApi");
-const { tryHandlePresaleRequest, startPresaleReconciliationTimer } = require("./services/presaleApi");
+const { tryHandlePresaleRequest, startPresaleReconciliationTimer, stopPresaleReconciliationTimer } = require("./services/presaleApi");
 const { resolveWalletFile } = require("./services/walletLinks");
+const { buildApiHealthPayload } = require("./services/apiHealth");
 const {
   resolveAllowedOrigin,
   applyCorsHeaders,
 } = require("./services/httpCors");
+const { fetchWithTimeout, TELEGRAM_TIMEOUT_MS } = require("./utils/safeFetch");
+const { pruneTimestampMap } = require("./utils/boundedMap");
+const { installProcessGuards } = require("./utils/processGuards");
+const { noteRuntimeEvent } = require("./utils/runtimeHealth");
+const { error: logError, log } = require("./utils/logger");
 
 const PORT = Number.parseInt(process.env.PORT || "8787", 10);
 const BOT_TOKEN = process.env.BOT_TOKEN?.trim();
@@ -59,19 +65,37 @@ const SCORES_FILE = getScoresFilePath();
 const BOUNCH_SCORES_FILE = bounchScores.getScoresFilePath();
 
 const RATE_LIMIT_MS = 30_000;
+const RATE_LIMIT_MAX_KEYS = 5000;
+const MAX_BODY_BYTES = 32 * 1024;
 
 /** @type {Map<string, number>} */
 const lastSubmitByIp = new Map();
 
-function readJsonBody(req) {
+function readJsonBody(req, maxBytes = MAX_BODY_BYTES) {
   return new Promise((resolve, reject) => {
     const chunks = [];
+    let size = 0;
+    let settled = false;
 
     req.on("data", (chunk) => {
-      chunks.push(chunk);
+      if (settled) {
+        return;
+      }
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      size += buf.length;
+      if (size > maxBytes) {
+        settled = true;
+        reject(new Error("payload-too-large"));
+        return;
+      }
+      chunks.push(buf);
     });
 
     req.on("end", () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       if (chunks.length === 0) {
         resolve({});
         return;
@@ -84,7 +108,13 @@ function readJsonBody(req) {
       }
     });
 
-    req.on("error", reject);
+    req.on("error", (err) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reject(err);
+    });
   });
 }
 
@@ -100,6 +130,7 @@ function clientIp(req) {
 
 function isRateLimited(ip) {
   const now = Date.now();
+  pruneTimestampMap(lastSubmitByIp, now, RATE_LIMIT_MS * 4, RATE_LIMIT_MAX_KEYS);
   const last = lastSubmitByIp.get(ip) ?? 0;
 
   if (now - last < RATE_LIMIT_MS) {
@@ -192,19 +223,25 @@ async function sendTelegramMessage(text) {
     return false;
   }
 
-  const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      chat_id: TELEGRAM_CHAT_ID,
-      text,
-      disable_web_page_preview: true,
-    }),
-  });
-
-  return response.ok;
+  try {
+    const response = await fetchWithTimeout(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        chat_id: TELEGRAM_CHAT_ID,
+        text,
+        disable_web_page_preview: true,
+      }),
+      timeoutMs: TELEGRAM_TIMEOUT_MS,
+    });
+    return response.ok;
+  } catch (err) {
+    const code = (err && err.code) || (err && err.name) || "Error";
+    console.error(`[api] telegram notify failed error=${code}`);
+    return false;
+  }
 }
 
 async function handleSnakeHighscore(req, res, origin) {
@@ -493,49 +530,82 @@ const server = http.createServer(async (req, res) => {
   const origin = corsOrigin(req);
   const requestOrigin = typeof req.headers.origin === "string" ? req.headers.origin : "(none)";
 
-  console.log(`[ManGo Highscore API] ${req.method} ${url} Origin: ${requestOrigin}`);
+  log(`[api] ${req.method} ${url} origin=${requestOrigin}`);
 
-  if (req.method === "OPTIONS") {
-    res.statusCode = 204;
-    applyCorsHeaders(res, origin);
-    res.end();
-    return;
+  try {
+    if (req.method === "OPTIONS") {
+      res.statusCode = 204;
+      applyCorsHeaders(res, origin);
+      res.end();
+      return;
+    }
+
+    if (url === "/snake-highscore" && req.method === "POST") {
+      await handleSnakeHighscore(req, res, origin);
+      return;
+    }
+
+    if (url === "/bounch-highscore" && req.method === "POST") {
+      await handleBounchHighscore(req, res, origin);
+      return;
+    }
+
+    if (await tryHandleWalletRequest(req, res, origin, url, req.method)) {
+      return;
+    }
+
+    if (await tryHandlePresaleRequest(req, res, origin, url, req.method)) {
+      return;
+    }
+
+    if (url === "/health" && req.method === "GET") {
+      const payload = buildApiHealthPayload({
+        walletFile: resolveWalletFile(),
+      });
+      sendJson(res, payload.ok ? 200 : 503, payload, origin);
+      return;
+    }
+
+    sendJson(res, 404, { ok: false, error: "Not found" }, origin);
+  } catch (err) {
+    const code = (err && err.code) || (err && err.name) || "Error";
+    logError(`[api] request failed code=${code}`);
+    if (!res.headersSent) {
+      sendJson(res, 500, { ok: false, error: "Temporary error." }, origin);
+    }
   }
-
-  if (url === "/snake-highscore" && req.method === "POST") {
-    await handleSnakeHighscore(req, res, origin);
-    return;
-  }
-
-  if (url === "/bounch-highscore" && req.method === "POST") {
-    await handleBounchHighscore(req, res, origin);
-    return;
-  }
-
-  if (await tryHandleWalletRequest(req, res, origin, url, req.method)) {
-    return;
-  }
-
-  if (await tryHandlePresaleRequest(req, res, origin, url, req.method)) {
-    return;
-  }
-
-  if (url === "/health" && req.method === "GET") {
-    sendJson(res, 200, { ok: true, service: "mango-snake-highscore" }, origin);
-    return;
-  }
-
-  sendJson(res, 404, { ok: false, error: "Not found" }, origin);
 });
 
 server.listen(PORT, () => {
-  console.log(`ManGo high-score API listening on port ${PORT}`);
-  console.log(`Snake scores file: ${SCORES_FILE}`);
-  console.log(`Bounch scores file: ${BOUNCH_SCORES_FILE}`);
-  console.log(`Wallet links file: ${resolveWalletFile()}`);
+  log(`[startup] highscore-api listening port=${PORT}`);
+  log(`[startup] snake-file=${SCORES_FILE}`);
+  log(`[startup] bounch-file=${BOUNCH_SCORES_FILE}`);
+  log(`[startup] wallet-file-configured=yes`);
 
   if (!BOT_TOKEN || !TELEGRAM_CHAT_ID) {
-    console.log("Telegram not configured — scores will be saved but not posted.");
+    log("[startup] telegram notify disabled");
   }
   startPresaleReconciliationTimer();
+});
+
+let shuttingDown = false;
+function shutdownApi(signal) {
+  if (shuttingDown) {
+    return;
+  }
+  shuttingDown = true;
+  noteRuntimeEvent("shutdown");
+  log(`[shutdown] highscore-api signal=${signal}`);
+  stopPresaleReconciliationTimer();
+  server.close(() => {
+    log("[shutdown] highscore-api closed");
+  });
+}
+
+process.once("SIGINT", () => shutdownApi("SIGINT"));
+process.once("SIGTERM", () => shutdownApi("SIGTERM"));
+installProcessGuards({
+  name: "highscore-api",
+  shutdown: () => shutdownApi("crash"),
+  logError,
 });

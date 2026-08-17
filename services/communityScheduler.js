@@ -15,6 +15,7 @@ const fs = require("fs");
 const path = require("path");
 const { writeJsonFileAtomic } = require("../utils/json");
 const { log, error: logError } = require("../utils/logger");
+const { noteRuntimeEvent } = require("../utils/runtimeHealth");
 const {
   wasActiveWithin,
 } = require("../utils/communityActivityPulse");
@@ -565,6 +566,8 @@ function createCommunityScheduler(options = {}) {
   let lastTickAt = null;
   /** @type {"ok"|"error"|"unknown"} */
   let persistStatus = "unknown";
+  let tickInFlight = false;
+  let stopped = false;
   let state = loadState(stateFile);
   if (!state.autoChatFight) {
     state.autoChatFight = emptyAutoChatFightState();
@@ -619,6 +622,7 @@ function createCommunityScheduler(options = {}) {
     const pulseNow = getNow();
     tickCount += 1;
     lastTickAt = pulseNow;
+    noteRuntimeEvent("schedulerTick", { at: pulseNow.getTime() });
     if (state.runtime) {
       state.runtime.tickCount = tickCount;
       state.runtime.lastTickAt = pulseNow.getTime();
@@ -767,10 +771,29 @@ function createCommunityScheduler(options = {}) {
   }
 
   async function tick() {
+    if (stopped) {
+      return { skipped: "stopped" };
+    }
     const remindersWanted = enabled && !activityConfig.enabled;
     const autoWanted = autoConfig.enabled && !activityConfig.enabled;
     const engineWanted = activityConfig.enabled;
     const wanted = remindersWanted || autoWanted || engineWanted;
+    noteRuntimeEvent("schedulerWanted", { wanted: schedulerWanted() });
+
+    try {
+      const result = await runTick(wanted);
+      noteRuntimeEvent("schedulerTickOk", { at: getNow().getTime() });
+      return result;
+    } catch (err) {
+      noteRuntimeEvent("error", {
+        code: (err && err.code) || (err && err.name) || "Error",
+      });
+      throw err;
+    }
+  }
+
+  async function runTick(wanted) {
+    const remindersWanted = enabled && !activityConfig.enabled;
 
     // Weekly Top 3 announce uses the same sendMessage channel as community
     // activity. A disabled scheduler must not send anything — including
@@ -848,6 +871,7 @@ function createCommunityScheduler(options = {}) {
   }
 
   function start() {
+    stopped = false;
     const autoWanted = autoConfig.enabled && !activityConfig.enabled;
     const engineWanted = activityConfig.enabled;
     if (!schedulerWanted()) {
@@ -924,11 +948,18 @@ function createCommunityScheduler(options = {}) {
         try {
           noteTimerPulse();
         } catch (err) {
-          logError("[community-scheduler] tick error:", err);
+          logError("[scheduler] tick error:", err);
         }
+        if (tickInFlight || stopped) {
+          return undefined;
+        }
+        tickInFlight = true;
         return Promise.resolve()
           .then(() => tick())
-          .catch((err) => logError("[community-scheduler] tick error:", err));
+          .catch((err) => logError("[scheduler] tick error:", err))
+          .finally(() => {
+            tickInFlight = false;
+          });
       }, tickMs);
 
       let referenced = "n/a";
@@ -957,12 +988,13 @@ function createCommunityScheduler(options = {}) {
 
     Promise.resolve()
       .then(() => tick())
-      .catch((err) => logError("[community-scheduler] tick error:", err));
+      .catch((err) => logError("[scheduler] tick error:", err));
   }
 
   function stop(reason) {
     const why = reason ? String(reason) : "explicit";
     lastStopReason = why;
+    stopped = true;
     log(`[community-scheduler] stop called reason=${why}`);
     if (probeTimer) {
       clearTimeoutFn(probeTimer);
@@ -1081,6 +1113,7 @@ function createCommunityScheduler(options = {}) {
     getLastCheckedAt,
     getTickCount: () => tickCount,
     getLastTickAt: () => lastTickAt,
+    isTickInFlight: () => tickInFlight,
     getDiagnostics,
     didCrossSlot,
     getZonedClock,

@@ -321,14 +321,27 @@ async function tryHandlePresaleRequest(req, res, origin, url, method, options = 
   }
 }
 
+let presaleReconcileTimer = null;
+
 function startPresaleReconciliationTimer(options = {}) {
+  if (presaleReconcileTimer) {
+    return presaleReconcileTimer;
+  }
   const ms = Number(options.intervalMs) > 0 ? Number(options.intervalMs) : RECONCILE_TICK_MS;
-  return setInterval(() => {
+  presaleReconcileTimer = setInterval(() => {
     reconcileExpiredPresaleOrders(options).catch((err) => {
       const code = (err && err.code) || (err && err.name) || "Error";
       console.error(`[presale] reconcile tick failed error=${code}`);
     });
   }, ms);
+  return presaleReconcileTimer;
+}
+
+function stopPresaleReconciliationTimer() {
+  if (presaleReconcileTimer) {
+    clearInterval(presaleReconcileTimer);
+    presaleReconcileTimer = null;
+  }
 }
 
 module.exports = {
@@ -339,4 +352,5 @@ module.exports = {
   handlePresaleConfirm,
   publicStatusForToken,
   startPresaleReconciliationTimer,
+  stopPresaleReconciliationTimer,
 };

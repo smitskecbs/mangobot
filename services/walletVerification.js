@@ -74,12 +74,43 @@ function getWalletConnectBaseUrl(options = {}) {
   return DEFAULT_CONNECT_URL;
 }
 
-function createMemoryRateLimiter() {
+function createMemoryRateLimiter(options = {}) {
   /** @type {Map<string, number[]>} */
   const windows = new Map();
+  const maxKeys =
+    Number.isFinite(options.maxKeys) && options.maxKeys > 0
+      ? Math.floor(options.maxKeys)
+      : 4000;
+  const maxWindowMs = Math.max(CHALLENGE_LIMIT.windowMs, VERIFY_LIMIT.windowMs);
+
+  function prune(now) {
+    const ts = Number.isFinite(now) ? now : Date.now();
+    for (const [key, times] of windows.entries()) {
+      const recent = (times || []).filter((t) => t > ts - maxWindowMs);
+      if (!recent.length) {
+        windows.delete(key);
+      } else {
+        windows.set(key, recent);
+      }
+    }
+    if (windows.size > maxKeys) {
+      const overflow = windows.size - maxKeys;
+      const keys = windows.keys();
+      for (let i = 0; i < overflow; i += 1) {
+        const next = keys.next();
+        if (next.done) {
+          break;
+        }
+        windows.delete(next.value);
+      }
+    }
+  }
 
   function isLimited(key, max, windowMs, now) {
     const ts = Number.isFinite(now) ? now : Date.now();
+    if (windows.size > maxKeys / 2) {
+      prune(ts);
+    }
     const recent = (windows.get(key) || []).filter((t) => t > ts - windowMs);
     if (recent.length >= max) {
       windows.set(key, recent);
@@ -87,6 +118,9 @@ function createMemoryRateLimiter() {
     }
     recent.push(ts);
     windows.set(key, recent);
+    if (windows.size > maxKeys) {
+      prune(ts);
+    }
     return false;
   }
 
@@ -106,6 +140,10 @@ function createMemoryRateLimiter() {
         VERIFY_LIMIT.windowMs,
         now
       );
+    },
+    prune,
+    size() {
+      return windows.size;
     },
   };
 }

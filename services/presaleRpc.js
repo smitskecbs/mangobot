@@ -4,6 +4,7 @@
  */
 
 const { getPresaleConfig } = require("./presaleConfig");
+const { fetchWithTimeout, DEFAULT_TIMEOUT_MS } = require("../utils/safeFetch");
 
 const GENERIC_RPC_ERROR = "This transaction could not be verified.";
 
@@ -16,7 +17,7 @@ async function rpcCall(method, params, options = {}) {
   }
   let response;
   try {
-    response = await fetchFn(rpcUrl, {
+    response = await fetchWithTimeout(rpcUrl, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -25,9 +26,12 @@ async function rpcCall(method, params, options = {}) {
         method,
         params,
       }),
+      timeoutMs: Number.isFinite(options.timeoutMs) ? options.timeoutMs : DEFAULT_TIMEOUT_MS,
+      fetchImpl: fetchFn,
     });
-  } catch {
-    return { ok: false, error: GENERIC_RPC_ERROR, reason: "rpc-network" };
+  } catch (err) {
+    const reason = err && err.code === "ETIMEDOUT" ? "rpc-timeout" : "rpc-network";
+    return { ok: false, error: GENERIC_RPC_ERROR, reason };
   }
   let payload;
   try {

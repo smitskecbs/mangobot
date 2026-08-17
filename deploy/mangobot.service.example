@@ -1,0 +1,35 @@
+# ManGo production systemd examples
+#
+# Copy to the Hetzner host and install with root:
+#   sudo cp deploy/mangobot.service.example /etc/systemd/system/mangobot.service
+#   sudo cp deploy/mango-highscore.service.example /etc/systemd/system/mango-highscore.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now mangobot.service mango-highscore.service
+#
+# Do not enable PRESALE_ENABLED here. App config stays in /home/adje/mangobot/.env
+# (loadAppEnv treats .env as source of truth for COMMUNITY_* / AUTO_* keys).
+
+[Unit]
+Description=ManGo Telegram bot
+Documentation=file:///home/adje/mangobot/deploy/PRODUCTION-RUNBOOK.md
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=12
+
+[Service]
+Type=simple
+User=adje
+Group=adje
+WorkingDirectory=/home/adje/mangobot
+EnvironmentFile=-/home/adje/mangobot/.env
+ExecStart=/usr/bin/node /home/adje/mangobot/index.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+KillMode=mixed
+NoNewPrivileges=true
+# Keep the process referenced; Node must not unref the community scheduler.
+
+[Install]
+WantedBy=multi-user.target
