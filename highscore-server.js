@@ -18,6 +18,10 @@ loadAppEnv({ envPath: path.join(__dirname, ".env") });
  *   POST /bounch-highscore
  *   POST /wallet/challenge
  *   POST /wallet/verify
+ *   POST /presale/status
+ *   POST /presale/prepare
+ *   POST /presale/payment
+ *   POST /presale/confirm
  *   GET  /health
  *
  * Wallet link tokens are created by the Telegram bot, not by a public HTTP route.
@@ -41,6 +45,7 @@ const {
   emptyGameXpPayload,
 } = require("./services/points");
 const { tryHandleWalletRequest } = require("./services/walletApi");
+const { tryHandlePresaleRequest, startPresaleReconciliationTimer } = require("./services/presaleApi");
 const { resolveWalletFile } = require("./services/walletLinks");
 const {
   resolveAllowedOrigin,
@@ -511,6 +516,10 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (await tryHandlePresaleRequest(req, res, origin, url, req.method)) {
+    return;
+  }
+
   if (url === "/health" && req.method === "GET") {
     sendJson(res, 200, { ok: true, service: "mango-snake-highscore" }, origin);
     return;
@@ -528,4 +537,5 @@ server.listen(PORT, () => {
   if (!BOT_TOKEN || !TELEGRAM_CHAT_ID) {
     console.log("Telegram not configured — scores will be saved but not posted.");
   }
+  startPresaleReconciliationTimer();
 });

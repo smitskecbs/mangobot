@@ -326,6 +326,7 @@ runTest("11. /presale group → private", () => {
   const ctx = createMockCtx({ chatType: "supergroup", userId: 88 });
   handlePresale(ctx);
   assert.strictEqual(ctx.replies[0].text, GROUP_PRESALE_TEXT);
+  assert.ok(ctx.replies[0].text.includes("Open the presale privately"));
   assert.strictEqual(
     buttons(ctx.replies[0])[0].url,
     "https://t.me/ManGoMemeFunCommunityBot?start=presale"

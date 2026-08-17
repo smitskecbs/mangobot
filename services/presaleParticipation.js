@@ -1,30 +1,29 @@
 /**
- * Presale participation helpers.
+ * Presale participation facade.
  *
- * Audit (website + bot): there is no functional SOL payment, treasury wallet,
- * contribution ledger, allocation engine, or claim/airdrop sender.
- * Website copy mentions a future community airdrop / whitelist; /launch says
- * "No presale."
- *
- * Until contributions can be verified on-chain or by a trusted server observer,
- * this module is READ-ONLY. It never accepts "I paid X SOL" from clients.
- *
- * Wallet replacement policy (not auto-migrated):
- * If a participation record exists, historical contribution stays on
- * walletSnapshot from payment time. A later verified-wallet replace does NOT
- * become owner of that allocation without an explicit reviewed migration.
+ * Payment, sessions, and on-chain verify live in presaleLedger / presaleApi.
+ * This module keeps integer helpers and read models used by Telegram UX.
  */
 
-const fs = require("fs");
-const path = require("path");
-const { normalizeUserId } = require("./walletLinks");
 const { normalizeSolanaPublicKey } = require("../utils/solanaWallet");
-const { error: logError } = require("../utils/logger");
+const { isPresaleLive } = require("./presaleConfig");
+const {
+  LAMPORTS_PER_SOL,
+  solStringToLamports,
+  parseLamportsInteger,
+  formatLamportsAsSol,
+} = require("./presaleConstants");
+const {
+  getPresaleParticipation,
+  getPresalePublicStatus,
+  getPresaleStatus,
+  getRemainingPresaleLamports,
+  getRemainingPresaleAllocation,
+  canUserContribute,
+} = require("./presaleLedger");
+const { loadPresaleStore } = require("./presaleStore");
 
-const LAMPORTS_PER_SOL = 1_000_000_000n;
-const DEFAULT_PRESALE_FILE = path.resolve(__dirname, "..", "data", "presale-participation.json");
-
-/** Presale payment is not live. Do not invent contribution data. */
+/** Default production flag. Runtime liveness uses PRESALE_ENABLED + treasury. */
 const PRESALE_LIVE = false;
 
 function emptyParticipation() {
@@ -39,118 +38,27 @@ function emptyParticipation() {
   };
 }
 
-/**
- * Parse a decimal SOL amount into integer lamports without IEEE floats.
- * Accepts "1", "0.01", "10.000000001". Rejects negatives, NaN, extra dots.
- * @param {unknown} value
- * @returns {{ ok: true, lamports: string } | { ok: false }}
- */
-function solStringToLamports(value) {
-  if (typeof value !== "string") {
-    return { ok: false };
-  }
-  const raw = String(value).trim();
-  if (!raw || raw.length > 24) {
-    return { ok: false };
-  }
-  if (!/^\d+(\.\d+)?$/.test(raw)) {
-    return { ok: false };
-  }
-  const [wholePart, fractionPart = ""] = raw.split(".");
-  if (fractionPart.length > 9) {
-    return { ok: false };
-  }
-  const whole = BigInt(wholePart);
-  const fracPadded = (fractionPart + "000000000").slice(0, 9);
-  const lamports = whole * LAMPORTS_PER_SOL + BigInt(fracPadded);
-  return { ok: true, lamports: lamports.toString() };
-}
-
-/**
- * @param {unknown} value
- * @returns {{ ok: true, lamports: string } | { ok: false }}
- */
-function parseLamportsInteger(value) {
-  if (typeof value === "number") {
-    if (!Number.isInteger(value) || value < 0 || !Number.isSafeInteger(value)) {
-      return { ok: false };
-    }
-    return { ok: true, lamports: String(value) };
-  }
-  if (typeof value !== "string") {
-    return { ok: false };
-  }
-  const raw = value.trim();
-  if (!/^\d+$/.test(raw) || raw.length > 20) {
-    return { ok: false };
-  }
-  return { ok: true, lamports: BigInt(raw).toString() };
-}
-
-function formatLamportsAsSol(lamports) {
-  const parsed = parseLamportsInteger(lamports);
-  if (!parsed.ok) {
-    return "0";
-  }
-  const value = BigInt(parsed.lamports);
-  const whole = value / LAMPORTS_PER_SOL;
-  const frac = value % LAMPORTS_PER_SOL;
-  if (frac === 0n) {
-    return whole.toString();
-  }
-  const fracStr = frac.toString().padStart(9, "0").replace(/0+$/, "");
-  return `${whole.toString()}.${fracStr}`;
-}
-
-function emptyStore() {
-  return { users: {} };
-}
-
-function normalizeStore(raw) {
-  const store = emptyStore();
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return store;
-  }
-  if (raw.users && typeof raw.users === "object" && !Array.isArray(raw.users)) {
-    store.users = raw.users;
-  }
-  return store;
-}
-
-function resolvePresaleFile(explicit) {
-  if (explicit) {
-    return explicit;
-  }
-  const fromEnv =
-    typeof process.env.PRESALE_PARTICIPATION_FILE === "string"
-      ? process.env.PRESALE_PARTICIPATION_FILE.trim()
-      : "";
-  if (fromEnv) {
-    return fromEnv;
-  }
-  return DEFAULT_PRESALE_FILE;
-}
-
-function loadPresaleStore(presaleFile) {
-  const filePath = resolvePresaleFile(presaleFile);
-  try {
-    if (!fs.existsSync(filePath)) {
-      return emptyStore();
-    }
-    const raw = fs.readFileSync(filePath, "utf8").trim();
-    if (!raw) {
-      return emptyStore();
-    }
-    return normalizeStore(JSON.parse(raw));
-  } catch (err) {
-    logError("Error reading presale-participation.json:", err);
-    return emptyStore();
-  }
-}
-
 function normalizeRecord(raw) {
   if (!raw || typeof raw !== "object") {
     return emptyParticipation();
+  }
+  if (Array.isArray(raw.contributions) && raw.contributions.length) {
+    const last = raw.contributions[raw.contributions.length - 1];
+    const lamports = parseLamportsInteger(raw.confirmedLamports || last.contributedLamports);
+    const walletSnapshot = normalizeSolanaPublicKey(last.walletSnapshot);
+    const recorded = Boolean(walletSnapshot && lamports.ok && BigInt(lamports.lamports) > 0n);
+    return {
+      recorded,
+      status: recorded ? "recorded" : "not-started",
+      walletSnapshot: walletSnapshot || null,
+      contributedLamports: lamports.ok ? lamports.lamports : "0",
+      allocation:
+        typeof raw.allocation === "string" && raw.allocation.trim()
+          ? raw.allocation.trim()
+          : null,
+      transactions: raw.contributions.map((item) => item.transactionSignature).filter(Boolean),
+      updatedAt: Number(last.confirmedAt) || null,
+    };
   }
   const lamports = parseLamportsInteger(raw.contributedLamports);
   const walletSnapshot = normalizeSolanaPublicKey(raw.walletSnapshot);
@@ -170,42 +78,6 @@ function normalizeRecord(raw) {
   };
 }
 
-/**
- * Read-only participation for a Telegram user.
- * Missing file / empty store → not-started (presale is not live).
- */
-function getPresaleParticipation(userId, presaleFile) {
-  if (!PRESALE_LIVE) {
-    return emptyParticipation();
-  }
-  const uid = normalizeUserId(userId);
-  if (!uid) {
-    return emptyParticipation();
-  }
-  const store = loadPresaleStore(presaleFile);
-  return normalizeRecord(store.users[uid]);
-}
-
-function getPresalePublicStatus() {
-  if (!PRESALE_LIVE) {
-    return {
-      live: false,
-      label: "Coming soon",
-      userLine: "Coming soon",
-    };
-  }
-  return {
-    live: true,
-    label: "Live",
-    userLine: "Live",
-  };
-}
-
-/**
- * Historical contribution stays on walletSnapshot. No automatic migration.
- * @param {string|null} currentVerifiedWallet
- * @param {ReturnType<typeof emptyParticipation>} participation
- */
 function describeWalletReplacementPolicy(currentVerifiedWallet, participation) {
   const current = normalizeSolanaPublicKey(currentVerifiedWallet);
   if (!participation || !participation.recorded) {
@@ -230,7 +102,7 @@ function describeWalletReplacementPolicy(currentVerifiedWallet, participation) {
 
 function formatPresaleWalletLines(participation) {
   const publicStatus = getPresalePublicStatus();
-  if (!publicStatus.live) {
+  if (!publicStatus.live && !(participation && participation.recorded)) {
     return ["Presale:", publicStatus.userLine];
   }
   if (!participation || !participation.recorded) {
@@ -240,8 +112,31 @@ function formatPresaleWalletLines(participation) {
     "Presale:",
     "✅ Participating",
     `Contributed: ${formatLamportsAsSol(participation.contributedLamports)} SOL`,
-    participation.allocation ? `Allocation: ${participation.allocation}` : "Allocation: pending",
+    participation.allocation
+      ? `Allocation: ${participation.allocation} MANGO`
+      : "Allocation: pending",
   ];
+}
+
+function toLegacyParticipation(summary) {
+  if (!summary || !summary.recorded) {
+    return emptyParticipation();
+  }
+  return {
+    recorded: true,
+    status: "recorded",
+    walletSnapshot: summary.walletSnapshot,
+    contributedLamports: summary.confirmedLamports,
+    allocation: summary.allocation,
+    transactions: (summary.contributions || [])
+      .map((item) => item.transactionSignature)
+      .filter(Boolean),
+    updatedAt: summary.updatedAt,
+  };
+}
+
+function getPresaleParticipationLegacy(userId, presaleFile) {
+  return toLegacyParticipation(getPresaleParticipation(userId, presaleFile));
 }
 
 module.exports = {
@@ -251,10 +146,16 @@ module.exports = {
   solStringToLamports,
   parseLamportsInteger,
   formatLamportsAsSol,
-  getPresaleParticipation,
+  getPresaleParticipation: getPresaleParticipationLegacy,
+  getPresaleParticipationFull: getPresaleParticipation,
   getPresalePublicStatus,
+  getPresaleStatus,
+  getRemainingPresaleLamports,
+  getRemainingPresaleAllocation,
+  canUserContribute,
   describeWalletReplacementPolicy,
   formatPresaleWalletLines,
   loadPresaleStore,
   normalizeRecord,
+  isPresaleLive,
 };

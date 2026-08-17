@@ -8,6 +8,7 @@ const { getMemberActivityProfile } = require("../services/memberActivityProfile"
 const { getReplyTargetUser } = require("../utils/telegramReplyTarget");
 const { shortenWallet, formatVerifiedDate } = require("../utils/solanaWallet");
 const { isPrivateChat } = require("../utils/botMenu");
+const { formatLamportsAsSol } = require("../services/presaleConstants");
 
 const USAGE = "Reply to a member's message with /membercheck.";
 const ADMIN_ONLY = "This command is admin only.";
@@ -19,12 +20,15 @@ function formatMemberCheck(profile, displayName) {
     : "Wallet: ⬜ Not connected";
   const verifiedDate = formatVerifiedDate(profile.wallet.verifiedAt);
   const lastActive = profile.streak.lastActiveLabel || "—";
-  const presale =
-    profile.presalePublic && profile.presalePublic.live
-      ? profile.presale.recorded
-        ? "Participating"
-        : "No participation recorded"
-      : "Coming soon";
+  const publicLive = profile.presalePublic && profile.presalePublic.live;
+  const recorded = profile.presale && profile.presale.recorded;
+  let presale = publicLive ? "No participation recorded" : "Coming soon";
+  if (recorded) {
+    const sol =
+      profile.presale.contributedLamports || profile.presale.confirmedLamports || "0";
+    const mango = profile.presale.allocation || "0";
+    presale = `${formatLamportsAsSol(sol)} SOL / ${mango} MANGO`;
+  }
   const pending = (profile.rewards && profile.rewards.pending) || 0;
   const sent = (profile.rewards && profile.rewards.delivered) || 0;
 
