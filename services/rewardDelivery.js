@@ -52,6 +52,15 @@ function getDeliveryBaseUrl(options = {}) {
   return getDeliveryConfig(options.env).deliveryUrl || DEFAULT_DELIVERY_URL;
 }
 
+function withDeliveryRpc(options = {}) {
+  const config = getDeliveryConfig(options.env);
+  const override = typeof options.rpcUrl === "string" ? options.rpcUrl.trim() : "";
+  return {
+    ...options,
+    rpcUrl: override || config.rpcUrl,
+  };
+}
+
 function publicError(reason) {
   if (reason === "expired") {
     return "This delivery link has expired.";
@@ -464,9 +473,13 @@ async function issueDeliveryPayment(rawToken, options = {}) {
     }
   }
 
-  const hashResult = await getLatestBlockhash(options);
+  const hashResult = await getLatestBlockhash(withDeliveryRpc(options));
   if (!hashResult.ok) {
-    return { ok: false, reason: "rpc-missing", error: "Delivery is temporarily unavailable." };
+    return {
+      ok: false,
+      reason: hashResult.reason || "rpc-error",
+      error: "Delivery is temporarily unavailable.",
+    };
   }
 
   const bound = mutateDeliveryStore((store) => {
@@ -579,9 +592,9 @@ async function confirmDelivery(rawToken, signature, options = {}) {
     return { ok: false, reason: "duplicate-signature", error: publicError("invalid") };
   }
 
-  const rpc = await getTransaction(signature, options);
+  const rpc = await getTransaction(signature, withDeliveryRpc(options));
   if (!rpc.ok) {
-    return { ok: false, reason: rpc.reason || "rpc-missing", error: "This transaction could not be verified." };
+    return { ok: false, reason: rpc.reason || "rpc-error", error: "This transaction could not be verified." };
   }
 
   const verified = verifyDeliveryTransaction(rpc.result, {
@@ -659,4 +672,5 @@ module.exports = {
   publicError,
   ignoreClientOverrides,
   reviewPayload,
+  withDeliveryRpc,
 };

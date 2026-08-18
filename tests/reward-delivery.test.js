@@ -8,6 +8,7 @@ const os = require("os");
 const path = require("path");
 const assert = require("assert");
 const crypto = require("node:crypto");
+const { Readable } = require("stream");
 
 const { encodeBase58 } = require("../utils/base58");
 const { signEd25519Detached } = require("../utils/ed25519");
@@ -26,7 +27,9 @@ const { setDeliveryFileForTests } = require("../services/deliveryStore");
 const { setPresaleFileForTests, mutatePresaleStore } = require("../services/presaleStore");
 const { MANGO_MINT, MANGO_MINT_DECIMALS } = require("../services/presaleConstants");
 const { TOKEN_PROGRAM_ID, MEMO_PROGRAM_ID, deliveryMemo, mangoHumanToBaseUnits } = require("../services/deliveryConstants");
-const { getDeliveryConfig } = require("../services/deliveryConfig");
+const { getDeliveryConfig, safeRpcHost } = require("../services/deliveryConfig");
+const { getPresaleConfig } = require("../services/presaleConfig");
+const { rpcCall } = require("../services/presaleRpc");
 const { verifyDeliveryTransaction } = require("../services/deliveryVerify");
 const {
   prepareRewardDelivery,
@@ -35,9 +38,24 @@ const {
   issueDeliveryPayment,
   confirmDelivery,
   ignoreClientOverrides,
+  withDeliveryRpc,
 } = require("../services/rewardDelivery");
+const { tryHandleDeliveryRequest } = require("../services/deliveryApi");
 const { handleDeliver } = require("../commands/deliver");
 const { handleTrivia } = require("../commands/trivia");
+
+const DELIVERY_RPC = "https://delivery-rpc.test.invalid/rpc";
+const PRESALE_RPC = "https://presale-rpc.test.invalid/rpc";
+const SECRET_QUERY = "should-never-appear";
+const DELIVERY_RPC_WITH_SECRET = `${DELIVERY_RPC}?token=${SECRET_QUERY}`;
+const BLOCKHASH_OK = {
+  result: {
+    value: {
+      blockhash: "11111111111111111111111111111111",
+      lastValidBlockHeight: 12345,
+    },
+  },
+};
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-delivery-"));
 let n = 0;
@@ -170,6 +188,65 @@ function tokenTx({
   };
 }
 
+function jsonReq(body, method = "POST") {
+  const req = Readable.from([Buffer.from(JSON.stringify(body), "utf8")]);
+  req.method = method;
+  req.headers = { origin: "https://mangomeme.fun" };
+  return req;
+}
+
+function mockRes() {
+  return {
+    statusCode: 0,
+    headers: {},
+    body: "",
+    setHeader(key, value) {
+      this.headers[key] = value;
+    },
+    end(payload) {
+      this.body = payload || "";
+    },
+  };
+}
+
+function recordingFetch(payload) {
+  const seen = [];
+  async function fetchImpl(url) {
+    seen.push(String(url));
+    const body = typeof payload === "function" ? payload(url) : payload;
+    return {
+      ok: true,
+      json: async () => body,
+    };
+  }
+  return { seen, fetchImpl };
+}
+
+async function captureErrors(fn) {
+  const lines = [];
+  const orig = console.error;
+  console.error = (...args) => {
+    lines.push(args.map((item) => String(item)).join(" "));
+  };
+  try {
+    const result = await fn();
+    return { result, logs: lines.join("\n") };
+  } finally {
+    console.error = orig;
+  }
+}
+
+function assertLogsSafe(logs) {
+  const text = String(logs || "");
+  assert.ok(!/helius/i.test(text), "logs must not mention provider host brand");
+  assert.ok(!/api-key/i.test(text), "logs must not mention api-key");
+  assert.ok(!/api_key/i.test(text), "logs must not mention api_key");
+  assert.ok(!text.includes(SECRET_QUERY), "logs must not contain secret query values");
+  assert.ok(!text.includes("https://"), "logs must not contain raw RPC URLs");
+  assert.ok(!text.includes("http://"), "logs must not contain raw RPC URLs");
+  assert.ok(!text.includes("DELIVERY_RPC_URL"), "logs must not name DELIVERY_RPC_URL");
+}
+
 function createMockCtx({ userId = 9001, text = "/deliver", replyUserId, chatType = "private" } = {}) {
   const replies = [];
   return {
@@ -192,6 +269,23 @@ function createMockCtx({ userId = 9001, text = "/deliver", replyUserId, chatType
 async function main() {
   const dist = generateSolanaWallet();
   const userWallet = generateSolanaWallet();
+
+  function prepareSession(env) {
+    const { walletFile, rewardsFile, deliveryFile } = files();
+    connectUser(walletFile, 41, userWallet, 1000);
+    const created = createReward({ telegramUserId: 41, walletFile, rewardsFile, now: 1 });
+    const prepared = prepareRewardDelivery({
+      adminUserId: 9001,
+      rewardId: created.reward.rewardId,
+      amountHuman: "1000",
+      walletFile,
+      rewardsFile,
+      deliveryFile,
+      env,
+      now: 50,
+    });
+    return { walletFile, rewardsFile, deliveryFile, created, prepared };
+  }
 
   await runTest("delivery disabled by default", () => {
     const cfg = getDeliveryConfig({});
@@ -609,6 +703,245 @@ async function main() {
     assert.ok(src.includes("ignoreClientOverrides"));
     assert.strictEqual(MANGO_MINT, "29KN57rM6tV2aWdo1agZcF6ynPXB1dhHdKHNrrAmaNGo");
     assert.strictEqual(MANGO_MINT_DECIMALS, 9);
+  });
+
+  await runTest("DELIVERY_RPC_URL used when PRESALE_RPC_URL absent", async () => {
+    const env = {
+      REWARD_DELIVERY_ENABLED: "true",
+      MANGO_DISTRIBUTION_WALLET: dist.address,
+      DELIVERY_RPC_URL: DELIVERY_RPC,
+      ADMIN_USER_ID: "9001",
+    };
+    assert.strictEqual(getPresaleConfig(env).rpcUrl, "");
+    const wired = withDeliveryRpc({ env });
+    assert.strictEqual(wired.rpcUrl, DELIVERY_RPC);
+    const { deliveryFile, prepared } = prepareSession(env);
+    assert.strictEqual(prepared.ok, true, prepared.error);
+    const { seen, fetchImpl } = recordingFetch(BLOCKHASH_OK);
+    const result = await issueDeliveryPayment(prepared.token, {
+      deliveryFile,
+      env,
+      now: 60,
+      fetchImpl,
+    });
+    assert.strictEqual(result.ok, true, result.error);
+    assert.strictEqual(seen.length, 1);
+    assert.strictEqual(seen[0], DELIVERY_RPC);
+    assert.ok(!seen.some((url) => url.includes("presale-rpc")));
+  });
+
+  await runTest("delivery payment succeeds with mocked DELIVERY_RPC_URL", async () => {
+    const env = {
+      REWARD_DELIVERY_ENABLED: "true",
+      MANGO_DISTRIBUTION_WALLET: dist.address,
+      DELIVERY_RPC_URL: DELIVERY_RPC,
+      PRESALE_RPC_URL: PRESALE_RPC,
+      ADMIN_USER_ID: "9001",
+    };
+    const { deliveryFile, prepared } = prepareSession(env);
+    assert.strictEqual(prepared.ok, true, prepared.error);
+    const { seen, fetchImpl } = recordingFetch(BLOCKHASH_OK);
+    const res = mockRes();
+    const handled = await tryHandleDeliveryRequest(
+      jsonReq({ token: prepared.token, connectedWallet: dist.address }),
+      res,
+      "https://mangomeme.fun",
+      "/delivery/payment",
+      "POST",
+      { env, deliveryFile, fetchImpl, now: 60 }
+    );
+    assert.strictEqual(handled, true);
+    assert.strictEqual(res.statusCode, 200);
+    const body = JSON.parse(res.body);
+    assert.strictEqual(body.ok, true);
+    assert.strictEqual(body.recentBlockhash, BLOCKHASH_OK.result.value.blockhash);
+    assert.strictEqual(seen.length, 1);
+    assert.strictEqual(seen[0], DELIVERY_RPC);
+    assert.ok(!seen.includes(PRESALE_RPC));
+  });
+
+  await runTest("presale config stays independent of DELIVERY_RPC_URL", async () => {
+    const env = {
+      DELIVERY_RPC_URL: DELIVERY_RPC,
+      PRESALE_ENABLED: "true",
+    };
+    const presale = getPresaleConfig(env);
+    const delivery = getDeliveryConfig(env);
+    assert.strictEqual(presale.rpcUrl, "");
+    assert.strictEqual(delivery.rpcUrl, DELIVERY_RPC);
+    const presaleSrc = fs.readFileSync(path.join(__dirname, "..", "services", "presaleConfig.js"), "utf8");
+    assert.ok(!presaleSrc.includes("DELIVERY_RPC_URL"));
+    const seen = [];
+    const rpc = await rpcCall("getHealth", [], {
+      env,
+      fetchImpl: async (url) => {
+        seen.push(String(url));
+        return { ok: true, json: async () => ({ result: "ok" }) };
+      },
+    });
+    assert.strictEqual(rpc.ok, false);
+    assert.strictEqual(rpc.reason, "rpc-missing");
+    assert.strictEqual(seen.length, 0);
+  });
+
+  await runTest("missing DELIVERY_RPC_URL fails safe without network", async () => {
+    const envNoRpc = {
+      REWARD_DELIVERY_ENABLED: "true",
+      MANGO_DISTRIBUTION_WALLET: dist.address,
+      ADMIN_USER_ID: "9001",
+    };
+    const cfg = getDeliveryConfig(envNoRpc);
+    assert.strictEqual(cfg.rpcUrl, "");
+    assert.strictEqual(cfg.rewardLive, false);
+    const prepared = prepareRewardDelivery({
+      adminUserId: 9001,
+      rewardId: "missing",
+      amountHuman: "1",
+      env: envNoRpc,
+    });
+    assert.strictEqual(prepared.ok, false);
+    assert.strictEqual(prepared.reason, "rpc-missing");
+
+    const { deliveryFile, prepared: liveSession } = prepareSession(enabledEnv(dist.address));
+    assert.strictEqual(liveSession.ok, true, liveSession.error);
+    const { seen, fetchImpl } = recordingFetch(BLOCKHASH_OK);
+    const result = await issueDeliveryPayment(liveSession.token, {
+      deliveryFile,
+      env: envNoRpc,
+      now: 60,
+      fetchImpl,
+    });
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.reason, "rpc-missing");
+    assert.strictEqual(seen.length, 0);
+  });
+
+  await runTest("confirm delivery uses the same delivery RPC", async () => {
+    const env = {
+      REWARD_DELIVERY_ENABLED: "true",
+      MANGO_DISTRIBUTION_WALLET: dist.address,
+      DELIVERY_RPC_URL: DELIVERY_RPC,
+      PRESALE_RPC_URL: PRESALE_RPC,
+      ADMIN_USER_ID: "9001",
+    };
+    const { deliveryFile, rewardsFile, prepared } = prepareSession(env);
+    assert.strictEqual(prepared.ok, true, prepared.error);
+    const amount = mangoHumanToBaseUnits("1000");
+    const memo = deliveryMemo(prepared.review.deliveryId);
+    const good = tokenTx({
+      signer: dist.address,
+      destination: userWallet.address,
+      amount: amount.baseUnits,
+      memo,
+    });
+    const sig = makeSig("confirmrpc");
+    good.transaction.signatures[0] = sig;
+    const seen = [];
+    const result = await confirmDelivery(prepared.token, sig, {
+      deliveryFile,
+      rewardsFile,
+      env,
+      now: 80,
+      fetchImpl: async (url) => {
+        seen.push(String(url));
+        return { ok: true, json: async () => ({ result: good }) };
+      },
+    });
+    assert.strictEqual(result.ok, true, result.reason);
+    assert.strictEqual(seen.length, 1);
+    assert.strictEqual(seen[0], DELIVERY_RPC);
+    assert.ok(!seen.includes(PRESALE_RPC));
+  });
+
+  await runTest("delivery API logs stay free of RPC URLs and secrets", async () => {
+    const env = {
+      REWARD_DELIVERY_ENABLED: "true",
+      MANGO_DISTRIBUTION_WALLET: dist.address,
+      DELIVERY_RPC_URL: DELIVERY_RPC_WITH_SECRET,
+      ADMIN_USER_ID: "9001",
+    };
+    assert.strictEqual(safeRpcHost(DELIVERY_RPC_WITH_SECRET), "delivery-rpc.test.invalid");
+    const { deliveryFile, prepared } = prepareSession(env);
+    assert.strictEqual(prepared.ok, true, prepared.error);
+
+    const paymentLogs = await captureErrors(async () => {
+      const res = mockRes();
+      await tryHandleDeliveryRequest(
+        jsonReq({ token: prepared.token }),
+        res,
+        "https://mangomeme.fun",
+        "/delivery/payment",
+        "POST",
+        {
+          env,
+          deliveryFile,
+          now: 60,
+          fetchImpl: async () => {
+            const err = new Error("request-timeout");
+            err.code = "ETIMEDOUT";
+            throw err;
+          },
+        }
+      );
+      return res;
+    });
+    assert.strictEqual(paymentLogs.result.statusCode, 400);
+    assert.ok(paymentLogs.logs.includes("reason=rpc-timeout"));
+    assert.ok(paymentLogs.logs.includes("rpcConfigured=true"));
+    assert.ok(paymentLogs.logs.includes("rpcHost=delivery-rpc.test.invalid"));
+    assertLogsSafe(paymentLogs.logs);
+
+    const boom = new Error(`RPC failed at ${DELIVERY_RPC_WITH_SECRET}`);
+    boom.name = "TypeError";
+    boom.code = "ECONNRESET";
+    const catchLogs = await captureErrors(async () => {
+      const res = mockRes();
+      await tryHandleDeliveryRequest(
+        jsonReq({ token: prepared.token }),
+        res,
+        "https://mangomeme.fun",
+        "/delivery/payment",
+        "POST",
+        {
+          env,
+          deliveryFile,
+          now: 60,
+          getLatestBlockhashImpl: async () => {
+            throw boom;
+          },
+        }
+      );
+      return res;
+    });
+    assert.strictEqual(catchLogs.result.statusCode, 500);
+    const catchBody = JSON.parse(catchLogs.result.body);
+    assert.strictEqual(catchBody.ok, false);
+    assert.ok(catchBody.error.includes("temporarily unavailable"));
+    assert.ok(catchLogs.logs.includes("name=TypeError"));
+    assert.ok(catchLogs.logs.includes("code=ECONNRESET"));
+    assert.ok(!catchLogs.logs.includes("RPC failed"));
+    assertLogsSafe(catchLogs.logs);
+  });
+
+  await runTest("delivery sources do not embed provider keys or RPC URLs", () => {
+    const filesToScan = [
+      "services/rewardDelivery.js",
+      "services/deliveryApi.js",
+      "services/deliveryConfig.js",
+      "services/deliveryVerify.js",
+    ];
+    for (const rel of filesToScan) {
+      const src = fs.readFileSync(path.join(__dirname, "..", rel), "utf8").toLowerCase();
+      assert.ok(!src.includes("helius"), rel);
+      assert.ok(!src.includes("api-key"), rel);
+      assert.ok(!src.includes("api_key"), rel);
+    }
+    const verifySrc = fs.readFileSync(path.join(__dirname, "..", "services", "deliveryVerify.js"), "utf8");
+    assert.ok(!verifySrc.includes("presaleRpc"));
+    assert.ok(!verifySrc.includes("getTransaction("));
+    const deliverySrc = fs.readFileSync(path.join(__dirname, "..", "services", "rewardDelivery.js"), "utf8");
+    assert.ok(deliverySrc.includes("withDeliveryRpc"));
+    assert.ok(deliverySrc.includes("getDeliveryConfig"));
   });
 
   await runTest("no XP change from delivery command import", () => {

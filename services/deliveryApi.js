@@ -10,6 +10,7 @@
 
 const { handleCorsPreflight } = require("./httpCors");
 const { readJsonBodyLimited, sendJson } = require("./walletApi");
+const { error: logError } = require("../utils/logger");
 const {
   lookupDeliverySession,
   issueDeliveryPayment,
@@ -17,9 +18,39 @@ const {
   publicStatusForSession,
   ignoreClientOverrides,
 } = require("./rewardDelivery");
-const { getDeliveryConfig } = require("./deliveryConfig");
+const {
+  getDeliveryConfig,
+  safeRpcHost,
+  safeLogReason,
+  safeErrorName,
+  safeErrorCode,
+} = require("./deliveryConfig");
 
 const TEMPORARY_ERROR = "Delivery is temporarily unavailable. Please try again.";
+
+function logDeliveryRpcFailure(kind, reason, env) {
+  const config = getDeliveryConfig(env);
+  const host = safeRpcHost(config.rpcUrl);
+  const parts = [
+    `[delivery] ${kind} failed`,
+    `reason=${safeLogReason(reason)}`,
+    `rpcConfigured=${Boolean(config.rpcUrl)}`,
+  ];
+  if (host) {
+    parts.push(`rpcHost=${host}`);
+  }
+  logError(parts.join(" "));
+}
+
+function logDeliveryUnhandled(err) {
+  const name = safeErrorName(err);
+  const code = safeErrorCode(err);
+  const parts = [`[delivery] unhandled error name=${name}`];
+  if (code) {
+    parts.push(`code=${code}`);
+  }
+  logError(parts.join(" "));
+}
 
 function sessionError(status) {
   if (status === "expired") {
@@ -72,6 +103,9 @@ async function handleDeliveryPayment(req, res, origin, options = {}) {
     body,
   });
   if (!result.ok) {
+    if (typeof result.reason === "string" && result.reason.startsWith("rpc-")) {
+      logDeliveryRpcFailure("payment preparation", result.reason, options.env);
+    }
     sendJson(res, 400, { ok: false, error: result.error || "Invalid request." }, origin);
     return;
   }
@@ -92,6 +126,9 @@ async function handleDeliveryConfirm(req, res, origin, options = {}) {
     body,
   });
   if (!result.ok) {
+    if (typeof result.reason === "string" && result.reason.startsWith("rpc-")) {
+      logDeliveryRpcFailure("confirm", result.reason, options.env);
+    }
     sendJson(res, 400, { ok: false, error: result.error || "Invalid request.", reason: result.reason }, origin);
     return;
   }
@@ -140,7 +177,8 @@ async function tryHandleDeliveryRequest(req, res, origin, url, method, options =
     }
     await handleDeliveryConfirm(req, res, origin, options);
     return true;
-  } catch {
+  } catch (err) {
+    logDeliveryUnhandled(err);
     sendJson(res, 500, { ok: false, error: TEMPORARY_ERROR }, origin);
     return true;
   }

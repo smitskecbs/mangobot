@@ -54,8 +54,57 @@ function isPresaleDistributionLive(env = process.env) {
   return getDeliveryConfig(env).presaleLive;
 }
 
+function safeRpcHost(rpcUrl) {
+  if (typeof rpcUrl !== "string" || !rpcUrl.trim()) {
+    return "";
+  }
+  try {
+    const hostname = new URL(rpcUrl).hostname;
+    if (typeof hostname !== "string" || !hostname) {
+      return "invalid";
+    }
+    return hostname.slice(0, 80);
+  } catch {
+    return "invalid";
+  }
+}
+
+function safeLogReason(reason) {
+  if (typeof reason !== "string") {
+    return "unknown";
+  }
+  const trimmed = reason.trim().slice(0, 64);
+  if (!/^[a-z0-9_-]+$/i.test(trimmed)) {
+    return "unknown";
+  }
+  return trimmed;
+}
+
+function safeErrorName(err) {
+  const name = err && typeof err.name === "string" ? err.name : "Error";
+  if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(name.slice(0, 64))) {
+    return "Error";
+  }
+  return name.slice(0, 64);
+}
+
+function safeErrorCode(err) {
+  const code = err && err.code;
+  if (typeof code === "string" && /^[A-Za-z0-9_-]{1,32}$/.test(code)) {
+    return code;
+  }
+  if (typeof code === "number" && Number.isFinite(code)) {
+    return String(Math.trunc(code)).slice(0, 16);
+  }
+  return "";
+}
+
 module.exports = {
   getDeliveryConfig,
   isRewardDeliveryLive,
   isPresaleDistributionLive,
+  safeRpcHost,
+  safeLogReason,
+  safeErrorName,
+  safeErrorCode,
 };
