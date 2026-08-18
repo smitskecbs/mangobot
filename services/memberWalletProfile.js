@@ -1,9 +1,10 @@
 /**
  * Read-only member wallet identity for rewards / presale / admin review.
- * Wallet always comes from wallet-links.json via getVerifiedWalletForUser.
+ * Wallet comes from wallet-links.json (registered or signature-verified).
  */
 
 const {
+  getLinkedWalletForUser,
   getVerifiedWalletForUser,
   isWalletVerified,
   normalizeUserId,
@@ -24,10 +25,11 @@ function emptyRewardsSummary() {
  */
 function getMemberWalletProfile(userId, options = {}) {
   const telegramUserId = normalizeUserId(userId);
-  const verifiedRecord = telegramUserId
-    ? getVerifiedWalletForUser(telegramUserId, options.walletFile)
+  const linked = telegramUserId
+    ? getLinkedWalletForUser(telegramUserId, options.walletFile)
     : null;
-  const verified = Boolean(verifiedRecord && verifiedRecord.wallet);
+  const verified = Boolean(linked && linked.verified);
+  const registered = Boolean(linked && linked.wallet);
   const rewards = telegramUserId
     ? countRewardsForUser(telegramUserId, options.rewardsFile)
     : emptyRewardsSummary();
@@ -35,9 +37,12 @@ function getMemberWalletProfile(userId, options = {}) {
 
   return {
     telegramUserId,
-    wallet: verified ? verifiedRecord.wallet : null,
+    wallet: registered ? linked.wallet : null,
     verified,
-    verifiedAt: verified ? verifiedRecord.verifiedAt : null,
+    registered,
+    registrationMethod: linked ? linked.registrationMethod : null,
+    verifiedAt: verified ? linked.verifiedAt : null,
+    registeredAt: registered ? linked.registeredAt : null,
     rewardEligible: telegramUserId
       ? isRewardEligible(telegramUserId, options.walletFile)
       : false,
@@ -49,6 +54,7 @@ function getMemberWalletProfile(userId, options = {}) {
 
 module.exports = {
   getMemberWalletProfile,
+  getLinkedWalletForUser,
   getVerifiedWalletForUser,
   isWalletVerified,
   isRewardEligible,

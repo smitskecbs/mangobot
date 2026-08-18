@@ -14,7 +14,7 @@ const lockfile = require("proper-lockfile");
 const { writeJsonFileAtomic } = require("../utils/json");
 const { error: logError } = require("../utils/logger");
 const {
-  getVerifiedWalletForUser,
+  getLinkedWalletForUser,
   normalizeUserId,
 } = require("./walletLinks");
 const { normalizeSolanaPublicKey, shortenWallet } = require("../utils/solanaWallet");
@@ -278,7 +278,7 @@ function publicReward(record) {
 }
 
 function isRewardEligible(userId, walletFile) {
-  return getVerifiedWalletForUser(userId, walletFile) !== null;
+  return getLinkedWalletForUser(userId, walletFile) !== null;
 }
 
 function countRewardsForUser(userId, rewardsFile) {
@@ -339,7 +339,8 @@ function getReward(rewardId, rewardsFile) {
 }
 
 /**
- * Create a pending reward. Wallet comes from verified mapping only.
+ * Create a pending reward. Wallet comes from the linked mapping (registered or verified).
+ * Snapshot is frozen at creation and never follows later wallet changes.
  * @param {{ telegramUserId: string|number, type?: string, label?: string, createdBy?: string|number, now?: number, walletFile?: string, rewardsFile?: string }} input
  */
 function createReward(input = {}) {
@@ -353,8 +354,8 @@ function createReward(input = {}) {
     return { ok: false, error: "Invalid request.", reason: "invalid-type" };
   }
 
-  const verified = getVerifiedWalletForUser(uid, input.walletFile);
-  if (!verified) {
+  const linked = getLinkedWalletForUser(uid, input.walletFile);
+  if (!linked) {
     return {
       ok: false,
       error: "This member needs to verify a wallet first.",
@@ -362,7 +363,7 @@ function createReward(input = {}) {
     };
   }
 
-  const walletSnapshot = normalizeSolanaPublicKey(verified.wallet);
+  const walletSnapshot = normalizeSolanaPublicKey(linked.wallet);
   if (!walletSnapshot) {
     return {
       ok: false,

@@ -1,6 +1,6 @@
 /**
  * Admin-only /membercheck — reply to a member to review activity + wallet status.
- * Uses existing verified-wallet mapping. Shortens wallets. No private keys.
+ * Shows Registered vs Verified from wallet-links.json. Shortens wallets. No private keys.
  */
 
 const { isAdmin } = require("../services/points");
@@ -16,8 +16,10 @@ const ADMIN_ONLY = "This command is admin only.";
 function formatMemberCheck(profile, displayName) {
   const name = displayName || profile.displayName || "Member";
   const walletLine = profile.wallet.verified
-    ? `Wallet: ✅ Verified\nWallet: ${shortenWallet(profile.wallet.address)}`
-    : "Wallet: ⬜ Not connected";
+    ? `Wallet: 🟢 Verified\nWallet: ${shortenWallet(profile.wallet.address)}`
+    : profile.wallet.registered || profile.wallet.address
+      ? `Wallet: 🟡 Registered\nWallet: ${shortenWallet(profile.wallet.address)}`
+      : "Wallet: ⬜ Not connected";
   const verifiedDate = formatVerifiedDate(profile.wallet.verifiedAt);
   const lastActive = profile.streak.lastActiveLabel || "—";
   const publicLive = profile.presalePublic && profile.presalePublic.live;

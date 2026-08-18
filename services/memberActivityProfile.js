@@ -41,8 +41,10 @@ function getMemberActivityProfile(userId, options = {}) {
         : "Unknown",
     wallet: {
       verified: wallet.verified,
+      registered: Boolean(wallet.registered || wallet.wallet),
       address: wallet.wallet,
       verifiedAt: wallet.verifiedAt,
+      registrationMethod: wallet.registrationMethod || null,
       rewardEligible: wallet.rewardEligible,
     },
     streak: {

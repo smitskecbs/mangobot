@@ -25,6 +25,7 @@ const {
   COMMUNITY_ACTIVITY_UPDATES,
 } = require("../events/points-trigger");
 const { awardDailyActivityPoint } = require("../services/points");
+const registerWalletCommand = require("../commands/wallet");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-activity-wiring-"));
 const PROD_CHAT = -1003916996602;
@@ -76,7 +77,8 @@ function createBot(pointsPath) {
     first_name: "ManGo",
     username: "mango_test_bot",
   };
-  // Mirror production alphabetical order: chat-fight → points-trigger → …
+  // Mirror production: commands (incl. wallet text handler) before events.
+  registerWalletCommand(bot);
   registerChatFightListener(bot, { pointsFile: pointsPath });
   registerCommunityActivityListener(bot, { pointsFile: pointsPath });
   return bot;

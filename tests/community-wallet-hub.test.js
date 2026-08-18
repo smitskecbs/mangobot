@@ -266,7 +266,7 @@ runTest("6. verified wallet view", () => {
   connectUser(walletFile, 333, wallet, 2000);
   const ctx = createMockCtx({ userId: 333 });
   handleWallet(ctx, { walletFile, now: 3000 });
-  assert.ok(ctx.replies[0].text.includes("✅ Verified"));
+  assert.ok(ctx.replies[0].text.includes("Status: 🟢 Verified"));
   assert.ok(ctx.replies[0].text.includes(shortenWallet(wallet.address)));
   assert.ok(!ctx.replies[0].text.includes(wallet.address));
   assert.deepStrictEqual(buttons(ctx.replies[0]).map((b) => b.text), [
@@ -282,8 +282,9 @@ runTest("7. unverified wallet view", () => {
   const ctx = createMockCtx({ userId: 222 });
   handleWallet(ctx, { walletFile, now: 1000 });
   assert.strictEqual(ctx.replies[0].text, UNVERIFIED_TEXT);
-  assert.ok(ctx.replies[0].text.includes("⬜ No wallet connected"));
-  assert.strictEqual(buttons(ctx.replies[0])[0].text, "Connect Wallet");
+  assert.ok(ctx.replies[0].text.includes("No wallet registered yet."));
+  assert.strictEqual(buttons(ctx.replies[0])[0].text, "🌐 Connect & Verify");
+  assert.strictEqual(buttons(ctx.replies[0])[1].text, "⌨️ Enter Wallet Address");
 });
 
 runTest("8. group wallet → private deep-link", () => {
@@ -463,7 +464,7 @@ runTest("21. membercheck metrics", () => {
   });
   handleMemberCheck(ctx, { walletFile, rewardsFile, pointsFile });
   const text = ctx.replies[0].text;
-  assert.ok(text.includes("Wallet: ✅ Verified"));
+  assert.ok(text.includes("Wallet: 🟢 Verified"));
   assert.ok(text.includes("Weekly XP:"));
   assert.ok(text.includes("Lifetime XP:"));
   assert.ok(text.includes("Current streak:"));
@@ -535,8 +536,13 @@ runTest("25. no private key/seed fields", () => {
   ].map((rel) => fs.readFileSync(path.join(__dirname, "..", rel), "utf8").toLowerCase());
   for (const src of sources) {
     assert.ok(!src.includes("privatekey"));
-    assert.ok(!src.includes("seed phrase"));
     assert.ok(!src.includes("seedphrase"));
+    assert.ok(!src.includes("fromsecretkey"));
+    assert.ok(!src.includes("mnemonic"));
+    if (src.includes("never send your seed phrase or private key")) {
+      continue;
+    }
+    assert.ok(!src.includes("seed phrase"));
   }
 });
 

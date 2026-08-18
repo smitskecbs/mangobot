@@ -112,7 +112,7 @@ runTest("bot and API default wallet-links path is identical", () => {
   assert.strictEqual(DEFAULT_WALLET_FILE, expected);
   const hs = fs.readFileSync(path.join(__dirname, "..", "highscore-server.js"), "utf8");
   assert.ok(hs.includes("tryHandleWalletRequest(req, res, origin, url, req.method)"));
-  assert.ok(hs.includes("Wallet links file:"));
+  assert.ok(hs.includes("wallet-file-configured=yes"));
   assert.ok(hs.includes("resolveWalletFile()"));
   assert.equal(/walletFile:\s*["']/.test(hs), false);
 });

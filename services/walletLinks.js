@@ -93,12 +93,17 @@ function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
 }
 
+const WALLET_INPUT_TTL_MS = 10 * 60 * 1000;
+const REGISTRATION_MANUAL = "manual";
+const REGISTRATION_SIGNATURE = "signature";
+
 function emptyStore() {
   return {
     users: {},
     wallets: {},
     linkTokens: {},
     challenges: {},
+    pendingWalletInputs: {},
   };
 }
 
@@ -126,6 +131,13 @@ function normalizeStore(raw) {
     !Array.isArray(raw.challenges)
   ) {
     store.challenges = raw.challenges;
+  }
+  if (
+    raw.pendingWalletInputs &&
+    typeof raw.pendingWalletInputs === "object" &&
+    !Array.isArray(raw.pendingWalletInputs)
+  ) {
+    store.pendingWalletInputs = raw.pendingWalletInputs;
   }
   return store;
 }
@@ -301,20 +313,25 @@ function pruneExpired(store, now) {
       }
     }
   }
+
+  if (store.pendingWalletInputs) {
+    for (const [uid, record] of Object.entries(store.pendingWalletInputs)) {
+      if (!record || typeof record !== "object") {
+        delete store.pendingWalletInputs[uid];
+        continue;
+      }
+      if (typeof record.expiresAt !== "number" || record.expiresAt <= ts) {
+        delete store.pendingWalletInputs[uid];
+      }
+    }
+  }
 }
 
 /**
- * @param {string|number} userId
- * @param {string} [walletFile]
- * @returns {{ wallet: string, verifiedAt: number, updatedAt: number }|null}
+ * @param {object} record
+ * @returns {{ wallet: string, verified: boolean, verifiedAt: number, updatedAt: number, registeredAt: number, registrationMethod: string }|null}
  */
-function getVerifiedWalletForUser(userId, walletFile) {
-  const uid = normalizeUserId(userId);
-  if (!uid) {
-    return null;
-  }
-  const store = loadWalletStore(walletFile);
-  const record = store.users[uid];
+function publicWalletRecord(record) {
   if (!record || typeof record !== "object") {
     return null;
   }
@@ -322,15 +339,66 @@ function getVerifiedWalletForUser(userId, walletFile) {
   if (!wallet) {
     return null;
   }
+  const verifiedAt = Number(record.verifiedAt) || 0;
+  const updatedAt = Number(record.updatedAt) || 0;
+  const registeredAt = Number(record.registeredAt) || verifiedAt || updatedAt;
+  const verified = verifiedAt > 0;
+  const registrationMethod =
+    record.registrationMethod === REGISTRATION_MANUAL
+      ? REGISTRATION_MANUAL
+      : verified
+        ? REGISTRATION_SIGNATURE
+        : REGISTRATION_MANUAL;
   return {
     wallet,
-    verifiedAt: Number(record.verifiedAt) || 0,
-    updatedAt: Number(record.updatedAt) || 0,
+    verified,
+    verifiedAt,
+    updatedAt,
+    registeredAt,
+    registrationMethod,
+  };
+}
+
+/**
+ * Any linked payout wallet (manual registered or signature verified).
+ * @param {string|number} userId
+ * @param {string} [walletFile]
+ * @returns {{ wallet: string, verified: boolean, verifiedAt: number, updatedAt: number, registeredAt: number, registrationMethod: string }|null}
+ */
+function getLinkedWalletForUser(userId, walletFile) {
+  const uid = normalizeUserId(userId);
+  if (!uid) {
+    return null;
+  }
+  const store = loadWalletStore(walletFile);
+  return publicWalletRecord(store.users[uid]);
+}
+
+/**
+ * Cryptographically verified wallet only. Legacy records with verifiedAt stay verified.
+ * Manual registrations (verifiedAt=0) are not returned.
+ * @param {string|number} userId
+ * @param {string} [walletFile]
+ * @returns {{ wallet: string, verifiedAt: number, updatedAt: number }|null}
+ */
+function getVerifiedWalletForUser(userId, walletFile) {
+  const linked = getLinkedWalletForUser(userId, walletFile);
+  if (!linked || !linked.verified) {
+    return null;
+  }
+  return {
+    wallet: linked.wallet,
+    verifiedAt: linked.verifiedAt,
+    updatedAt: linked.updatedAt,
   };
 }
 
 function isWalletVerified(userId, walletFile) {
   return getVerifiedWalletForUser(userId, walletFile) !== null;
+}
+
+function isWalletRegistered(userId, walletFile) {
+  return getLinkedWalletForUser(userId, walletFile) !== null;
 }
 
 function getWalletStoreCounts(walletFile) {
@@ -340,6 +408,7 @@ function getWalletStoreCounts(walletFile) {
     wallets: Object.keys(store.wallets || {}).length,
     linkTokens: Object.keys(store.linkTokens || {}).length,
     challenges: Object.keys(store.challenges || {}).length,
+    pendingWalletInputs: Object.keys(store.pendingWalletInputs || {}).length,
   };
 }
 
@@ -400,18 +469,155 @@ function applyVerifiedWallet(store, uid, wallet, now) {
     previous && previous.wallet === wallet && Number(previous.verifiedAt)
       ? previous.verifiedAt
       : now;
+  const registeredAt =
+    previous && Number(previous.registeredAt)
+      ? previous.registeredAt
+      : previous && Number(previous.verifiedAt)
+        ? previous.verifiedAt
+        : now;
 
   store.users[uid] = {
     wallet,
     verifiedAt,
     updatedAt: now,
+    registeredAt,
+    registrationMethod: REGISTRATION_SIGNATURE,
   };
   store.wallets[wallet] = uid;
   return { ok: true };
 }
 
+function replaceUserWalletBinding(store, uid, wallet) {
+  const existingOwner = store.wallets[wallet];
+  if (existingOwner && existingOwner !== uid) {
+    return { ok: false, reason: "wallet-taken" };
+  }
+  const previous = store.users[uid];
+  if (
+    previous &&
+    typeof previous === "object" &&
+    previous.wallet &&
+    previous.wallet !== wallet &&
+    store.wallets[previous.wallet] === uid
+  ) {
+    delete store.wallets[previous.wallet];
+  }
+  return { ok: true, previous };
+}
+
+/**
+ * Manual public-key registration. Never marks the wallet as cryptographically verified.
+ * Changing to a different address clears verifiedAt.
+ */
+function applyRegisteredWallet(store, uid, wallet, now) {
+  const bound = replaceUserWalletBinding(store, uid, wallet);
+  if (!bound.ok) {
+    return bound;
+  }
+  const previous = bound.previous;
+  const sameWallet = Boolean(previous && previous.wallet === wallet);
+  const keepVerified = sameWallet && Number(previous.verifiedAt) > 0;
+  const registeredAt =
+    previous && Number(previous.registeredAt)
+      ? previous.registeredAt
+      : now;
+
+  store.users[uid] = {
+    wallet,
+    verifiedAt: keepVerified ? Number(previous.verifiedAt) : 0,
+    updatedAt: now,
+    registeredAt,
+    registrationMethod: keepVerified ? REGISTRATION_SIGNATURE : REGISTRATION_MANUAL,
+  };
+  store.wallets[wallet] = uid;
+  return { ok: true, verified: keepVerified };
+}
+
+function registerManualWallet(userId, wallet, walletFile, now = Date.now()) {
+  const uid = normalizeUserId(userId);
+  const canonical = normalizeSolanaPublicKey(wallet);
+  if (!uid || !canonical) {
+    return { ok: false, reason: "invalid" };
+  }
+  const ts = Number.isFinite(now) ? now : Date.now();
+  return mutateWalletStore((store) => {
+    pruneExpired(store, ts);
+    const applied = applyRegisteredWallet(store, uid, canonical, ts);
+    if (!applied.ok) {
+      return applied;
+    }
+    if (store.pendingWalletInputs) {
+      delete store.pendingWalletInputs[uid];
+    }
+    return { ok: true, wallet: canonical, verified: Boolean(applied.verified) };
+  }, walletFile);
+}
+
+function beginWalletAddressInput(userId, chatId, purpose, walletFile, now = Date.now()) {
+  const uid = normalizeUserId(userId);
+  if (!uid) {
+    return { ok: false, reason: "invalid" };
+  }
+  const ts = Number.isFinite(now) ? now : Date.now();
+  const intent = purpose === "change" ? "change" : "register";
+  return mutateWalletStore((store) => {
+    pruneExpired(store, ts);
+    if (!store.pendingWalletInputs || typeof store.pendingWalletInputs !== "object") {
+      store.pendingWalletInputs = {};
+    }
+    store.pendingWalletInputs[uid] = {
+      chatId: chatId === undefined || chatId === null ? null : String(chatId),
+      purpose: intent,
+      createdAt: ts,
+      expiresAt: ts + WALLET_INPUT_TTL_MS,
+    };
+    return { ok: true, expiresAt: ts + WALLET_INPUT_TTL_MS };
+  }, walletFile);
+}
+
+function getPendingWalletInput(userId, walletFile, now = Date.now()) {
+  const uid = normalizeUserId(userId);
+  if (!uid) {
+    return null;
+  }
+  const ts = Number.isFinite(now) ? now : Date.now();
+  const store = loadWalletStore(walletFile);
+  const record = store.pendingWalletInputs && store.pendingWalletInputs[uid];
+  if (!record || typeof record !== "object") {
+    return null;
+  }
+  if (typeof record.expiresAt !== "number" || record.expiresAt <= ts) {
+    return null;
+  }
+  return {
+    chatId: record.chatId || null,
+    purpose: record.purpose === "change" ? "change" : "register",
+    createdAt: Number(record.createdAt) || 0,
+    expiresAt: record.expiresAt,
+  };
+}
+
+function clearPendingWalletInput(userId, walletFile, now = Date.now()) {
+  const uid = normalizeUserId(userId);
+  if (!uid) {
+    return { ok: true, cleared: false };
+  }
+  const ts = Number.isFinite(now) ? now : Date.now();
+  return mutateWalletStore((store) => {
+    pruneExpired(store, ts);
+    if (!store.pendingWalletInputs || !store.pendingWalletInputs[uid]) {
+      return { ok: true, cleared: false };
+    }
+    delete store.pendingWalletInputs[uid];
+    return { ok: true, cleared: true };
+  }, walletFile);
+}
+
 module.exports = {
   DEFAULT_WALLET_FILE,
+  WALLET_INPUT_TTL_MS,
+  REGISTRATION_MANUAL,
+  REGISTRATION_SIGNATURE,
   emptyStore,
   resolveWalletFile,
   setWalletFileForTests,
@@ -420,10 +626,17 @@ module.exports = {
   withWalletStore,
   readWalletSnapshot,
   pruneExpired,
+  getLinkedWalletForUser,
   getVerifiedWalletForUser,
   isWalletVerified,
+  isWalletRegistered,
   getWalletStoreCounts,
   disconnectWallet,
   applyVerifiedWallet,
+  applyRegisteredWallet,
+  registerManualWallet,
+  beginWalletAddressInput,
+  getPendingWalletInput,
+  clearPendingWalletInput,
   normalizeUserId,
 };

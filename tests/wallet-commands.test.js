@@ -167,11 +167,13 @@ runTest("2. /wallet private unverified", () => {
   handleWallet(ctx, { walletFile: file, now: 1000 });
   assert.strictEqual(ctx.replies[0].text, UNVERIFIED_TEXT);
   const buttons = getButtons(ctx.replies[0]);
-  assert.strictEqual(buttons[0].text, "Connect Wallet");
+  assert.strictEqual(buttons[0].text, "🌐 Connect & Verify");
   assert.ok(buttons[0].url.includes("https://mangomeme.fun/wallet-connect?t="));
   assert.ok(!buttons[0].url.includes("222"));
-  assert.strictEqual(buttons[1].text, "⬅️ Back");
-  assert.strictEqual(buttons[1].callback_data, WALLET_HUB_CALLBACK.BACK);
+  assert.strictEqual(buttons[1].text, "⌨️ Enter Wallet Address");
+  assert.strictEqual(buttons[1].callback_data, WALLET_CALLBACK.ENTER);
+  assert.strictEqual(buttons[2].text, "⬅️ Back");
+  assert.strictEqual(buttons[2].callback_data, WALLET_HUB_CALLBACK.BACK);
 });
 
 runTest("3. /wallet private verified hub", () => {
@@ -180,8 +182,8 @@ runTest("3. /wallet private verified hub", () => {
   connectUser(file, 333, wallet, 2000);
   const ctx = createMockCtx({ chatType: "private", userId: 333 });
   handleWallet(ctx, { walletFile: file, now: 3000 });
-  assert.ok(ctx.replies[0].text.includes("🥭 ManGo Wallet"));
-  assert.ok(ctx.replies[0].text.includes("✅ Verified"));
+  assert.ok(ctx.replies[0].text.includes("💳 My Wallet"));
+  assert.ok(ctx.replies[0].text.includes("Status: 🟢 Verified"));
   assert.ok(ctx.replies[0].text.includes("..."));
   assert.ok(!ctx.replies[0].text.includes(wallet.address));
   const labels = getButtons(ctx.replies[0]).map((b) => b.text);
@@ -257,8 +259,10 @@ runTest("10. owner works same as member", () => {
     handleWallet(member, { walletFile: file, now: 21 });
     assert.strictEqual(owner.replies[0].text, UNVERIFIED_TEXT);
     assert.strictEqual(member.replies[0].text, UNVERIFIED_TEXT);
-    assert.strictEqual(getButtons(owner.replies[0])[0].text, "Connect Wallet");
-    assert.strictEqual(getButtons(member.replies[0])[0].text, "Connect Wallet");
+    assert.strictEqual(getButtons(owner.replies[0])[0].text, "🌐 Connect & Verify");
+    assert.strictEqual(getButtons(member.replies[0])[0].text, "🌐 Connect & Verify");
+    assert.strictEqual(getButtons(owner.replies[0])[1].text, "⌨️ Enter Wallet Address");
+    assert.strictEqual(getButtons(member.replies[0])[1].text, "⌨️ Enter Wallet Address");
   } finally {
     if (prev === undefined) {
       delete process.env.ADMIN_USER_ID;

@@ -223,7 +223,7 @@ runTest("membercheck admin reply", () => {
   handleMemberCheck(ctx, { walletFile, rewardsFile, pointsFile });
   assert.ok(ctx.replies[0].text.includes("ManGo Member Profile"));
   assert.ok(ctx.replies[0].text.includes("Pippi"));
-  assert.ok(ctx.replies[0].text.includes("✅ Verified"));
+  assert.ok(ctx.replies[0].text.includes("🟢 Verified"));
   assert.ok(ctx.replies[0].text.includes(shortenWallet(wallet.address)));
   assert.ok(!ctx.replies[0].text.includes(wallet.address));
   assert.ok(ctx.replies[0].text.includes("Presale contribution:"));
