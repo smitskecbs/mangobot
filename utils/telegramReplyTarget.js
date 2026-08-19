@@ -22,7 +22,11 @@ function getReplyTargetUser(ctx) {
     typeof reply.first_name === "string" && reply.first_name.trim()
       ? reply.first_name.trim()
       : "Member";
-  return { id: reply.id, firstName };
+  const username =
+    typeof reply.username === "string" && reply.username.trim()
+      ? reply.username.trim()
+      : null;
+  return { id: reply.id, firstName, username };
 }
 
 function parseCommandArg(ctx) {

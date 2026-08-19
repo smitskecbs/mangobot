@@ -944,6 +944,112 @@ async function main() {
     assert.ok(deliverySrc.includes("getDeliveryConfig"));
   });
 
+  await runTest("Mystery Gift group announce after verified sent; retry is not duplicated", async () => {
+    const { walletFile, rewardsFile, deliveryFile } = files();
+    connectUser(walletFile, 41, userWallet, 1000);
+    const created = createReward({
+      telegramUserId: 41,
+      walletFile,
+      rewardsFile,
+      telegramUsername: "MangoFan",
+      now: 1,
+    });
+    const prepared = prepareRewardDelivery({
+      adminUserId: 9001,
+      rewardId: created.reward.rewardId,
+      amountHuman: "1000",
+      walletFile,
+      rewardsFile,
+      deliveryFile,
+      env: enabledEnv(dist.address),
+      now: 50,
+    });
+    assert.strictEqual(prepared.ok, true, prepared.error);
+    const posts = [];
+    const fetchImpl = async (_url, init) => {
+      posts.push(JSON.parse(init.body));
+      return { ok: true, json: async () => ({ ok: true }) };
+    };
+    const good = tokenTx({
+      signer: dist.address,
+      destination: userWallet.address,
+      amount: mangoHumanToBaseUnits("1000").baseUnits,
+      memo: deliveryMemo(prepared.review.deliveryId),
+    });
+    const sig = makeSig("announce1");
+    good.transaction.signatures[0] = sig;
+    const confirmed = await confirmDelivery(prepared.token, sig, {
+      deliveryFile,
+      rewardsFile,
+      now: 20,
+      getTransactionImpl: async () => ({ ok: true, result: good }),
+      announceMysteryGift: true,
+      botToken: "TESTTOKEN",
+      chatId: "-1003916996602",
+      fetchImpl,
+    });
+    assert.strictEqual(confirmed.ok, true, confirmed.reason);
+    assert.strictEqual(getReward(created.reward.rewardId, rewardsFile).status, "sent");
+    assert.strictEqual(posts.length, 1);
+    assert.ok(posts[0].text.includes("@MangoFan"));
+    assert.strictEqual(posts[0].message_thread_id, undefined);
+    assert.ok(!JSON.stringify(posts[0]).includes(userWallet.address));
+    assert.ok(!JSON.stringify(posts[0]).includes(created.reward.rewardId));
+    assert.ok(!JSON.stringify(posts[0]).includes(sig));
+
+    const again = await confirmDelivery(prepared.token, sig, {
+      deliveryFile,
+      rewardsFile,
+      now: 21,
+      getTransactionImpl: async () => ({ ok: true, result: good }),
+      announceMysteryGift: true,
+      botToken: "TESTTOKEN",
+      chatId: "-1003916996602",
+      fetchImpl,
+    });
+    assert.strictEqual(again.ok, true);
+    assert.strictEqual(again.idempotent, true);
+    assert.strictEqual(posts.length, 1);
+    assert.ok(getReward(created.reward.rewardId, rewardsFile).groupAnnouncedAt);
+  });
+
+  await runTest("announce failure keeps sent status", async () => {
+    const { walletFile, rewardsFile, deliveryFile } = files();
+    connectUser(walletFile, 41, userWallet, 1000);
+    const created = createReward({ telegramUserId: 41, walletFile, rewardsFile, now: 1 });
+    const prepared = prepareRewardDelivery({
+      adminUserId: 9001,
+      rewardId: created.reward.rewardId,
+      amountHuman: "1000",
+      walletFile,
+      rewardsFile,
+      deliveryFile,
+      env: enabledEnv(dist.address),
+      now: 50,
+    });
+    const good = tokenTx({
+      signer: dist.address,
+      destination: userWallet.address,
+      amount: mangoHumanToBaseUnits("1000").baseUnits,
+      memo: deliveryMemo(prepared.review.deliveryId),
+    });
+    const sig = makeSig("announcefail");
+    good.transaction.signatures[0] = sig;
+    const confirmed = await confirmDelivery(prepared.token, sig, {
+      deliveryFile,
+      rewardsFile,
+      now: 20,
+      getTransactionImpl: async () => ({ ok: true, result: good }),
+      announceMysteryGift: true,
+      botToken: "TESTTOKEN",
+      chatId: "-1003916996602",
+      fetchImpl: async () => ({ ok: false }),
+    });
+    assert.strictEqual(confirmed.ok, true, confirmed.reason);
+    assert.strictEqual(getReward(created.reward.rewardId, rewardsFile).status, "sent");
+    assert.strictEqual(getReward(created.reward.rewardId, rewardsFile).groupAnnouncedAt, null);
+  });
+
   await runTest("no XP change from delivery command import", () => {
     assert.strictEqual(typeof handleTrivia, "function");
   });

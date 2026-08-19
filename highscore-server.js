@@ -50,6 +50,10 @@ const {
 const { tryHandleWalletRequest } = require("./services/walletApi");
 const { tryHandlePresaleRequest, startPresaleReconciliationTimer, stopPresaleReconciliationTimer } = require("./services/presaleApi");
 const { tryHandleDeliveryRequest } = require("./services/deliveryApi");
+const {
+  startDeliveryReconciliationTimer,
+  stopDeliveryReconciliationTimer,
+} = require("./services/deliveryReconcile");
 const { resolveWalletFile } = require("./services/walletLinks");
 const { buildApiHealthPayload } = require("./services/apiHealth");
 const {
@@ -594,6 +598,7 @@ server.listen(PORT, () => {
     log("[startup] telegram notify disabled");
   }
   startPresaleReconciliationTimer();
+  startDeliveryReconciliationTimer();
 });
 
 let shuttingDown = false;
@@ -605,6 +610,7 @@ function shutdownApi(signal) {
   noteRuntimeEvent("shutdown");
   log(`[shutdown] highscore-api signal=${signal}`);
   stopPresaleReconciliationTimer();
+  stopDeliveryReconciliationTimer();
   server.close(() => {
     log("[shutdown] highscore-api closed");
   });

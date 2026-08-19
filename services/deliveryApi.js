@@ -17,7 +17,9 @@ const {
   confirmDelivery,
   publicStatusForSession,
   ignoreClientOverrides,
+  isDurableDeliveryRecord,
 } = require("./rewardDelivery");
+const { getReward } = require("./memberRewards");
 const {
   getDeliveryConfig,
   safeRpcHost,
@@ -65,6 +67,13 @@ function sessionError(status) {
   return { status: 400, body: { ok: false, error: "Invalid request.", reason: "invalid" } };
 }
 
+function resolveSessionReward(record, options) {
+  if (!record || record.kind !== "reward" || !record.rewardId) {
+    return null;
+  }
+  return getReward(record.rewardId, options.rewardsFile);
+}
+
 async function handleDeliveryStatus(req, res, origin, options = {}) {
   let body;
   try {
@@ -75,7 +84,8 @@ async function handleDeliveryStatus(req, res, origin, options = {}) {
     return;
   }
   const session = lookupDeliverySession(body && body.token, options);
-  if (session.status !== "ok") {
+  const durable = isDurableDeliveryRecord(session.record);
+  if (session.status !== "ok" && !(session.status === "expired" && durable)) {
     const mapped = sessionError(session.status);
     sendJson(res, mapped.status, mapped.body, origin);
     return;
@@ -85,7 +95,12 @@ async function handleDeliveryStatus(req, res, origin, options = {}) {
     sendJson(res, 400, { ok: false, error: "Invalid request.", reason: override.reason }, origin);
     return;
   }
-  sendJson(res, 200, publicStatusForSession(session.record), origin);
+  sendJson(
+    res,
+    200,
+    publicStatusForSession(session.record, { reward: resolveSessionReward(session.record, options) }),
+    origin
+  );
 }
 
 async function handleDeliveryPayment(req, res, origin, options = {}) {
@@ -125,11 +140,38 @@ async function handleDeliveryConfirm(req, res, origin, options = {}) {
     ...options,
     body,
   });
+  if (result && result.pending) {
+    sendJson(
+      res,
+      200,
+      {
+        ok: true,
+        pending: true,
+        status: result.status || "pending",
+        reason: result.reason || "not-finalized",
+        deliveryState: result.deliveryState || "submitted",
+        kind: result.kind,
+      },
+      origin
+    );
+    return;
+  }
   if (!result.ok) {
     if (typeof result.reason === "string" && result.reason.startsWith("rpc-")) {
       logDeliveryRpcFailure("confirm", result.reason, options.env);
     }
-    sendJson(res, 400, { ok: false, error: result.error || "Invalid request.", reason: result.reason }, origin);
+    sendJson(
+      res,
+      400,
+      {
+        ok: false,
+        error: result.error || "Invalid request.",
+        reason: result.reason,
+        status: result.status || "failed",
+        deliveryState: result.deliveryState || "failed",
+      },
+      origin
+    );
     return;
   }
   sendJson(
@@ -137,6 +179,8 @@ async function handleDeliveryConfirm(req, res, origin, options = {}) {
     200,
     {
       ok: true,
+      status: result.status || "sent",
+      deliveryState: result.deliveryState || "sent",
       signature: result.signature,
       idempotent: Boolean(result.idempotent),
       kind: result.kind,

@@ -99,6 +99,17 @@ function safeErrorCode(err) {
   return "";
 }
 
+function shortFingerprint(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+  const trimmed = value.trim();
+  if (trimmed.length < 8) {
+    return "";
+  }
+  return `${trimmed.slice(0, 4)}…${trimmed.slice(-4)}`;
+}
+
 module.exports = {
   getDeliveryConfig,
   isRewardDeliveryLive,
@@ -107,4 +118,5 @@ module.exports = {
   safeLogReason,
   safeErrorName,
   safeErrorCode,
+  shortFingerprint,
 };

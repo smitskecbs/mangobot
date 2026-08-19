@@ -193,7 +193,10 @@ function pruneExpiredDeliverySessions(store, now) {
       delete store.sessions[hash];
       continue;
     }
-    if (record.status === "consumed") {
+    if (record.status === "consumed" || record.status === "submitted") {
+      continue;
+    }
+    if (record.txSignature) {
       continue;
     }
     if (typeof record.expiresAt !== "number" || record.expiresAt <= ts) {

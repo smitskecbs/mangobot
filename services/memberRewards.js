@@ -222,6 +222,58 @@ function normalizeRewardType(type) {
   return null;
 }
 
+const ANNOUNCE_CLAIM_TTL_MS = 15 * 60 * 1000;
+const SIDE_EFFECT_SENDING_TTL_MS = ANNOUNCE_CLAIM_TTL_MS;
+
+function sanitizeTelegramUsername(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const raw = value.trim().replace(/^@+/, "");
+  if (!/^[A-Za-z0-9_]{5,32}$/.test(raw)) {
+    return null;
+  }
+  return raw;
+}
+
+function sanitizeDisplayName(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 64);
+  if (!trimmed) {
+    return null;
+  }
+  return trimmed;
+}
+
+function lookupPointsDisplayName(userId, pointsFile) {
+  if (pointsFile === undefined && isLikelyTestProcess()) {
+    return null;
+  }
+  try {
+    const { loadPoints, getUserRecord } = require("./points");
+    const user = getUserRecord(loadPoints(pointsFile), userId);
+    if (!user || typeof user.name !== "string") {
+      return null;
+    }
+    if (user.name === "Unknown") {
+      return null;
+    }
+    return sanitizeDisplayName(user.name);
+  } catch {
+    return null;
+  }
+}
+
+function snapshotRewardIdentity(uid, input = {}) {
+  return {
+    telegramUsername: sanitizeTelegramUsername(input.telegramUsername),
+    displayNameSnapshot:
+      sanitizeDisplayName(input.displayName) || lookupPointsDisplayName(uid, input.pointsFile),
+  };
+}
+
 function defaultLabelForType(type) {
   if (type === "mystery-gift") {
     return "Mystery Gift";
@@ -274,6 +326,15 @@ function publicReward(record) {
     amountBaseUnits: record.amountBaseUnits || null,
     mint: record.mint || null,
     deliveryId: record.deliveryId || null,
+    telegramUsername: record.telegramUsername || null,
+    displayNameSnapshot: record.displayNameSnapshot || null,
+    submittedAt: record.submittedAt || null,
+    deliveryReview: record.deliveryReview || null,
+    reconcileAttempts: Number(record.reconcileAttempts) || 0,
+    recipientNotifyState: record.recipientNotifyState || null,
+    recipientNotifiedAt: record.recipientNotifiedAt || null,
+    groupAnnounceState: record.groupAnnounceState || null,
+    groupAnnouncedAt: record.groupAnnouncedAt || null,
   };
 }
 
@@ -341,7 +402,7 @@ function getReward(rewardId, rewardsFile) {
 /**
  * Create a pending reward. Wallet comes from the linked mapping (registered or verified).
  * Snapshot is frozen at creation and never follows later wallet changes.
- * @param {{ telegramUserId: string|number, type?: string, label?: string, createdBy?: string|number, now?: number, walletFile?: string, rewardsFile?: string }} input
+ * @param {{ telegramUserId: string|number, type?: string, label?: string, createdBy?: string|number, now?: number, walletFile?: string, rewardsFile?: string, pointsFile?: string, telegramUsername?: string, displayName?: string }} input
  */
 function createReward(input = {}) {
   const uid = normalizeUserId(input.telegramUserId);
@@ -372,6 +433,7 @@ function createReward(input = {}) {
     };
   }
 
+  const identity = snapshotRewardIdentity(uid, input);
   const now = input.now === undefined ? Date.now() : input.now;
   const label =
     typeof input.label === "string" && input.label.trim()
@@ -391,6 +453,8 @@ function createReward(input = {}) {
       cancelledAt: null,
       txSignature: null,
       createdBy: input.createdBy === undefined ? null : String(input.createdBy),
+      telegramUsername: identity.telegramUsername,
+      displayNameSnapshot: identity.displayNameSnapshot,
     };
     indexUserReward(store, uid, rewardId);
     return {
@@ -413,6 +477,9 @@ function prepareRewardsForUsers(userIds, type, options = {}) {
       now: options.now,
       walletFile: options.walletFile,
       rewardsFile: options.rewardsFile,
+      pointsFile: options.pointsFile,
+      telegramUsername: options.telegramUsername,
+      displayName: options.displayName,
     });
     if (result.ok) {
       created.push(result.reward);
@@ -449,6 +516,114 @@ function markRewardSent(rewardId, txSignature, options = {}) {
     ...options,
     txSignature: txSignature.trim(),
   });
+}
+
+function markRewardSubmitted(rewardId, txSignature, options = {}) {
+  if (!isPlausibleTxSignature(txSignature)) {
+    return { ok: false, error: "Invalid request.", reason: "invalid-signature" };
+  }
+  const signature = txSignature.trim();
+  const id = typeof rewardId === "string" ? rewardId.trim() : "";
+  if (!id) {
+    return { ok: false, error: "Invalid request.", reason: "invalid-id" };
+  }
+  const now = options.now === undefined ? Date.now() : options.now;
+  return mutateRewardsStore((store) => {
+    const record = store.rewards[id];
+    if (!record || typeof record !== "object") {
+      return { ok: false, error: "Invalid request.", reason: "missing" };
+    }
+    if (record.status === "cancelled") {
+      return { ok: false, error: "Invalid request.", reason: "already-sent" };
+    }
+    if (record.status === "sent") {
+      if (record.txSignature === signature) {
+        return { ok: true, idempotent: true, alreadySent: true, reward: publicReward({ ...record, rewardId: id }) };
+      }
+      return { ok: false, error: "Invalid request.", reason: "already-sent" };
+    }
+    if (record.txSignature && record.txSignature !== signature) {
+      return { ok: false, error: "Invalid request.", reason: "signature-conflict" };
+    }
+    record.status = "submitted";
+    record.txSignature = signature;
+    if (!record.submittedAt) {
+      record.submittedAt = now;
+    }
+    return { ok: true, reward: publicReward({ ...record, rewardId: id }) };
+  }, options.rewardsFile);
+}
+
+function markRewardDeliveryReview(rewardId, reason, options = {}) {
+  const id = typeof rewardId === "string" ? rewardId.trim() : "";
+  if (!id) {
+    return { ok: false, reason: "invalid-id" };
+  }
+  const safeReason =
+    typeof reason === "string" && /^[a-z0-9_-]{1,64}$/i.test(reason.trim())
+      ? reason.trim()
+      : "mismatch";
+  return mutateRewardsStore((store) => {
+    const record = store.rewards[id];
+    if (!record || typeof record !== "object") {
+      return { ok: false, reason: "missing" };
+    }
+    if (record.status === "sent") {
+      return { ok: true, reward: publicReward({ ...record, rewardId: id }), skipped: true };
+    }
+    record.deliveryReview = "manual";
+    record.deliveryFailureReason = safeReason;
+    return { ok: true, reward: publicReward({ ...record, rewardId: id }) };
+  }, options.rewardsFile);
+}
+
+function bumpRewardReconcileAttempts(rewardId, options = {}) {
+  const id = typeof rewardId === "string" ? rewardId.trim() : "";
+  if (!id) {
+    return { ok: false, reason: "invalid-id" };
+  }
+  return mutateRewardsStore((store) => {
+    const record = store.rewards[id];
+    if (!record || typeof record !== "object") {
+      return { ok: false, reason: "missing" };
+    }
+    record.reconcileAttempts = (Number(record.reconcileAttempts) || 0) + 1;
+    return { ok: true, attempts: record.reconcileAttempts };
+  }, options.rewardsFile);
+}
+
+function listSubmittedRewards(rewardsFile) {
+  const store = loadRewardsStore(rewardsFile);
+  const out = [];
+  for (const [id, record] of Object.entries(store.rewards || {})) {
+    if (!record || typeof record !== "object") {
+      continue;
+    }
+    if (record.status !== "submitted") {
+      continue;
+    }
+    if (record.deliveryReview === "manual") {
+      continue;
+    }
+    if (!isPlausibleTxSignature(record.txSignature)) {
+      continue;
+    }
+    out.push(publicReward({ ...record, rewardId: id }));
+  }
+  return out;
+}
+
+function findRewardIdByTxSignature(signature, rewardsFile) {
+  if (!isPlausibleTxSignature(signature)) {
+    return null;
+  }
+  const store = loadRewardsStore(rewardsFile);
+  for (const [id, record] of Object.entries(store.rewards || {})) {
+    if (record && record.txSignature === signature) {
+      return id;
+    }
+  }
+  return null;
 }
 
 function cancelReward(rewardId, options = {}) {
@@ -523,6 +698,105 @@ function transitionReward(rewardId, nextStatus, options = {}) {
   }, options.rewardsFile);
 }
 
+function sideEffectKeys(kind) {
+  if (kind === "recipient") {
+    return {
+      stateKey: "recipientNotifyState",
+      atKey: "recipientNotifiedAt",
+      claimedKey: "recipientNotifyClaimedAt",
+      alreadyReason: "already-notified",
+    };
+  }
+  return {
+    stateKey: "groupAnnounceState",
+    atKey: "groupAnnouncedAt",
+    claimedKey: "groupAnnounceClaimedAt",
+    alreadyReason: "already-announced",
+  };
+}
+
+function claimMysteryGiftSideEffect(rewardId, kind, options = {}) {
+  if (typeof rewardId !== "string" || !rewardId.trim()) {
+    return { ok: false, reason: "invalid-id" };
+  }
+  const keys = sideEffectKeys(kind);
+  const id = rewardId.trim();
+  const now = options.now === undefined ? Date.now() : options.now;
+  return mutateRewardsStore((store) => {
+    const record = store.rewards[id];
+    if (!record || typeof record !== "object") {
+      return { ok: false, reason: "missing" };
+    }
+    if (record.status !== "sent") {
+      return { ok: false, reason: "not-sent" };
+    }
+    if (record.type !== "mystery-gift") {
+      return { ok: false, reason: "not-mystery" };
+    }
+    if (record[keys.stateKey] === "sent" || Number(record[keys.atKey]) > 0) {
+      return { ok: false, reason: keys.alreadyReason, done: true, announced: true };
+    }
+    const claimedAt = Number(record[keys.claimedKey]) || 0;
+    if (
+      record[keys.stateKey] === "sending" &&
+      claimedAt > 0 &&
+      now - claimedAt < SIDE_EFFECT_SENDING_TTL_MS
+    ) {
+      return { ok: false, reason: "in-flight" };
+    }
+    record[keys.stateKey] = "sending";
+    record[keys.claimedKey] = now;
+    return { ok: true, reward: { ...record, rewardId: id } };
+  }, options.rewardsFile);
+}
+
+function finishMysteryGiftSideEffect(rewardId, kind, success, options = {}) {
+  if (typeof rewardId !== "string" || !rewardId.trim()) {
+    return { ok: false, reason: "invalid-id" };
+  }
+  const keys = sideEffectKeys(kind);
+  const id = rewardId.trim();
+  const now = options.now === undefined ? Date.now() : options.now;
+  return mutateRewardsStore((store) => {
+    const record = store.rewards[id];
+    if (!record || typeof record !== "object") {
+      return { ok: false, reason: "missing" };
+    }
+    delete record[keys.claimedKey];
+    if (success) {
+      record[keys.stateKey] = "sent";
+      record[keys.atKey] = now;
+    } else {
+      record[keys.stateKey] = "pending";
+    }
+    return { ok: true, reward: publicReward({ ...record, rewardId: id }) };
+  }, options.rewardsFile);
+}
+
+function claimMysteryGiftGroupAnnouncement(rewardId, options = {}) {
+  const result = claimMysteryGiftSideEffect(rewardId, "group", options);
+  if (!result.ok && result.reason === "already-announced") {
+    return { ...result, announced: true };
+  }
+  return result;
+}
+
+function finishMysteryGiftGroupAnnouncement(rewardId, success, options = {}) {
+  return finishMysteryGiftSideEffect(rewardId, "group", success, options);
+}
+
+function claimMysteryGiftRecipientNotification(rewardId, options = {}) {
+  const result = claimMysteryGiftSideEffect(rewardId, "recipient", options);
+  if (!result.ok && result.reason === "already-notified") {
+    return { ...result, notified: true };
+  }
+  return result;
+}
+
+function finishMysteryGiftRecipientNotification(rewardId, success, options = {}) {
+  return finishMysteryGiftSideEffect(rewardId, "recipient", success, options);
+}
+
 function formatCreatedDate(ts) {
   const value = Number(ts);
   if (!Number.isFinite(value) || value <= 0) {
@@ -582,6 +856,11 @@ module.exports = {
   prepareRewardsForUsers,
   markRewardPrepared,
   markRewardSent,
+  markRewardSubmitted,
+  markRewardDeliveryReview,
+  bumpRewardReconcileAttempts,
+  listSubmittedRewards,
+  findRewardIdByTxSignature,
   cancelReward,
   getReward,
   listRewardsForUser,
@@ -591,4 +870,15 @@ module.exports = {
   defaultLabelForType,
   normalizeRewardType,
   isPlausibleTxSignature,
+  sanitizeTelegramUsername,
+  sanitizeDisplayName,
+  snapshotRewardIdentity,
+  claimMysteryGiftGroupAnnouncement,
+  finishMysteryGiftGroupAnnouncement,
+  claimMysteryGiftRecipientNotification,
+  finishMysteryGiftRecipientNotification,
+  claimMysteryGiftSideEffect,
+  finishMysteryGiftSideEffect,
+  ANNOUNCE_CLAIM_TTL_MS,
+  SIDE_EFFECT_SENDING_TTL_MS,
 };

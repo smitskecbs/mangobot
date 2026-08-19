@@ -73,8 +73,11 @@ function handleReward(ctx, options = {}) {
     telegramUserId: target.id,
     type,
     createdBy: ctx.from.id,
+    telegramUsername: target.username,
+    displayName: target.firstName,
     walletFile: options.walletFile,
     rewardsFile: options.rewardsFile,
+    pointsFile: options.pointsFile,
     now: options.now,
   });
 

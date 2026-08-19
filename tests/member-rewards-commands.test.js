@@ -274,6 +274,7 @@ runTest("help lists /rewards /presale not admin reward internals", () => {
   assert.ok(HELP_MESSAGE.includes("/presale"));
   assert.ok(!HELP_MESSAGE.includes("/membercheck"));
   assert.ok(!HELP_MESSAGE.includes("/memberrewards"));
+  assert.ok(!HELP_MESSAGE.includes("/reconciledelivery"));
   assert.ok(
     !HELP_MESSAGE.split("\n").some((line) => line.trim() === "/reward")
   );
