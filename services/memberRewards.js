@@ -323,8 +323,11 @@ function publicReward(record) {
     txSignature: record.txSignature,
     deliveryType: record.deliveryType || null,
     assetType: record.assetType || null,
+    assetLabel: record.assetLabel || null,
     amountBaseUnits: record.amountBaseUnits || null,
     mint: record.mint || null,
+    decimals: Number.isInteger(record.decimals) ? record.decimals : null,
+    tokenProgram: record.tokenProgram || null,
     deliveryId: record.deliveryId || null,
     telegramUsername: record.telegramUsername || null,
     displayNameSnapshot: record.displayNameSnapshot || null,
@@ -335,6 +338,8 @@ function publicReward(record) {
     recipientNotifiedAt: record.recipientNotifiedAt || null,
     groupAnnounceState: record.groupAnnounceState || null,
     groupAnnouncedAt: record.groupAnnouncedAt || null,
+    offchainDeliveredAt: record.offchainDeliveredAt || null,
+    deliveryNote: record.deliveryNote || null,
   };
 }
 

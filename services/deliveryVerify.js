@@ -8,6 +8,7 @@ const { parseMemo, transactionSucceeded } = require("./presaleVerify");
 const {
   MANGO_MINT,
   TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
   parseBaseUnits,
 } = require("./deliveryConstants");
 
@@ -47,17 +48,31 @@ function instructionProgramId(ix) {
   return "";
 }
 
+function isToken2022TransferIx(ix) {
+  if (!ix || typeof ix !== "object") {
+    return false;
+  }
+  const programId = instructionProgramId(ix);
+  if (programId !== TOKEN_2022_PROGRAM_ID && ix.program !== "spl-token-2022") {
+    return false;
+  }
+  const parsed = ix.parsed;
+  if (!parsed || typeof parsed !== "object") {
+    return programId === TOKEN_2022_PROGRAM_ID;
+  }
+  return parsed.type === "transferChecked" || parsed.type === "transfer";
+}
+
 function parseTokenTransfer(ix) {
   if (!ix || typeof ix !== "object") {
     return null;
   }
   const programId = instructionProgramId(ix);
   const parsed = ix.parsed;
-  if (
-    programId !== TOKEN_PROGRAM_ID &&
-    ix.program !== "spl-token" &&
-    ix.program !== "spl-token-2022"
-  ) {
+  if (programId === TOKEN_2022_PROGRAM_ID || ix.program === "spl-token-2022") {
+    return null;
+  }
+  if (programId !== TOKEN_PROGRAM_ID && ix.program !== "spl-token") {
     return null;
   }
   if (!parsed || typeof parsed !== "object") {
@@ -141,12 +156,18 @@ function verifyDeliveryTransaction(tx, expected, options = {}) {
   const expectedSigner = normalizeSolanaPublicKey(expected.expectedSigner);
   const destinationOwner = normalizeSolanaPublicKey(expected.destinationOwner);
   const mint = normalizeSolanaPublicKey(expected.mint) || MANGO_MINT;
+  const expectedProgram =
+    normalizeSolanaPublicKey(expected.tokenProgram) || TOKEN_PROGRAM_ID;
   const expectedAmount = parseBaseUnits(expected.amountBaseUnits);
   if (!expectedSigner || !destinationOwner || !mint || !expectedAmount.ok) {
     return { ok: false, reason: "invalid-expected", error: "This transaction could not be verified." };
   }
-  if (mint !== MANGO_MINT) {
-    return { ok: false, reason: "wrong-mint", error: "This transaction could not be verified." };
+  if (expectedProgram !== TOKEN_PROGRAM_ID) {
+    return {
+      ok: false,
+      reason: "unsupported-token-program",
+      error: "This transaction could not be verified.",
+    };
   }
 
   const signatures =
@@ -165,6 +186,13 @@ function verifyDeliveryTransaction(tx, expected, options = {}) {
   }
 
   const instructions = collectInstructions(tx);
+  if (instructions.some(isToken2022TransferIx)) {
+    return {
+      ok: false,
+      reason: "unsupported-token-program",
+      error: "This transaction could not be verified.",
+    };
+  }
   const transfers = instructions.map(parseTokenTransfer).filter(Boolean);
   if (transfers.length !== 1) {
     return {
@@ -224,5 +252,6 @@ module.exports = {
   CLOCK_SKEW_MS,
   verifyDeliveryTransaction,
   parseTokenTransfer,
+  isToken2022TransferIx,
   tokenBalanceOwnerDelta,
 };

@@ -25,6 +25,7 @@ const {
   pruneExpiredDeliverySessions,
 } = require("./deliveryStore");
 const { verifyDeliveryTransaction } = require("./deliveryVerify");
+const { inspectMint, validateSplMintInfo } = require("./deliveryMintInspect");
 const { announceMysteryGiftDelivered } = require("./mysteryGiftAnnounce");
 const { notifyMysteryGiftRecipient } = require("./mysteryGiftNotify");
 const { log } = require("../utils/logger");
@@ -39,12 +40,19 @@ const {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   DEFAULT_DELIVERY_URL,
   ASSET_MANGO,
+  ASSET_SPL,
+  ASSET_NFT,
+  ASSET_OFFCHAIN,
   DELIVERY_TYPE_MANGO_TOKEN,
+  DELIVERY_TYPE_OFFCHAIN,
   deliveryMemo,
   formatMangoGrouped,
   formatMangoHuman,
   mangoHumanToBaseUnits,
+  humanAmountToBaseUnits,
   parseBaseUnits,
+  assetTypeLabel,
+  deliveryTypeForAsset,
 } = require("./deliveryConstants");
 
 function hashToken(token) {
@@ -196,6 +204,51 @@ function findActiveSessionForTarget(store, kind, targetId) {
   return null;
 }
 
+function isOffchainRecord(record) {
+  if (!record || typeof record !== "object") {
+    return false;
+  }
+  return record.assetType === ASSET_OFFCHAIN || record.deliveryType === DELIVERY_TYPE_OFFCHAIN;
+}
+
+function normalizeAssetType(value) {
+  const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (raw === ASSET_SPL || raw === ASSET_NFT || raw === ASSET_OFFCHAIN || raw === ASSET_MANGO) {
+    return raw;
+  }
+  return null;
+}
+
+function formatBaseUnitsHuman(baseUnits, decimals) {
+  const parsed = parseBaseUnits(baseUnits);
+  const dec = Number(decimals);
+  if (!parsed.ok || !Number.isInteger(dec) || dec < 0 || dec > 18) {
+    return "0";
+  }
+  const scale = 10n ** BigInt(dec);
+  const value = BigInt(parsed.lamports);
+  const whole = value / scale;
+  const frac = value % scale;
+  if (frac === 0n) {
+    return whole.toString();
+  }
+  return `${whole.toString()}.${frac.toString().padStart(dec, "0").replace(/0+$/, "")}`;
+}
+
+function sessionAssetFields(plan = {}) {
+  const assetType = plan.assetType || ASSET_MANGO;
+  const decimals = Number.isInteger(plan.decimals) ? plan.decimals : MANGO_MINT_DECIMALS;
+  return {
+    mint: plan.mint || MANGO_MINT,
+    decimals,
+    tokenProgram: plan.tokenProgram || TOKEN_PROGRAM_ID,
+    assetType,
+    deliveryType: plan.deliveryType || deliveryTypeForAsset(assetType),
+    assetLabel: plan.assetLabel || assetTypeLabel(assetType),
+    amountHuman: plan.amountHuman || null,
+  };
+}
+
 function createSessionRecord({
   purpose,
   kind,
@@ -209,7 +262,23 @@ function createSessionRecord({
   now,
   expiresAt,
   deliveryId,
+  mint,
+  decimals,
+  tokenProgram,
+  assetType,
+  deliveryType,
+  assetLabel,
+  amountHuman,
 }) {
+  const assets = sessionAssetFields({
+    mint,
+    decimals,
+    tokenProgram,
+    assetType,
+    deliveryType,
+    assetLabel,
+    amountHuman,
+  });
   return {
     purpose,
     kind,
@@ -217,8 +286,6 @@ function createSessionRecord({
     contributionId: contributionId || null,
     telegramUserId: String(telegramUserId),
     destination,
-    mint: MANGO_MINT,
-    decimals: MANGO_MINT_DECIMALS,
     amountBaseUnits,
     expectedSigner,
     createdBy: createdBy === undefined ? null : String(createdBy),
@@ -228,11 +295,32 @@ function createSessionRecord({
     status: "open",
     recentBlockhash: null,
     lastValidBlockHeight: null,
+    ...assets,
   };
 }
 
 function reviewPayload(record) {
-  const human = formatMangoHuman(record.amountBaseUnits);
+  const assetType = (record && record.assetType) || ASSET_MANGO;
+  const mint = normalizeSolanaPublicKey(record && record.mint) || (isOffchainRecord(record) ? null : MANGO_MINT);
+  const decimals = Number.isInteger(record && record.decimals)
+    ? record.decimals
+    : isOffchainRecord(record)
+      ? null
+      : MANGO_MINT_DECIMALS;
+  const tokenProgram = (record && record.tokenProgram) || (isOffchainRecord(record) ? null : TOKEN_PROGRAM_ID);
+  const asset = (record && record.assetLabel) || assetTypeLabel(assetType);
+  let human = record && record.amountHuman;
+  if (!human && record && record.amountBaseUnits && Number.isInteger(decimals)) {
+    human =
+      assetType === ASSET_MANGO
+        ? formatMangoHuman(record.amountBaseUnits, decimals)
+        : formatBaseUnitsHuman(record.amountBaseUnits, decimals);
+  }
+  if (!human) {
+    human = isOffchainRecord(record) ? "" : "0";
+  }
+  const amountDisplay =
+    assetType === ASSET_MANGO ? formatMangoGrouped(human) : human;
   const typeLabel =
     record.kind === "presale"
       ? "Presale Allocation"
@@ -246,18 +334,37 @@ function reviewPayload(record) {
     kind: record.kind,
     destination: record.destination,
     destinationShort: shortenWallet(record.destination),
-    asset: "MANGO",
+    asset,
+    assetType,
+    assetTypeLabel: assetTypeLabel(assetType),
+    deliveryType: (record && record.deliveryType) || deliveryTypeForAsset(assetType),
     amountHuman: human,
-    amountDisplay: formatMangoGrouped(human),
+    amountDisplay,
     amountBaseUnits: record.amountBaseUnits,
-    mint: MANGO_MINT,
+    mint,
+    mintShort: mint ? shortenWallet(mint) : "",
     expectedSigner: record.expectedSigner,
     expectedSignerShort: shortenWallet(record.expectedSigner),
-    memo: deliveryMemo(record.deliveryId),
-    deliveryId: record.deliveryId,
-    tokenProgram: TOKEN_PROGRAM_ID,
+    memo: record.deliveryId ? deliveryMemo(record.deliveryId) : "",
+    deliveryId: record.deliveryId || null,
+    tokenProgram,
     associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-    decimals: MANGO_MINT_DECIMALS,
+    decimals,
+  };
+}
+
+function expectedFromRecord(record, extras = {}) {
+  const source = record && typeof record === "object" ? record : {};
+  return {
+    expectedSigner: normalizeSolanaPublicKey(source.expectedSigner || extras.expectedSigner),
+    destinationOwner: normalizeSolanaPublicKey(
+      source.destination || source.walletSnapshot || extras.destinationOwner
+    ),
+    mint: normalizeSolanaPublicKey(source.mint) || MANGO_MINT,
+    amountBaseUnits: source.amountBaseUnits,
+    memo: deliveryMemo(source.deliveryId),
+    createdAt: source.createdAt || extras.createdAt,
+    tokenProgram: source.tokenProgram || TOKEN_PROGRAM_ID,
   };
 }
 
@@ -272,16 +379,27 @@ function applyRewardPlan(store, rewardId, plan) {
   if (record.status === "submitted") {
     return { ok: false, reason: "in-flight" };
   }
-  record.deliveryType = DELIVERY_TYPE_MANGO_TOKEN;
-  record.assetType = ASSET_MANGO;
-  record.mint = MANGO_MINT;
-  record.amountBaseUnits = plan.amountBaseUnits;
+  const assetType = plan.assetType || ASSET_MANGO;
+  record.deliveryType = plan.deliveryType || deliveryTypeForAsset(assetType);
+  record.assetType = assetType;
+  record.assetLabel = plan.assetLabel || assetTypeLabel(assetType);
+  if (assetType === ASSET_OFFCHAIN) {
+    record.mint = null;
+    record.decimals = null;
+    record.tokenProgram = null;
+    record.amountBaseUnits = null;
+  } else {
+    record.mint = plan.mint || MANGO_MINT;
+    record.decimals = Number.isInteger(plan.decimals) ? plan.decimals : MANGO_MINT_DECIMALS;
+    record.tokenProgram = plan.tokenProgram || TOKEN_PROGRAM_ID;
+    record.amountBaseUnits = plan.amountBaseUnits;
+  }
   record.deliveryId = plan.deliveryId;
   record.status = "delivery-ready";
   return { ok: true, reward: { ...record, rewardId } };
 }
 
-function prepareRewardDelivery(input = {}) {
+function gatePrepareReward(input = {}) {
   if (!isAdmin(input.adminUserId)) {
     return { ok: false, reason: "not-admin", error: publicError("not-admin") };
   }
@@ -296,7 +414,7 @@ function prepareRewardDelivery(input = {}) {
       error: publicError("distribution-wallet-missing"),
     };
   }
-  if (!config.rpcUrl && !input.rpcUrl) {
+  if (normalizeAssetType(input.assetType) !== ASSET_OFFCHAIN && !config.rpcUrl && !input.rpcUrl) {
     return { ok: false, reason: "rpc-missing", error: publicError("disabled") };
   }
 
@@ -316,27 +434,27 @@ function prepareRewardDelivery(input = {}) {
   if (!destination) {
     return { ok: false, reason: "unverified", error: publicError("unverified") };
   }
+  return { ok: true, config, rewardId, reward, destination };
+}
 
-  let amount;
-  if (reward.amountBaseUnits) {
-    amount = parseBaseUnits(reward.amountBaseUnits);
-    if (!amount.ok || BigInt(amount.lamports) <= 0n) {
-      return { ok: false, reason: "invalid-amount", error: publicError("invalid") };
-    }
-    amount = { ok: true, baseUnits: amount.lamports, human: formatMangoHuman(amount.lamports) };
-  } else {
-    amount = mangoHumanToBaseUnits(input.amountHuman);
-    if (!amount.ok) {
-      return { ok: false, reason: "invalid-amount", error: "Use /deliver <rewardId> <mangoAmount>." };
-    }
+function resolvePrepareAssetType(input, reward) {
+  const requested = normalizeAssetType(input.assetType);
+  if (requested) {
+    return requested;
   }
+  if (reward && reward.amountBaseUnits && reward.assetType) {
+    return normalizeAssetType(reward.assetType) || ASSET_MANGO;
+  }
+  return ASSET_MANGO;
+}
 
+function commitOnchainRewardSession(input, ctx, plan) {
   const now = input.now === undefined ? Date.now() : input.now;
   const rawToken = crypto.randomBytes(TOKEN_BYTES).toString("base64url");
   const tokenHash = hashToken(rawToken);
   const deliveryId =
-    typeof reward.deliveryId === "string" && reward.deliveryId.trim()
-      ? reward.deliveryId.trim()
+    typeof ctx.reward.deliveryId === "string" && ctx.reward.deliveryId.trim()
+      ? ctx.reward.deliveryId.trim()
       : crypto.randomBytes(8).toString("hex");
   const expiresAt = now + DELIVERY_TTL_MS;
 
@@ -345,24 +463,31 @@ function prepareRewardDelivery(input = {}) {
     if (deliveryIdIsBound(store, deliveryId)) {
       return { ok: false, reason: "in-flight" };
     }
-    const existing = findActiveSessionForTarget(store, "reward", rewardId);
+    const existing = findActiveSessionForTarget(store, "reward", ctx.rewardId);
     if (existing) {
       return { ok: false, reason: "session-active" };
     }
     store.sessions[tokenHash] = createSessionRecord({
       purpose: PURPOSE_REWARD_DELIVERY,
       kind: "reward",
-      rewardId,
-      telegramUserId: reward.telegramUserId,
-      destination,
-      amountBaseUnits: amount.baseUnits,
-      expectedSigner: config.distributionWallet,
+      rewardId: ctx.rewardId,
+      telegramUserId: ctx.reward.telegramUserId,
+      destination: ctx.destination,
+      amountBaseUnits: plan.amountBaseUnits,
+      expectedSigner: ctx.config.distributionWallet,
       createdBy: input.adminUserId,
       now,
       expiresAt,
       deliveryId,
+      mint: plan.mint,
+      decimals: plan.decimals,
+      tokenProgram: plan.tokenProgram,
+      assetType: plan.assetType,
+      deliveryType: plan.deliveryType,
+      assetLabel: plan.assetLabel,
+      amountHuman: plan.amountHuman,
     });
-    store.sessions[tokenHash].rewardType = reward.type;
+    store.sessions[tokenHash].rewardType = ctx.reward.type;
     return { ok: true };
   }, input.deliveryFile);
 
@@ -375,9 +500,15 @@ function prepareRewardDelivery(input = {}) {
   }
 
   const planned = mutateRewardsStore((store) => {
-    return applyRewardPlan(store, rewardId, {
-      amountBaseUnits: amount.baseUnits,
+    return applyRewardPlan(store, ctx.rewardId, {
+      amountBaseUnits: plan.amountBaseUnits,
       deliveryId,
+      mint: plan.mint,
+      decimals: plan.decimals,
+      tokenProgram: plan.tokenProgram,
+      assetType: plan.assetType,
+      deliveryType: plan.deliveryType,
+      assetLabel: plan.assetLabel,
     });
   }, input.rewardsFile);
 
@@ -394,17 +525,214 @@ function prepareRewardDelivery(input = {}) {
     token: rawToken,
     url,
     expiresAt,
-    reward: getReward(rewardId, input.rewardsFile),
+    reward: getReward(ctx.rewardId, input.rewardsFile),
     review: reviewPayload({
-      ...sessionResult,
       kind: "reward",
-      rewardType: reward.type,
-      destination,
-      amountBaseUnits: amount.baseUnits,
-      expectedSigner: config.distributionWallet,
+      rewardType: ctx.reward.type,
+      destination: ctx.destination,
+      amountBaseUnits: plan.amountBaseUnits,
+      expectedSigner: ctx.config.distributionWallet,
       deliveryId,
+      mint: plan.mint,
+      decimals: plan.decimals,
+      tokenProgram: plan.tokenProgram,
+      assetType: plan.assetType,
+      deliveryType: plan.deliveryType,
+      assetLabel: plan.assetLabel,
+      amountHuman: plan.amountHuman,
     }),
   };
+}
+
+function prepareMangoRewardDelivery(input, ctx) {
+  if (!ctx.config.rpcUrl && !input.rpcUrl) {
+    return { ok: false, reason: "rpc-missing", error: publicError("disabled") };
+  }
+  let amount;
+  let amountHuman;
+  if (ctx.reward.amountBaseUnits) {
+    amount = parseBaseUnits(ctx.reward.amountBaseUnits);
+    if (!amount.ok || BigInt(amount.lamports) <= 0n) {
+      return { ok: false, reason: "invalid-amount", error: publicError("invalid") };
+    }
+    amount = { ok: true, baseUnits: amount.lamports, human: formatMangoHuman(amount.lamports) };
+    amountHuman = amount.human;
+  } else {
+    amount = mangoHumanToBaseUnits(input.amountHuman);
+    if (!amount.ok) {
+      return { ok: false, reason: "invalid-amount", error: "Use /deliver <rewardId> <mangoAmount>." };
+    }
+    amountHuman = amount.human;
+  }
+
+  return commitOnchainRewardSession(input, ctx, {
+    amountBaseUnits: amount.baseUnits,
+    amountHuman,
+    mint: MANGO_MINT,
+    decimals: MANGO_MINT_DECIMALS,
+    tokenProgram: TOKEN_PROGRAM_ID,
+    assetType: ASSET_MANGO,
+    deliveryType: DELIVERY_TYPE_MANGO_TOKEN,
+    assetLabel: "MANGO",
+  });
+}
+
+async function prepareTokenAssetDelivery(input, ctx, assetType) {
+  if (!ctx.config.rpcUrl && !input.rpcUrl) {
+    return { ok: false, reason: "rpc-missing", error: publicError("disabled") };
+  }
+  const expectNft = assetType === ASSET_NFT;
+  let mint;
+  let decimals;
+  let tokenProgram;
+  let amountBaseUnits;
+  let amountHuman;
+  let assetLabel;
+
+  const frozen =
+    ctx.reward.amountBaseUnits &&
+    ctx.reward.mint &&
+    (ctx.reward.assetType === assetType || (!ctx.reward.assetType && !input.mint));
+
+  if (frozen && ctx.reward.assetType === assetType) {
+    mint = normalizeSolanaPublicKey(ctx.reward.mint);
+    decimals = Number.isInteger(ctx.reward.decimals) ? ctx.reward.decimals : expectNft ? 0 : null;
+    tokenProgram = ctx.reward.tokenProgram || TOKEN_PROGRAM_ID;
+    amountBaseUnits = String(ctx.reward.amountBaseUnits);
+    amountHuman = expectNft ? "1" : formatBaseUnitsHuman(amountBaseUnits, decimals);
+    assetLabel = ctx.reward.assetLabel || assetTypeLabel(assetType);
+    if (!mint || !Number.isInteger(decimals)) {
+      return { ok: false, reason: "invalid-mint", error: "Enter a valid Solana mint address." };
+    }
+  } else {
+    mint = normalizeSolanaPublicKey(input.mint);
+    if (!mint) {
+      return { ok: false, reason: "invalid-mint", error: "Enter a valid Solana mint address." };
+    }
+    const inspectFn = typeof input.inspectMint === "function" ? input.inspectMint : inspectMint;
+    const info = await inspectFn(mint, {
+      sourceOwner: ctx.config.distributionWallet,
+      expectNft,
+      rpcUrl: input.rpcUrl,
+      env: input.env,
+    });
+    if (!info || !info.ok) {
+      return {
+        ok: false,
+        reason: (info && info.reason) || "invalid-mint",
+        error: (info && info.error) || "This mint could not be loaded.",
+      };
+    }
+    if (expectNft) {
+      amountBaseUnits = "1";
+      amountHuman = "1";
+    } else {
+      const converted = humanAmountToBaseUnits(input.amountHuman, info.decimals);
+      if (!converted.ok) {
+        return { ok: false, reason: "invalid-amount", error: "Enter a valid token amount." };
+      }
+      amountBaseUnits = converted.baseUnits;
+      amountHuman = converted.human;
+    }
+    const validated = validateSplMintInfo(info, { amountBaseUnits, expectNft });
+    if (!validated.ok) {
+      return {
+        ok: false,
+        reason: validated.reason,
+        error: validated.error,
+      };
+    }
+    decimals = info.decimals;
+    tokenProgram = info.tokenProgram || TOKEN_PROGRAM_ID;
+    assetLabel = expectNft ? "NFT" : assetTypeLabel(ASSET_SPL);
+  }
+
+  return commitOnchainRewardSession(input, ctx, {
+    amountBaseUnits,
+    amountHuman,
+    mint,
+    decimals,
+    tokenProgram,
+    assetType,
+    deliveryType: deliveryTypeForAsset(assetType),
+    assetLabel,
+  });
+}
+
+function prepareOffchainRewardDelivery(input, ctx) {
+  const now = input.now === undefined ? Date.now() : input.now;
+  const deliveryId =
+    typeof ctx.reward.deliveryId === "string" && ctx.reward.deliveryId.trim()
+      ? ctx.reward.deliveryId.trim()
+      : crypto.randomBytes(8).toString("hex");
+
+  const sessionGuard = mutateDeliveryStore((store) => {
+    pruneExpiredDeliverySessions(store, now);
+    const existing = findActiveSessionForTarget(store, "reward", ctx.rewardId);
+    if (existing) {
+      return { ok: false, reason: "session-active" };
+    }
+    return { ok: true };
+  }, input.deliveryFile);
+
+  if (!sessionGuard.ok) {
+    return {
+      ok: false,
+      reason: sessionGuard.reason,
+      error: publicError(sessionGuard.reason),
+    };
+  }
+
+  const planned = mutateRewardsStore((store) => {
+    return applyRewardPlan(store, ctx.rewardId, {
+      deliveryId,
+      assetType: ASSET_OFFCHAIN,
+      deliveryType: DELIVERY_TYPE_OFFCHAIN,
+      assetLabel: "Off-chain",
+    });
+  }, input.rewardsFile);
+
+  if (!planned.ok) {
+    return { ok: false, reason: planned.reason, error: publicError(planned.reason) };
+  }
+
+  return {
+    ok: true,
+    token: null,
+    url: null,
+    expiresAt: null,
+    offchain: true,
+    reward: getReward(ctx.rewardId, input.rewardsFile),
+    review: reviewPayload({
+      kind: "reward",
+      rewardType: ctx.reward.type,
+      destination: ctx.destination,
+      expectedSigner: ctx.config.distributionWallet,
+      deliveryId,
+      assetType: ASSET_OFFCHAIN,
+      deliveryType: DELIVERY_TYPE_OFFCHAIN,
+      assetLabel: "Off-chain",
+      amountBaseUnits: null,
+      mint: null,
+      decimals: null,
+      tokenProgram: null,
+    }),
+  };
+}
+
+function prepareRewardDelivery(input = {}) {
+  const gated = gatePrepareReward(input);
+  if (!gated.ok) {
+    return gated;
+  }
+  const assetType = resolvePrepareAssetType(input, gated.reward);
+  if (assetType === ASSET_SPL || assetType === ASSET_NFT) {
+    return prepareTokenAssetDelivery(input, gated, assetType);
+  }
+  if (assetType === ASSET_OFFCHAIN) {
+    return prepareOffchainRewardDelivery(input, gated);
+  }
+  return prepareMangoRewardDelivery(input, gated);
 }
 
 function findPendingPresaleContribution(userId, options = {}) {
@@ -565,6 +893,13 @@ async function issueDeliveryPayment(rawToken, options = {}) {
   if (session.status !== "ok") {
     return { ok: false, reason: "invalid", error: publicError("invalid") };
   }
+  if (isOffchainRecord(session.record)) {
+    return {
+      ok: false,
+      reason: "offchain",
+      error: "This delivery is off-chain and cannot be signed.",
+    };
+  }
   if (session.record.status === "consumed" || session.record.status === "submitted") {
     return { ok: false, reason: "in-flight", error: publicError("in-flight") };
   }
@@ -613,12 +948,28 @@ function ignoreClientOverrides(body, record) {
   if (dest && dest !== record.destination) {
     return { ok: false, reason: "wrong-destination" };
   }
+  const sessionMint = normalizeSolanaPublicKey(record.mint) || MANGO_MINT;
   const mint = normalizeSolanaPublicKey(body.mint);
-  if (mint && mint !== MANGO_MINT) {
+  if (mint && mint !== sessionMint) {
     return { ok: false, reason: "wrong-mint" };
   }
-  if (body.amountBaseUnits !== undefined && String(body.amountBaseUnits) !== record.amountBaseUnits) {
+  if (body.amountBaseUnits !== undefined && String(body.amountBaseUnits) !== String(record.amountBaseUnits)) {
     return { ok: false, reason: "wrong-amount" };
+  }
+  if (body.assetType !== undefined && body.assetType !== "" && body.assetType !== (record.assetType || ASSET_MANGO)) {
+    return { ok: false, reason: "wrong-asset" };
+  }
+  if (body.decimals !== undefined && body.decimals !== null && body.decimals !== "") {
+    const sessionDecimals = Number.isInteger(record.decimals) ? record.decimals : MANGO_MINT_DECIMALS;
+    if (Number(body.decimals) !== sessionDecimals) {
+      return { ok: false, reason: "wrong-decimals" };
+    }
+  }
+  if (body.tokenProgram) {
+    const sessionProgram = record.tokenProgram || TOKEN_PROGRAM_ID;
+    if (String(body.tokenProgram) !== String(sessionProgram)) {
+      return { ok: false, reason: "wrong-token-program" };
+    }
   }
   return { ok: true };
 }
@@ -805,11 +1156,9 @@ async function confirmPresaleDelivery(session, signature, options = {}) {
     };
   }
   const verified = verifyDeliveryTransaction(rpc.result, {
-    expectedSigner: session.record.expectedSigner,
-    destinationOwner: session.record.destination,
+    ...expectedFromRecord(session.record),
     mint: MANGO_MINT,
-    amountBaseUnits: session.record.amountBaseUnits,
-    memo: deliveryMemo(session.record.deliveryId),
+    tokenProgram: TOKEN_PROGRAM_ID,
     createdAt: session.record.createdAt,
   });
   if (!verified.ok) {
@@ -918,14 +1267,9 @@ async function confirmRewardSession(session, signature, options = {}) {
     signature,
     deliveryId: record.deliveryId,
     tokenHash: session.tokenHash,
-    expected: {
-      expectedSigner: record.expectedSigner,
-      destinationOwner: record.destination,
-      mint: MANGO_MINT,
-      amountBaseUnits: record.amountBaseUnits,
-      memo: deliveryMemo(record.deliveryId),
+    expected: expectedFromRecord(record, {
       createdAt: record.createdAt || existing.createdAt,
-    },
+    }),
     now,
     options,
   });
@@ -938,6 +1282,13 @@ async function confirmDelivery(rawToken, signature, options = {}) {
   }
   if (!session.record) {
     return { ok: false, reason: "expired", error: publicError("expired") };
+  }
+  if (isOffchainRecord(session.record)) {
+    return {
+      ok: false,
+      reason: "offchain",
+      error: "This delivery is off-chain and cannot be signed.",
+    };
   }
   if (!isPlausibleTxSignature(signature)) {
     return { ok: false, reason: "invalid-signature", error: publicError("invalid") };
@@ -980,6 +1331,13 @@ async function reconcileDeliveryPayment(input = {}) {
   const reward = getReward(rewardId, input.rewardsFile);
   if (!reward) {
     return { ok: false, reason: "missing", error: publicError("invalid") };
+  }
+  if (isOffchainRecord(reward)) {
+    return {
+      ok: false,
+      reason: "offchain",
+      error: "This delivery is off-chain and cannot be signed.",
+    };
   }
   if (reward.status === "cancelled") {
     return { ok: false, reason: "already-sent", error: publicError("already-sent") };
@@ -1050,14 +1408,11 @@ async function reconcileDeliveryPayment(input = {}) {
     signature,
     deliveryId: reward.deliveryId,
     tokenHash: found && found.hash,
-    expected: {
+    expected: expectedFromRecord(reward, {
       expectedSigner: config.distributionWallet,
       destinationOwner: reward.walletSnapshot,
-      mint: MANGO_MINT,
-      amountBaseUnits: reward.amountBaseUnits,
-      memo: deliveryMemo(reward.deliveryId),
       createdAt: reward.createdAt,
-    },
+    }),
     now,
     options: input,
   });
@@ -1074,6 +1429,91 @@ function listPendingRewardsForAdmin(userId, rewardsFile) {
   );
 }
 
+async function markOffchainDelivered(input = {}) {
+  if (!isAdmin(input.adminUserId)) {
+    return { ok: false, reason: "not-admin", error: publicError("not-admin") };
+  }
+  const rewardId = typeof input.rewardId === "string" ? input.rewardId.trim() : "";
+  const reward = getReward(rewardId, input.rewardsFile);
+  if (!reward) {
+    return { ok: false, reason: "missing", error: publicError("invalid") };
+  }
+  if (!isOffchainRecord(reward)) {
+    return {
+      ok: false,
+      reason: "not-offchain",
+      error: "This reward is not an off-chain delivery.",
+    };
+  }
+  if (reward.status === "cancelled") {
+    return { ok: false, reason: "already-sent", error: publicError("already-sent") };
+  }
+  const now = input.now === undefined ? Date.now() : input.now;
+  if (reward.status === "sent") {
+    await maybeNotifyMysteryGiftSent(reward, input);
+    return {
+      ok: true,
+      idempotent: true,
+      status: "sent",
+      deliveryState: "sent",
+      reward,
+    };
+  }
+
+  const note =
+    typeof input.deliveryNote === "string" ? input.deliveryNote.trim().slice(0, 500) : "";
+
+  const done = mutateRewardsStore((store) => {
+    const record = store.rewards[rewardId];
+    if (!record || typeof record !== "object") {
+      return { ok: false, reason: "missing" };
+    }
+    if (record.status === "sent") {
+      return { ok: true, idempotent: true, reward: { ...record, rewardId } };
+    }
+    if (record.status === "cancelled") {
+      return { ok: false, reason: "already-sent" };
+    }
+    record.status = "sent";
+    record.sentAt = now;
+    record.offchainDeliveredAt = now;
+    if (note) {
+      record.deliveryNote = note;
+    }
+    if (record.txSignature) {
+      record.txSignature = null;
+    }
+    return { ok: true, reward: { ...record, rewardId } };
+  }, input.rewardsFile);
+
+  if (!done.ok) {
+    return { ok: false, reason: done.reason, error: publicError(done.reason) };
+  }
+
+  if (reward.deliveryId) {
+    mutateDeliveryStore((store) => {
+      const found = findSessionByDeliveryId(store, reward.deliveryId);
+      if (found && found.record) {
+        found.record.status = "consumed";
+        found.record.consumedAt = now;
+      }
+      return { ok: true };
+    }, input.deliveryFile);
+  }
+
+  logDeliveryEvent("offchain sent");
+  await maybeNotifyMysteryGiftSent(done.reward, input);
+  return {
+    ok: true,
+    signature: null,
+    kind: "reward",
+    idempotent: Boolean(done.idempotent),
+    status: "sent",
+    deliveryState: "sent",
+    reward: getReward(rewardId, input.rewardsFile),
+  };
+}
+
 module.exports = {
   hashToken,
   lookupDeliverySession,
@@ -1084,11 +1524,14 @@ module.exports = {
   issueDeliveryPayment,
   confirmDelivery,
   reconcileDeliveryPayment,
+  markOffchainDelivered,
   publicStatusForSession,
   publicDeliveryState,
   listPendingRewardsForAdmin,
   publicError,
   ignoreClientOverrides,
   reviewPayload,
+  expectedFromRecord,
   withDeliveryRpc,
+  isOffchainRecord,
 };
