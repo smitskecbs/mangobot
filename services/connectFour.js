@@ -230,7 +230,7 @@ function formatXpLine(xpResult, rewardEligible) {
     return "PvP XP: none";
   }
   if (xpResult && xpResult.reason === "wallet-required") {
-    return "PvP XP: wallet required — /wallet";
+    return "PvP XP: 🔒 0 XP — wallet not linked — /wallet";
   }
   return "PvP XP: none";
 }

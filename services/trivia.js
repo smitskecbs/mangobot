@@ -501,7 +501,7 @@ function createTriviaService(options = {}) {
         (r) => r && r.reason === "wallet-required"
       );
       if (walletLocked) {
-        return "Trivia XP: wallet required — /wallet";
+        return "Trivia XP: 🔒 0 XP — wallet not linked — /wallet";
       }
       return "Trivia XP: none";
     }

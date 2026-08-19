@@ -24,6 +24,7 @@ const {
   getRank,
   getTodayDate,
   formatPointsCard,
+  publicGameXpFromAward,
   TRIVIA_ROUND_WIN_XP,
   XP_WALLET_REQUIRED,
 } = require("../services/points");
@@ -34,6 +35,8 @@ const {
   resetXpWalletRemindersForTests,
   setXpWalletAutoLinkForTests,
   XP_WALLET_REMINDER_TEXT,
+  XP_WALLET_TRIGGER_REMINDER_TEXT,
+  XP_WALLET_GAME_LOCKED_TEXT,
   XP_WALLET_LOCKED_POINTS_LINE,
 } = require("../services/xpWalletGate");
 const {
@@ -56,6 +59,7 @@ const { formatMemberCheck } = require("../commands/membercheck");
 const { getMemberActivityProfile } = require("../services/memberActivityProfile");
 const { isRewardEligible } = require("../services/memberRewards");
 const { submitScore } = require("../services/snakeScores");
+const { buildWinnerReply } = require("../services/chatFight");
 
 setXpWalletAutoLinkForTests(false);
 
@@ -242,6 +246,7 @@ runTest("20. reminder does not spam", () => {
   });
   assert.strictEqual(first.activityResult.reason, XP_WALLET_REQUIRED);
   assert.strictEqual(first.reply, XP_WALLET_REMINDER_TEXT);
+  assert.ok(first.reply.includes("🔒 XP locked"));
   const second = processCommunityMessage(groupCtx(18, "hello again"), {
     pointsFile,
     walletFile,
@@ -257,6 +262,16 @@ runTest("21. gm unlinked → 0 XP", () => {
   assert.strictEqual(result.awarded, false);
   assert.strictEqual(result.reason, XP_WALLET_REQUIRED);
   assert.strictEqual(loadPoints(pointsFile).users["19"] ? loadPoints(pointsFile).users["19"].points : 0, 0);
+  const msg = processCommunityMessage(groupCtx(19, "gm"), {
+    pointsFile,
+    walletFile,
+    now: 30_000,
+  });
+  assert.strictEqual(msg.triggerResult.awarded, false);
+  assert.ok(!msg.triggerResult.awarded);
+  assert.strictEqual(msg.reply, XP_WALLET_TRIGGER_REMINDER_TEXT);
+  const used = loadPoints(pointsFile).users["19"];
+  assert.ok(!used || !Array.isArray(used.triggersUsed) || !used.triggersUsed.includes("gm"));
 });
 
 runTest("22. gm linked → XP", () => {
@@ -297,6 +312,9 @@ runTest("25. Snake unlinked → highscore works, XP 0", () => {
   const xp = awardSnakeGameXp(25, "Guest", pointsFile, walletFile);
   assert.strictEqual(xp.awarded, false);
   assert.strictEqual(xp.reason, XP_WALLET_REQUIRED);
+  const payload = publicGameXpFromAward(xp);
+  assert.strictEqual(payload.walletRequired, true);
+  assert.strictEqual(payload.message, XP_WALLET_GAME_LOCKED_TEXT);
   assert.deepStrictEqual(loadPoints(pointsFile), { users: {} });
   const spoof = awardSnakeGameXp(25, "Guest", pointsFile, walletFile);
   assert.strictEqual(spoof.awarded, false);
@@ -306,6 +324,7 @@ runTest("26. Bounch unlinked → XP 0, play state not consumed", () => {
   const { pointsFile, walletFile } = files();
   const blocked = awardBounchGameXp(26, "Ada", 3, pointsFile, walletFile);
   assert.strictEqual(blocked.awarded, false);
+  assert.strictEqual(publicGameXpFromAward(blocked).message, XP_WALLET_GAME_LOCKED_TEXT);
   registerManualWallet(26, generateSolanaWallet().address, walletFile, 9000);
   const later = awardBounchGameXp(26, "Ada", 3, pointsFile, walletFile);
   assert.strictEqual(later.awarded, true);
@@ -317,6 +336,8 @@ runTest("27. Trivia correct unlinked → XP 0", () => {
   const blocked = awardTriviaRoundXp(27, "Ada", TRIVIA_ROUND_WIN_XP, pointsFile, walletFile);
   assert.strictEqual(blocked.awarded, false);
   assert.strictEqual(blocked.reason, XP_WALLET_REQUIRED);
+  const triviaSrc = fs.readFileSync(path.join(__dirname, "../services/trivia.js"), "utf8");
+  assert.ok(triviaSrc.includes("Trivia XP: 🔒 0 XP — wallet not linked — /wallet"));
   registerManualWallet(27, generateSolanaWallet().address, walletFile, 10_000);
   const later = awardTriviaRoundXp(27, "Ada", TRIVIA_ROUND_WIN_XP, pointsFile, walletFile);
   assert.strictEqual(later.awarded, true);
@@ -329,6 +350,20 @@ runTest("28. linked game XP amounts unchanged", () => {
   assert.strictEqual(awardSnakeGameXp(28, "Ada", pointsFile, walletFile).pointsToAdd, 1);
   assert.strictEqual(awardPvpWinXp(28, "Ada", pointsFile, walletFile).pointsToAdd, 3);
   assert.strictEqual(awardChatFightXp(28, "Ada", pointsFile, walletFile).pointsToAdd, 2);
+});
+
+runTest("26b. PvP/ChatFight blocked XP feedback", () => {
+  const { pointsFile, walletFile } = files();
+  const pvp = awardPvpWinXp(260, "Ada", pointsFile, walletFile);
+  assert.strictEqual(pvp.reason, XP_WALLET_REQUIRED);
+  const fight = awardChatFightXp(261, "Ada", pointsFile, walletFile);
+  assert.strictEqual(fight.reason, XP_WALLET_REQUIRED);
+  const reply = buildWinnerReply("Ada", fight);
+  assert.ok(reply.includes("🔒 0 XP — wallet not linked — /wallet"));
+  const ttt = fs.readFileSync(path.join(__dirname, "../services/ticTacToe.js"), "utf8");
+  const c4 = fs.readFileSync(path.join(__dirname, "../services/connectFour.js"), "utf8");
+  assert.ok(ttt.includes("PvP XP: 🔒 0 XP — wallet not linked — /wallet"));
+  assert.ok(c4.includes("PvP XP: 🔒 0 XP — wallet not linked — /wallet"));
 });
 
 runTest("29. no duplicate wallet reminder spam", () => {
@@ -395,6 +430,9 @@ runTest("36. no production files touched", () => {
 runTest("37. no secrets in reminder/list copy", () => {
   assert.ok(!/BOT_TOKEN|private key|seed/i.test(XP_WALLET_REMINDER_TEXT));
   assert.ok(!XP_WALLET_REMINDER_TEXT.includes("cryptographically verified"));
+  assert.ok(XP_WALLET_REMINDER_TEXT.includes("🔒 XP locked"));
+  assert.ok(XP_WALLET_TRIGGER_REMINDER_TEXT.includes("/wallet"));
+  assert.ok(XP_WALLET_GAME_LOCKED_TEXT.includes("Game completed"));
 });
 
 runTest("membercheck XP earning lines", () => {

@@ -17,15 +17,28 @@ const XP_WALLET_REMINDER_COOLDOWN_MS = 60 * 60 * 1000;
 const REMINDER_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const REMINDER_MAX_KEYS = 4000;
 
-const XP_WALLET_REMINDER_TEXT = `🔒 Link your wallet to earn XP
+const XP_WALLET_REMINDER_TEXT = `🔒 XP locked
+
+You need to link a Solana wallet to your ManGo profile before you can earn XP.
 
 Use /wallet and choose:
-
 🌐 Connect & Verify
 or
 ⌨️ Enter Wallet Address
 
 Both methods unlock XP earning. 🥭`;
+
+const XP_WALLET_TRIGGER_REMINDER_TEXT = `🔒 XP locked
+
+Link your wallet with /wallet before earning XP. 🥭`;
+
+const XP_WALLET_GAME_LOCKED_TEXT = `🎮 Game completed
+
+🔒 0 XP — wallet not linked
+
+Use /wallet to unlock XP earning. 🥭`;
+
+const XP_WALLET_GAME_LOCKED_LINE = "🔒 0 XP — wallet not linked — /wallet";
 
 const XP_WALLET_LOCKED_POINTS_LINE = `🔒 XP earning locked
 Link a wallet with /wallet to continue earning XP.`;
@@ -118,7 +131,7 @@ function resetXpWalletRemindersForTests() {
   reminderStamps.clear();
 }
 
-function reminderForBlockedXp(userId, results, now) {
+function reminderForBlockedXp(userId, results, now, options = {}) {
   const blocked = (Array.isArray(results) ? results : [results]).some(
     (row) => row && row.reason === XP_WALLET_REQUIRED
   );
@@ -128,6 +141,9 @@ function reminderForBlockedXp(userId, results, now) {
   if (!takeXpWalletReminder(userId, now)) {
     return null;
   }
+  if (options.trigger) {
+    return XP_WALLET_TRIGGER_REMINDER_TEXT;
+  }
   return XP_WALLET_REMINDER_TEXT;
 }
 
@@ -135,6 +151,9 @@ module.exports = {
   XP_WALLET_REQUIRED,
   XP_WALLET_REMINDER_COOLDOWN_MS,
   XP_WALLET_REMINDER_TEXT,
+  XP_WALLET_TRIGGER_REMINDER_TEXT,
+  XP_WALLET_GAME_LOCKED_TEXT,
+  XP_WALLET_GAME_LOCKED_LINE,
   XP_WALLET_LOCKED_POINTS_LINE,
   XP_EARNING_ENABLED_LINE,
   XP_EARNING_LOCKED_LINE,

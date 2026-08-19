@@ -360,18 +360,23 @@ function publicWalletRecord(record) {
 }
 
 /**
- * Any linked payout wallet (manual registered or signature verified).
+ * Resolve a linked wallet from an already-loaded store. No extra disk lock.
+ * Used by /walletlist so pagination does not re-lock wallet-links.json per member.
+ * @param {ReturnType<typeof emptyStore>|null|undefined} store
  * @param {string|number} userId
- * @param {string} [walletFile]
  * @returns {{ wallet: string, verified: boolean, verifiedAt: number, updatedAt: number, registeredAt: number, registrationMethod: string }|null}
  */
-function getLinkedWalletForUser(userId, walletFile) {
+function getLinkedWalletFromStore(store, userId) {
   const uid = normalizeUserId(userId);
-  if (!uid) {
+  if (!uid || !store || !store.users) {
     return null;
   }
-  const store = loadWalletStore(walletFile);
   return publicWalletRecord(store.users[uid]);
+}
+
+/** Any linked payout wallet (manual registered or signature verified). */
+function getLinkedWalletForUser(userId, walletFile) {
+  return getLinkedWalletFromStore(loadWalletStore(walletFile), userId);
 }
 
 /**
@@ -627,6 +632,7 @@ module.exports = {
   readWalletSnapshot,
   pruneExpired,
   getLinkedWalletForUser,
+  getLinkedWalletFromStore,
   getVerifiedWalletForUser,
   isWalletVerified,
   isWalletRegistered,

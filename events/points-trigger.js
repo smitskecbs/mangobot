@@ -195,8 +195,9 @@ function processCommunityMessage(ctx, options = {}) {
   }
   const reminder = reminderForBlockedXp(
     userId,
-    [activityResult, triggerResult, fightAward],
-    options.now
+    [activityResult, triggerResult],
+    options.now,
+    { trigger: Boolean(triggerResult && triggerResult.reason === "wallet-required") }
   );
   return { activityResult, triggerResult, reply: reminder };
 }

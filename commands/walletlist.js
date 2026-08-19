@@ -3,13 +3,13 @@
  * Pagination callbacks carry only a page index. No full wallets. No uids.
  */
 
-const { Markup } = require("telegraf");
 const { isAdmin } = require("../services/points");
 const { isPrivateChat } = require("../utils/botMenu");
 const {
   buildWalletListPage,
   parseWalletListCallback,
   walletListCallbackData,
+  walletListNavButtons,
   WALLET_LIST_CALLBACK_PREFIX,
 } = require("../services/walletList");
 
@@ -17,21 +17,17 @@ const ADMIN_ONLY = "This command is admin only.";
 const GROUP_WALLET_LIST_TEXT =
   "Open a private chat with the bot to view the wallet overview.";
 
+function isMessageNotModified(err) {
+  const desc = err && (err.description || err.message || "");
+  return String(desc).toLowerCase().includes("message is not modified");
+}
+
 function walletListKeyboard(page, lastPage) {
-  if (lastPage <= 0) {
-    return undefined;
-  }
-  const row = [];
-  if (page > 0) {
-    row.push(Markup.button.callback("« Previous", walletListCallbackData(page - 1)));
-  }
-  if (page < lastPage) {
-    row.push(Markup.button.callback("Next »", walletListCallbackData(page + 1)));
-  }
+  const row = walletListNavButtons(page, lastPage);
   if (!row.length) {
     return undefined;
   }
-  return Markup.inlineKeyboard([row]);
+  return { reply_markup: { inline_keyboard: [row] } };
 }
 
 function renderWalletList(options = {}) {
@@ -46,6 +42,31 @@ function renderWalletList(options = {}) {
     extra,
     built,
   };
+}
+
+async function safeAnswerCbQuery(ctx, extra) {
+  if (!ctx || typeof ctx.answerCbQuery !== "function") {
+    return;
+  }
+  try {
+    if (extra) {
+      await ctx.answerCbQuery(extra.text || "", extra);
+    } else {
+      await ctx.answerCbQuery();
+    }
+  } catch (_err) {
+    /* already answered or query expired */
+  }
+}
+
+function callbackDataFromCtx(ctx) {
+  if (ctx && ctx.callbackQuery && typeof ctx.callbackQuery.data === "string") {
+    return ctx.callbackQuery.data;
+  }
+  if (ctx && ctx.match && typeof ctx.match[0] === "string") {
+    return ctx.match[0];
+  }
+  return "";
 }
 
 function handleWalletList(ctx, options = {}) {
@@ -74,32 +95,40 @@ async function handleWalletListCallback(ctx, options = {}) {
   if (!ctx || !ctx.from || !ctx.callbackQuery) {
     return undefined;
   }
-  const parsed = parseWalletListCallback(ctx.callbackQuery.data);
+  const parsed = parseWalletListCallback(callbackDataFromCtx(ctx));
   if (!parsed) {
+    await safeAnswerCbQuery(ctx);
     return undefined;
   }
-  if (typeof ctx.answerCbQuery === "function") {
-    await ctx.answerCbQuery();
-  }
   if (!isPrivateChat(ctx)) {
+    await safeAnswerCbQuery(ctx);
     if (isAdmin(ctx.from.id)) {
       return ctx.reply(GROUP_WALLET_LIST_TEXT);
     }
     return undefined;
   }
   if (!isAdmin(ctx.from.id)) {
+    await safeAnswerCbQuery(ctx, { text: ADMIN_ONLY, show_alert: true });
     return ctx.reply(ADMIN_ONLY);
   }
+  await safeAnswerCbQuery(ctx);
   const rendered = renderWalletList({
     page: parsed.page,
     pointsFile: options.pointsFile,
     walletFile: options.walletFile,
     pageSize: options.pageSize,
   });
-  if (typeof ctx.editMessageText === "function") {
-    return ctx.editMessageText(rendered.text, rendered.extra);
+  if (typeof ctx.editMessageText !== "function") {
+    return ctx.reply(rendered.text, rendered.extra);
   }
-  return ctx.reply(rendered.text, rendered.extra);
+  try {
+    return await ctx.editMessageText(rendered.text, rendered.extra);
+  } catch (err) {
+    if (isMessageNotModified(err)) {
+      return undefined;
+    }
+    return ctx.reply(rendered.text, rendered.extra);
+  }
 }
 
 module.exports = (bot) => {
@@ -114,3 +143,5 @@ module.exports.handleWalletListCallback = handleWalletListCallback;
 module.exports.GROUP_WALLET_LIST_TEXT = GROUP_WALLET_LIST_TEXT;
 module.exports.ADMIN_ONLY = ADMIN_ONLY;
 module.exports.renderWalletList = renderWalletList;
+module.exports.walletListKeyboard = walletListKeyboard;
+module.exports.walletListCallbackData = walletListCallbackData;

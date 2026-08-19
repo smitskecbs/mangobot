@@ -66,6 +66,10 @@ const { pruneTimestampMap } = require("./utils/boundedMap");
 const { installProcessGuards } = require("./utils/processGuards");
 const { noteRuntimeEvent } = require("./utils/runtimeHealth");
 const { error: logError, log } = require("./utils/logger");
+const {
+  takeXpWalletReminder,
+  XP_WALLET_GAME_LOCKED_TEXT,
+} = require("./services/xpWalletGate");
 
 const PORT = Number.parseInt(process.env.PORT || "8787", 10);
 const BOT_TOKEN = process.env.BOT_TOKEN?.trim();
@@ -178,7 +182,12 @@ function sendJson(res, statusCode, body, origin, identity, xp) {
         awarded: Number(xp.awarded) || 0,
         dailyPlay: Number(xp.dailyPlay) || 0,
         unlock: Number(xp.unlock) || 0,
-        ...(xp.walletRequired ? { walletRequired: true } : {}),
+        ...(xp.walletRequired
+          ? {
+              walletRequired: true,
+              ...(xp.message ? { message: xp.message } : {}),
+            }
+          : {}),
       },
     };
   }
@@ -246,6 +255,44 @@ async function sendTelegramMessage(text) {
   }
 }
 
+function isTestProcess() {
+  for (const arg of process.argv) {
+    if (typeof arg !== "string") {
+      continue;
+    }
+    const norm = arg.replace(/\\/g, "/");
+    if (norm.includes("/tests/") || /\.test\.js$/i.test(norm)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function notifyWalletLockedXp(identity, xp) {
+  if (!xp || !xp.walletRequired || !identity || !identity.verified || !identity.uid) {
+    return;
+  }
+  if (!BOT_TOKEN || isTestProcess()) {
+    return;
+  }
+  if (!takeXpWalletReminder(identity.uid)) {
+    return;
+  }
+  const chatId = identity.uid;
+  fetchWithTimeout(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text: xp.message || XP_WALLET_GAME_LOCKED_TEXT,
+      disable_web_page_preview: true,
+    }),
+    timeoutMs: TELEGRAM_TIMEOUT_MS,
+  }).catch(() => {
+    /* private CTA is best-effort; score already persisted */
+  });
+}
+
 async function handleSnakeHighscore(req, res, origin) {
   if (isRateLimited(clientIp(req))) {
     sendJson(res, 429, { ok: false, error: "Too many submissions. Try again later." }, origin);
@@ -298,6 +345,7 @@ async function handleSnakeHighscore(req, res, origin) {
 
   // XP only after a valid persisted submit; failures here must not undo the score.
   const xp = tryAwardSnakeGameXp(identity, name);
+  notifyWalletLockedXp(identity, xp);
 
   const { data, result } = submission;
 
@@ -438,6 +486,7 @@ async function handleBounchHighscore(req, res, origin) {
 
   // XP only after a valid persisted submit; failures here must not undo the level.
   const xp = tryAwardBounchGameXp(identity, name, level);
+  notifyWalletLockedXp(identity, xp);
 
   const { data, result } = submission;
 

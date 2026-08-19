@@ -36,6 +36,7 @@ const {
   handleWalletListCallback,
   GROUP_WALLET_LIST_TEXT,
   ADMIN_ONLY,
+  renderWalletList,
 } = require("../commands/walletlist");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-walletlist-"));
@@ -105,13 +106,16 @@ function createMockCtx({
 } = {}) {
   const replies = [];
   const edits = [];
+  const answers = [];
   return {
     chat: { type: chatType, id: chatType === "private" ? userId : -1001 },
     from: { id: userId, first_name: "Admin" },
     callbackQuery: callbackData ? { data: callbackData } : undefined,
     replies,
     edits,
-    answerCbQuery() {
+    answers,
+    answerCbQuery(text, extra) {
+      answers.push({ text: text || "", extra });
       return Promise.resolve();
     },
     reply(text, extra) {
@@ -245,13 +249,21 @@ pending.push(
     const first = buildWalletListPage({ pointsFile, walletFile, pageSize: 25, page: 0 });
     const second = buildWalletListPage({ pointsFile, walletFile, pageSize: 25, page: 1 });
     const stale = buildWalletListPage({ pointsFile, walletFile, pageSize: 25, page: 99 });
+    const stringPage = buildWalletListPage({ pointsFile, walletFile, pageSize: 25, page: "1" });
     assert.strictEqual(first.page, 0);
     assert.strictEqual(first.rows.length, 25);
     assert.strictEqual(second.page, 1);
     assert.strictEqual(second.rows.length, 1);
     assert.strictEqual(stale.page, 1);
+    assert.strictEqual(stringPage.page, 1);
     assert.ok(first.text.includes("Page 1/2"));
     assert.ok(!JSON.stringify(first).includes("telegramUserId"));
+    const firstNav = renderWalletList({ pointsFile, walletFile, pageSize: 25, page: 0 });
+    const secondNav = renderWalletList({ pointsFile, walletFile, pageSize: 25, page: 1 });
+    const firstBtns = firstNav.extra.reply_markup.inline_keyboard[0].map((b) => b.text);
+    const secondBtns = secondNav.extra.reply_markup.inline_keyboard[0].map((b) => b.text);
+    assert.deepStrictEqual(firstBtns, ["Next ➡️"]);
+    assert.deepStrictEqual(secondBtns, ["⬅️ Previous"]);
   })
 );
 
@@ -269,13 +281,16 @@ pending.push(
     const admin = createMockCtx({ callbackData: "wlst:1" });
     await handleWalletListCallback(admin, { pointsFile, walletFile, pageSize: 25 });
     assert.ok(admin.edits[0].text.includes("Page 2/2"));
+    assert.strictEqual(admin.answers.length, 1);
     const outsider = createMockCtx({ userId: 77, callbackData: "wlst:1" });
     await handleWalletListCallback(outsider, { pointsFile, walletFile, pageSize: 25 });
     assert.strictEqual(outsider.replies[0].text, ADMIN_ONLY);
+    assert.ok(outsider.answers.length >= 1);
     const group = createMockCtx({ chatType: "group", callbackData: "wlst:1" });
     await handleWalletListCallback(group, { pointsFile, walletFile, pageSize: 25 });
     assert.strictEqual(group.replies[0].text, GROUP_WALLET_LIST_TEXT);
     assert.ok(!group.replies[0].text.includes("N01"));
+    assert.ok(group.answers.length >= 1);
   })
 );
 
@@ -286,6 +301,108 @@ pending.push(
     const page = buildWalletListPage({ pointsFile, walletFile });
     assert.ok(page.text.includes("&lt;script&gt;Kevin&lt;/script&gt;"));
     assert.ok(!page.text.includes("<script>Kevin</script>"));
+  })
+);
+
+function seedMixedSixty(pointsFile, walletFile) {
+  const users = {};
+  for (let i = 1; i <= 40; i += 1) {
+    users[String(1000 + i)] = `None${String(i).padStart(2, "0")}`;
+  }
+  for (let i = 1; i <= 12; i += 1) {
+    users[String(2000 + i)] = `Reg${String(i).padStart(2, "0")}`;
+  }
+  for (let i = 1; i <= 8; i += 1) {
+    users[String(3000 + i)] = `Ver${String(i).padStart(2, "0")}`;
+  }
+  seedPoints(pointsFile, users);
+  for (let i = 1; i <= 12; i += 1) {
+    registerManualWallet(2000 + i, generateSolanaWallet().address, walletFile, 1000 + i);
+  }
+  for (let i = 1; i <= 8; i += 1) {
+    verifyUser(walletFile, 3000 + i, generateSolanaWallet(), 5000 + i * 10);
+  }
+}
+
+pending.push(
+  runTest("1-16. mixed 60 users full-list pagination", async () => {
+    const { pointsFile, walletFile } = files();
+    seedMixedSixty(pointsFile, walletFile);
+    const all = collectWalletListRows({ pointsFile, walletFile });
+    assert.strictEqual(all.length, 60);
+    const summary = summarizeWalletList(all);
+    assert.strictEqual(summary.none, 40);
+    assert.strictEqual(summary.registered, 12);
+    assert.strictEqual(summary.verified, 8);
+    assert.deepStrictEqual(
+      all.map((r) => r.status),
+      [
+        ...Array(40).fill("none"),
+        ...Array(12).fill("registered"),
+        ...Array(8).fill("verified"),
+      ]
+    );
+    const p0 = buildWalletListPage({ pointsFile, walletFile, pageSize: 25, page: 0 });
+    const p1 = buildWalletListPage({ pointsFile, walletFile, pageSize: 25, page: 1 });
+    const p2 = buildWalletListPage({ pointsFile, walletFile, pageSize: 25, page: 2 });
+    assert.strictEqual(p0.rows.length, 25);
+    assert.strictEqual(p1.rows.length, 25);
+    assert.strictEqual(p2.rows.length, 10);
+    assert.ok(p0.rows.every((r) => r.status === "none"));
+    assert.ok(p1.rows.some((r) => r.status === "registered"));
+    assert.ok(p2.rows.some((r) => r.status === "registered"));
+    assert.ok(p2.rows.some((r) => r.status === "verified"));
+    assert.ok(p0.text.includes("None01"));
+    assert.ok(p1.text.includes("Reg"));
+    assert.ok(p2.text.includes("Ver"));
+    assert.ok(!p0.text.includes("Reg01"));
+    assert.ok(!p0.text.includes("Ver01"));
+    const combined = [...p0.rows, ...p1.rows, ...p2.rows];
+    const ids = combined.map((r) => r.userId);
+    assert.strictEqual(ids.length, 60);
+    assert.strictEqual(new Set(ids).size, 60);
+    for (const page of [p0, p1, p2]) {
+      assert.strictEqual(page.summary.none, 40);
+      assert.strictEqual(page.summary.registered, 12);
+      assert.strictEqual(page.summary.verified, 8);
+      assert.strictEqual(page.summary.total, 60);
+    }
+    const firstNav = renderWalletList({ pointsFile, walletFile, pageSize: 25, page: 0 });
+    const midNav = renderWalletList({ pointsFile, walletFile, pageSize: 25, page: 1 });
+    const lastNav = renderWalletList({ pointsFile, walletFile, pageSize: 25, page: 2 });
+    assert.deepStrictEqual(
+      firstNav.extra.reply_markup.inline_keyboard[0].map((b) => b.callback_data),
+      ["wlst:1"]
+    );
+    assert.deepStrictEqual(
+      midNav.extra.reply_markup.inline_keyboard[0].map((b) => b.callback_data),
+      ["wlst:0", "wlst:2"]
+    );
+    assert.deepStrictEqual(
+      lastNav.extra.reply_markup.inline_keyboard[0].map((b) => b.callback_data),
+      ["wlst:1"]
+    );
+    const next = createMockCtx({ callbackData: "wlst:1" });
+    await handleWalletListCallback(next, { pointsFile, walletFile, pageSize: 25 });
+    assert.ok(next.edits[0].text.includes("Page 2/3"));
+    assert.ok(next.edits[0].text.includes("Reg"));
+    assert.strictEqual(next.answers.length, 1);
+    const next2 = createMockCtx({ callbackData: "wlst:2" });
+    await handleWalletListCallback(next2, { pointsFile, walletFile, pageSize: 25 });
+    assert.ok(next2.edits[0].text.includes("Page 3/3"));
+    assert.ok(next2.edits[0].text.includes("Ver"));
+    const prev = createMockCtx({ callbackData: "wlst:0" });
+    await handleWalletListCallback(prev, { pointsFile, walletFile, pageSize: 25 });
+    assert.ok(prev.edits[0].text.includes("Page 1/3"));
+    const stuck = createMockCtx({ callbackData: "wlst:1" });
+    stuck.editMessageText = () => {
+      const err = new Error("Bad Request: message is not modified");
+      err.description = "Bad Request: message is not modified";
+      return Promise.reject(err);
+    };
+    await handleWalletListCallback(stuck, { pointsFile, walletFile, pageSize: 25 });
+    assert.strictEqual(stuck.answers.length, 1);
+    assert.strictEqual(stuck.edits.length, 0);
   })
 );
 

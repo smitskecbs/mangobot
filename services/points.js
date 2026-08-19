@@ -15,6 +15,7 @@ const {
   canEarnXp,
   XP_WALLET_REQUIRED,
   XP_WALLET_LOCKED_POINTS_LINE,
+  XP_WALLET_GAME_LOCKED_TEXT,
 } = require("./xpWalletGate");
 
 const POINTS_FILE = path.join(__dirname, "..", "points.json");
@@ -758,6 +759,7 @@ function publicGameXpFromAward(result) {
   }
   if (result && result.reason === XP_WALLET_REQUIRED) {
     payload.walletRequired = true;
+    payload.message = XP_WALLET_GAME_LOCKED_TEXT;
   }
   return payload;
 }

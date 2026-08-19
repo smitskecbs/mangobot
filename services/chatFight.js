@@ -353,7 +353,7 @@ function buildWinnerReply(userName, awardResult) {
         : CHAT_FIGHT_XP;
     lines.push(`+${xp} XP 🥭`);
   } else if (awardResult && awardResult.reason === "wallet-required") {
-    lines.push("🔒 Wallet required for XP — /wallet");
+    lines.push("🔒 0 XP — wallet not linked — /wallet");
   }
   if (awardResult && awardResult.rankUp && awardResult.rank) {
     lines.push(`${awardResult.rank.emoji} Rank up: ${awardResult.rank.title}!`);

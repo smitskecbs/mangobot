@@ -1,10 +1,14 @@
 /**
  * Admin wallet overview. Short wallets only. No uids in public callback data.
+ * Pagination walks the full sorted member list (not a Not-linked-only filter).
  */
 
 const { loadPoints } = require("./points");
-const { loadWalletStore, getLinkedWalletForUser } = require("./walletLinks");
-const { getXpWalletLinkStatus } = require("./xpWalletGate");
+const {
+  resolveWalletFile,
+  readWalletSnapshot,
+  getLinkedWalletFromStore,
+} = require("./walletLinks");
 const { shortenWallet } = require("../utils/solanaWallet");
 
 const WALLET_LIST_PAGE_SIZE = 25;
@@ -33,17 +37,40 @@ function displayNameFor(userId, pointsUser) {
   return "Member";
 }
 
+function statusFromLinked(linked) {
+  if (!linked || !linked.wallet) {
+    return "none";
+  }
+  if (linked.verified) {
+    return "verified";
+  }
+  return "registered";
+}
+
+function collectWalletIds(points, walletStore) {
+  const ids = new Set();
+  for (const userId of Object.keys((points && points.users) || {})) {
+    ids.add(String(userId));
+  }
+  for (const userId of Object.keys((walletStore && walletStore.users) || {})) {
+    ids.add(String(userId));
+  }
+  for (const ownerId of Object.values((walletStore && walletStore.wallets) || {})) {
+    if (ownerId != null && String(ownerId).trim()) {
+      ids.add(String(ownerId));
+    }
+  }
+  return ids;
+}
+
 function collectWalletListRows(options = {}) {
   const points = loadPoints(options.pointsFile);
-  const walletStore = loadWalletStore(options.walletFile);
-  const ids = new Set([
-    ...Object.keys((points && points.users) || {}),
-    ...Object.keys((walletStore && walletStore.users) || {}),
-  ]);
+  const walletStore = readWalletSnapshot(resolveWalletFile(options.walletFile));
+  const ids = collectWalletIds(points, walletStore);
   const rows = [];
   for (const userId of ids) {
-    const status = getXpWalletLinkStatus(userId, options.walletFile);
-    const linked = status === "none" ? null : getLinkedWalletForUser(userId, options.walletFile);
+    const linked = getLinkedWalletFromStore(walletStore, userId);
+    const status = statusFromLinked(linked);
     const name = displayNameFor(userId, points.users && points.users[userId]);
     rows.push({
       userId,
@@ -83,9 +110,19 @@ function pageCount(total, pageSize = WALLET_LIST_PAGE_SIZE) {
   return Math.max(1, Math.ceil(total / pageSize));
 }
 
+function toPageIndex(page) {
+  if (typeof page === "number" && Number.isFinite(page)) {
+    return Math.trunc(page);
+  }
+  if (typeof page === "string" && /^-?\d+$/.test(page.trim())) {
+    return Number.parseInt(page, 10);
+  }
+  return 0;
+}
+
 function clampPage(page, total, pageSize = WALLET_LIST_PAGE_SIZE) {
   const last = pageCount(total, pageSize) - 1;
-  const n = Number.isInteger(page) ? page : 0;
+  const n = toPageIndex(page);
   if (n < 0) {
     return 0;
   }
@@ -108,7 +145,7 @@ function buildWalletListPage(options = {}) {
   const pageSize = options.pageSize || WALLET_LIST_PAGE_SIZE;
   const rows = collectWalletListRows(options);
   const summary = summarizeWalletList(rows);
-  const page = clampPage(options.page || 0, rows.length, pageSize);
+  const page = clampPage(options.page ?? 0, rows.length, pageSize);
   const start = page * pageSize;
   const slice = rows.slice(start, start + pageSize);
   const lines = ["<b>🥭 ManGo Wallet Overview</b>", ""];
@@ -137,6 +174,7 @@ function buildWalletListPage(options = {}) {
     lastPage: last,
     summary,
     rows: slice,
+    allRows: rows,
     total: rows.length,
   };
 }
@@ -153,7 +191,21 @@ function parseWalletListCallback(data) {
 }
 
 function walletListCallbackData(page) {
-  return `${WALLET_LIST_CALLBACK_PREFIX}${page}`;
+  return `${WALLET_LIST_CALLBACK_PREFIX}${toPageIndex(page)}`;
+}
+
+function walletListNavButtons(page, lastPage) {
+  if (lastPage <= 0) {
+    return [];
+  }
+  const row = [];
+  if (page > 0) {
+    row.push({ text: "⬅️ Previous", callback_data: walletListCallbackData(page - 1) });
+  }
+  if (page < lastPage) {
+    row.push({ text: "Next ➡️", callback_data: walletListCallbackData(page + 1) });
+  }
+  return row;
 }
 
 module.exports = {
@@ -164,7 +216,9 @@ module.exports = {
   buildWalletListPage,
   parseWalletListCallback,
   walletListCallbackData,
+  walletListNavButtons,
   clampPage,
   pageCount,
   escapeHtml,
+  toPageIndex,
 };
