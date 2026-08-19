@@ -497,6 +497,12 @@ function createTriviaService(options = {}) {
       if (capped) {
         return "Trivia XP: daily cap reached";
       }
+      const walletLocked = (xpResults || []).some(
+        (r) => r && r.reason === "wallet-required"
+      );
+      if (walletLocked) {
+        return "Trivia XP: wallet required — /wallet";
+      }
       return "Trivia XP: none";
     }
     return `Trivia XP: +${claim.pointsToAdd}`;

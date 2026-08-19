@@ -20,6 +20,7 @@ const {
 const {
   sanitizePvpDisplayName,
 } = require("../services/pvpSessionManager");
+require("../services/xpWalletGate").setXpWalletAutoLinkForTests(true);
 const {
   awardPvpWinXp,
   PVP_WIN_XP,

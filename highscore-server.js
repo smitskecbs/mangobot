@@ -45,6 +45,7 @@ const { verifyOptionalGameIdentity } = require("./utils/gameIdentity");
 const {
   awardSnakeGameXp,
   awardBounchGameXp,
+  publicGameXpFromAward,
   emptyGameXpPayload,
 } = require("./services/points");
 const { tryHandleWalletRequest } = require("./services/walletApi");
@@ -177,6 +178,7 @@ function sendJson(res, statusCode, body, origin, identity, xp) {
         awarded: Number(xp.awarded) || 0,
         dailyPlay: Number(xp.dailyPlay) || 0,
         unlock: Number(xp.unlock) || 0,
+        ...(xp.walletRequired ? { walletRequired: true } : {}),
       },
     };
   }
@@ -185,15 +187,7 @@ function sendJson(res, statusCode, body, origin, identity, xp) {
 }
 
 function publicXpFromAward(result) {
-  if (!result || !result.xp) {
-    return emptyGameXpPayload();
-  }
-
-  return {
-    awarded: result.xp.awarded || 0,
-    dailyPlay: result.xp.dailyPlay || 0,
-    unlock: result.xp.unlock || 0,
-  };
+  return publicGameXpFromAward(result);
 }
 
 /**

@@ -24,6 +24,7 @@ const {
   pickTriviaQuestion,
   validateTriviaQuestionBank,
 } = require("../services/triviaQuestions");
+require("../services/xpWalletGate").setXpWalletAutoLinkForTests(true);
 const {
   awardTriviaRoundXp,
   TRIVIA_DAILY_REWARD_CAP,

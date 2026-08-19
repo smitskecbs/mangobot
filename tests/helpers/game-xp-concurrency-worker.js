@@ -10,6 +10,7 @@
  *   node tests/helpers/game-xp-concurrency-worker.js <pointsFile> <mode> <count> <idBase>
  */
 
+require("../../services/xpWalletGate").setXpWalletAutoLinkForTests(true);
 const {
   awardDailyActivityPoint,
   awardSnakeGameXp,

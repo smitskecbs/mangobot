@@ -17,6 +17,7 @@ const {
   awardTriggerPoints,
   getCombinedRankUpReply,
 } = require("../services/points");
+const { reminderForBlockedXp } = require("../services/xpWalletGate");
 const {
   isPrivateChat,
   isGroupChat,
@@ -156,12 +157,13 @@ function processCommunityMessage(ctx, options = {}) {
   const textForTrigger = getMessageTextForTrigger(ctx);
   const isMenuTap = isPrivateChat(ctx) && isPrivateMenuLabel(textForTrigger);
   const pointsFile = options.pointsFile;
+  const walletFile = options.walletFile;
 
   let activityResult = null;
   if (!ctx.from.is_bot && isEligibleCommunityActivityMessage(ctx)) {
     activityResult =
       pointsFile !== undefined
-        ? awardDailyActivityPoint(userId, userName, pointsFile)
+        ? awardDailyActivityPoint(userId, userName, pointsFile, undefined, walletFile)
         : awardDailyActivityPoint(userId, userName);
     noteCommunityActivity();
   }
@@ -171,7 +173,7 @@ function processCommunityMessage(ctx, options = {}) {
   if (trigger && !ctx.from.is_bot) {
     triggerResult =
       pointsFile !== undefined
-        ? awardTriggerPoints(userId, userName, trigger, pointsFile)
+        ? awardTriggerPoints(userId, userName, trigger, pointsFile, walletFile)
         : awardTriggerPoints(userId, userName, trigger);
   }
 
@@ -182,13 +184,21 @@ function processCommunityMessage(ctx, options = {}) {
     return { activityResult, triggerResult, reply: null, skippedDuplicateRankUp: true };
   }
 
-  const reply = getCombinedRankUpReply(
+  const rankReply = getCombinedRankUpReply(
     activityResult,
     triggerResult,
     userName,
     fightAward
   );
-  return { activityResult, triggerResult, reply };
+  if (rankReply) {
+    return { activityResult, triggerResult, reply: rankReply };
+  }
+  const reminder = reminderForBlockedXp(
+    userId,
+    [activityResult, triggerResult, fightAward],
+    options.now
+  );
+  return { activityResult, triggerResult, reply: reminder };
 }
 
 /**

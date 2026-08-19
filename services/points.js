@@ -11,6 +11,11 @@ const lockfile = require("proper-lockfile");
 const { writeJsonFileAtomic } = require("../utils/json");
 const { error: logError } = require("../utils/logger");
 const { isCommunityCompetitionExcluded } = require("../utils/competition");
+const {
+  canEarnXp,
+  XP_WALLET_REQUIRED,
+  XP_WALLET_LOCKED_POINTS_LINE,
+} = require("./xpWalletGate");
 
 const POINTS_FILE = path.join(__dirname, "..", "points.json");
 
@@ -552,8 +557,8 @@ function formatPointsCard(user, options = {}) {
     ? "Wallet: ✅ Verified"
     : walletRegistered
       ? "Wallet: 🟡 Registered"
-      : "Wallet: ⬜ Not connected";
-  return [
+      : "Wallet: ⬜ Not linked";
+  const lines = [
     "🥭 Your ManGo Progress",
     "",
     `XP: ${points}`,
@@ -564,12 +569,18 @@ function formatPointsCard(user, options = {}) {
     `🏆 Longest streak: ${streak.longest} days`,
     "",
     walletLine,
+  ];
+  if (!walletVerified && !walletRegistered) {
+    lines.push("", XP_WALLET_LOCKED_POINTS_LINE);
+  }
+  lines.push(
     "",
     "Claimed today:",
     formatClaimedTodayLines(user),
     "",
-    formatBounchUnlocksLine(user),
-  ].join("\n");
+    formatBounchUnlocksLine(user)
+  );
+  return lines.join("\n");
 }
 
 function getUserRecord(data, userId) {
@@ -738,6 +749,37 @@ function emptyGameXpPayload() {
   return { awarded: 0, dailyPlay: 0, unlock: 0 };
 }
 
+function publicGameXpFromAward(result) {
+  const payload = emptyGameXpPayload();
+  if (result && result.xp) {
+    payload.awarded = result.xp.awarded || 0;
+    payload.dailyPlay = result.xp.dailyPlay || 0;
+    payload.unlock = result.xp.unlock || 0;
+  }
+  if (result && result.reason === XP_WALLET_REQUIRED) {
+    payload.walletRequired = true;
+  }
+  return payload;
+}
+
+function walletLockedSnapshot(userId, pointsFile, extra = {}) {
+  const data = readPointsSnapshot(pointsFile);
+  const user = data.users[String(userId)];
+  const points = user && typeof user.points === "number" ? user.points : 0;
+  const rank = getRank(points);
+  return {
+    awarded: false,
+    reason: XP_WALLET_REQUIRED,
+    points,
+    pointsToAdd: 0,
+    rankUp: false,
+    rank,
+    previousRank: rank,
+    xp: emptyGameXpPayload(),
+    ...extra,
+  };
+}
+
 function buildGameXpResult(pointsBefore, pointsAfter, dailyPlay, unlock) {
   const pointsToAdd = dailyPlay + unlock;
   const previousRank = getRank(pointsBefore);
@@ -760,7 +802,11 @@ function buildGameXpResult(pointsBefore, pointsAfter, dailyPlay, unlock) {
 /**
  * First verified Snake play per UTC day → +1 XP.
  */
-function awardSnakeGameXp(userId, userName, pointsFile = POINTS_FILE) {
+function awardSnakeGameXp(userId, userName, pointsFile = POINTS_FILE, walletFile) {
+  if (!canEarnXp(userId, walletFile)) {
+    return walletLockedSnapshot(userId, pointsFile);
+  }
+
   return mutatePoints((data) => {
     const id = String(userId);
     const user = ensureUserRecord(data, id, userName);
@@ -787,7 +833,7 @@ function awardSnakeGameXp(userId, userName, pointsFile = POINTS_FILE) {
  * Verified Bounch play: +1 first UTC day + unlock XP for newly reached levels 1..7.
  * Direct level L unlocks 1..L when above current bounchUnlockedMax.
  */
-function awardBounchGameXp(userId, userName, level, pointsFile = POINTS_FILE) {
+function awardBounchGameXp(userId, userName, level, pointsFile = POINTS_FILE, walletFile) {
   if (typeof level !== "number" || !Number.isInteger(level) || level < 1 || level > 7) {
     return {
       awarded: false,
@@ -797,6 +843,10 @@ function awardBounchGameXp(userId, userName, level, pointsFile = POINTS_FILE) {
       rankUp: false,
       rank: getRank(0),
     };
+  }
+
+  if (!canEarnXp(userId, walletFile)) {
+    return walletLockedSnapshot(userId, pointsFile);
   }
 
   return mutatePoints((data) => {
@@ -835,7 +885,7 @@ function awardBounchGameXp(userId, userName, level, pointsFile = POINTS_FILE) {
  * Award 1 lifetime/weekly point for the first normal chat message of the UTC day.
  * Silent by design — callers should not announce "+1 activity".
  */
-function awardDailyActivityPoint(userId, userName, pointsFile = POINTS_FILE, todayDate) {
+function awardDailyActivityPoint(userId, userName, pointsFile = POINTS_FILE, todayDate, walletFile) {
   if (isCommunityCompetitionExcluded(userId)) {
     return excludedAwardResult(userId, pointsFile);
   }
@@ -865,6 +915,21 @@ function awardDailyActivityPoint(userId, userName, pointsFile = POINTS_FILE, tod
       };
     }
 
+    if (!canEarnXp(userId, walletFile)) {
+      user.activityDate = today;
+      const streak = applyDailyActivityStreak(user, today);
+      return {
+        awarded: false,
+        reason: XP_WALLET_REQUIRED,
+        points: user.points,
+        pointsToAdd: 0,
+        rankUp: false,
+        rank: getRank(user.points),
+        previousRank: getRank(user.points),
+        streak,
+      };
+    }
+
     const pointsBefore = user.points;
     user.points += 1;
     user.weeklyPoints += 1;
@@ -888,7 +953,7 @@ function awardDailyActivityPoint(userId, userName, pointsFile = POINTS_FILE, tod
   }, pointsFile);
 }
 
-function awardTriggerPoints(userId, userName, trigger, pointsFile = POINTS_FILE) {
+function awardTriggerPoints(userId, userName, trigger, pointsFile = POINTS_FILE, walletFile) {
   const pointsToAdd = TRIGGERS[trigger];
 
   if (pointsToAdd === undefined) {
@@ -922,6 +987,18 @@ function awardTriggerPoints(userId, userName, trigger, pointsFile = POINTS_FILE)
       };
     }
 
+    if (!canEarnXp(userId, walletFile)) {
+      return {
+        awarded: false,
+        reason: XP_WALLET_REQUIRED,
+        points: user.points,
+        pointsToAdd: 0,
+        rankUp: false,
+        rank: getRank(user.points),
+        previousRank: getRank(user.points),
+      };
+    }
+
     const pointsBefore = user.points;
     user.points += pointsToAdd;
     user.weeklyPoints += pointsToAdd;
@@ -947,11 +1024,15 @@ function awardTriggerPoints(userId, userName, trigger, pointsFile = POINTS_FILE)
  * ChatFight win: +2 lifetime XP and +2 weeklyPoints.
  * Call only after an in-process winner claim; does not enforce fight state itself.
  */
-function awardChatFightXp(userId, userName, pointsFile = POINTS_FILE) {
+function awardChatFightXp(userId, userName, pointsFile = POINTS_FILE, walletFile) {
   const pointsToAdd = 2;
 
   if (isCommunityCompetitionExcluded(userId)) {
     return excludedAwardResult(userId, pointsFile, { pointsToAdd: 0 });
+  }
+
+  if (!canEarnXp(userId, walletFile)) {
+    return walletLockedSnapshot(userId, pointsFile, { pointsToAdd: 0 });
   }
 
   return mutatePoints((data) => {
@@ -1044,7 +1125,8 @@ function awardTriviaRoundXp(
   userId,
   userName,
   pointsToAdd,
-  pointsFile = POINTS_FILE
+  pointsFile = POINTS_FILE,
+  walletFile
 ) {
   const amount =
     typeof pointsToAdd === "number" && Number.isInteger(pointsToAdd) && pointsToAdd > 0
@@ -1053,6 +1135,14 @@ function awardTriviaRoundXp(
 
   if (isCommunityCompetitionExcluded(userId)) {
     return excludedAwardResult(userId, pointsFile, {
+      pointsToAdd: 0,
+      rewardedRoundsToday: 0,
+      dailyCap: TRIVIA_DAILY_REWARD_CAP,
+    });
+  }
+
+  if (!canEarnXp(userId, walletFile)) {
+    return walletLockedSnapshot(userId, pointsFile, {
       pointsToAdd: 0,
       rewardedRoundsToday: 0,
       dailyCap: TRIVIA_DAILY_REWARD_CAP,
@@ -1164,11 +1254,19 @@ function getPvpRewardedWinsToday(user) {
 /**
  * PvP win XP with per-UTC-day cap. Call only after sync winner claim.
  */
-function awardPvpWinXp(userId, userName, pointsFile = POINTS_FILE) {
+function awardPvpWinXp(userId, userName, pointsFile = POINTS_FILE, walletFile) {
   const pointsToAdd = PVP_WIN_XP;
 
   if (isCommunityCompetitionExcluded(userId)) {
     return excludedAwardResult(userId, pointsFile, {
+      pointsToAdd: 0,
+      rewardedWinsToday: 0,
+      dailyCap: PVP_DAILY_WIN_CAP,
+    });
+  }
+
+  if (!canEarnXp(userId, walletFile)) {
+    return walletLockedSnapshot(userId, pointsFile, {
       pointsToAdd: 0,
       rewardedWinsToday: 0,
       dailyCap: PVP_DAILY_WIN_CAP,
@@ -1281,6 +1379,9 @@ module.exports = {
   awardBounchGameXp,
   ensureGameState,
   emptyGameXpPayload,
+  publicGameXpFromAward,
+  XP_WALLET_REQUIRED,
+  canEarnXp,
   resetWeeklyForAll,
   readStreak,
   ensureStreak,

@@ -172,6 +172,9 @@ function formatXpLine(xpResult, rewardEligible) {
   if (xpResult && xpResult.reason === "daily-cap") {
     return "PvP XP: daily cap reached";
   }
+  if (xpResult && xpResult.reason === "wallet-required") {
+    return "PvP XP: wallet required — /wallet";
+  }
   return "PvP XP: none";
 }
 

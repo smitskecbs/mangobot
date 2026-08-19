@@ -8,6 +8,7 @@ const os = require("os");
 const path = require("path");
 const assert = require("assert");
 
+require("../services/xpWalletGate").setXpWalletAutoLinkForTests(true);
 const {
   createChatFightService,
   FIGHT_TYPES,
@@ -709,11 +710,15 @@ async function main() {
     const sent = [];
     let now = utcDate("2026-08-10T06:59:00.000Z");
     const file = stateFile();
+    const winnersProbe = path.join(tempDir, "winners-probe.json");
     const sched = createCommunityScheduler({
       enabled: true,
       chatId: "1",
       timeZone: "Europe/Amsterdam",
       stateFile: file,
+      pointsFile: pointsProbe,
+      weeklyWinnersFile: winnersProbe,
+      activityEngineConfig: { enabled: false, slots: [] },
       now: () => now,
       sendMessage: async (_c, text) => {
         sent.push(text);

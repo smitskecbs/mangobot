@@ -9,6 +9,10 @@ const { getReplyTargetUser } = require("../utils/telegramReplyTarget");
 const { shortenWallet, formatVerifiedDate } = require("../utils/solanaWallet");
 const { isPrivateChat } = require("../utils/botMenu");
 const { formatLamportsAsSol } = require("../services/presaleConstants");
+const {
+  XP_EARNING_ENABLED_LINE,
+  XP_EARNING_LOCKED_LINE,
+} = require("../services/xpWalletGate");
 
 const USAGE = "Reply to a member's message with /membercheck.";
 const ADMIN_ONLY = "This command is admin only.";
@@ -19,7 +23,11 @@ function formatMemberCheck(profile, displayName) {
     ? `Wallet: 🟢 Verified\nWallet: ${shortenWallet(profile.wallet.address)}`
     : profile.wallet.registered || profile.wallet.address
       ? `Wallet: 🟡 Registered\nWallet: ${shortenWallet(profile.wallet.address)}`
-      : "Wallet: ⬜ Not connected";
+      : "Wallet: ⬜ Not linked";
+  const xpEarningLine =
+    profile.wallet.registered || profile.wallet.verified || profile.wallet.address
+      ? XP_EARNING_ENABLED_LINE
+      : XP_EARNING_LOCKED_LINE;
   const verifiedDate = formatVerifiedDate(profile.wallet.verifiedAt);
   const lastActive = profile.streak.lastActiveLabel || "—";
   const publicLive = profile.presalePublic && profile.presalePublic.live;
@@ -53,6 +61,7 @@ function formatMemberCheck(profile, displayName) {
     lines.push(`Verified: ${verifiedDate}`);
   }
   lines.push(
+    xpEarningLine,
     "",
     `Weekly XP: ${profile.xp.weekly}`,
     `Lifetime XP: ${profile.xp.lifetime}`,

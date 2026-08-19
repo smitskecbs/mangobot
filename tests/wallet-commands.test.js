@@ -37,6 +37,7 @@ const {
   isWalletVerified,
   loadWalletStore,
 } = require("../services/walletLinks");
+require("../services/xpWalletGate").setXpWalletAutoLinkForTests(true);
 const { loadPoints, awardDailyActivityPoint } = require("../services/points");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-wallet-cmd-"));
@@ -287,12 +288,14 @@ runTest("12. points wallet status", () => {
   fs.writeFileSync(pointsFile, JSON.stringify({ users: {} }), "utf8");
   const unverified = createMockCtx({ userId: 80 });
   handlePoints(unverified, { pointsFile, walletFile: file });
-  assert.ok(unverified.replies[0].text.includes("Wallet: ⬜ Not connected"));
+  assert.ok(unverified.replies[0].text.includes("Wallet: ⬜ Not linked"));
+  assert.ok(unverified.replies[0].text.includes("XP earning locked"));
   const wallet = generateSolanaWallet();
   connectUser(file, 80, wallet, 8000);
   const verified = createMockCtx({ userId: 80 });
   handlePoints(verified, { pointsFile, walletFile: file });
   assert.ok(verified.replies[0].text.includes("Wallet: ✅ Verified"));
+  assert.ok(!verified.replies[0].text.includes("XP earning locked"));
   assert.ok(!verified.replies[0].text.includes(wallet.address));
 });
 

@@ -24,6 +24,7 @@ const {
   isEligibleCommunityActivityMessage,
   COMMUNITY_ACTIVITY_UPDATES,
 } = require("../events/points-trigger");
+require("../services/xpWalletGate").setXpWalletAutoLinkForTests(true);
 const { awardDailyActivityPoint } = require("../services/points");
 const registerWalletCommand = require("../commands/wallet");
 

@@ -18,6 +18,7 @@ const {
   readScoresFile,
 } = require("../services/snakeScores");
 const bounchScores = require("../services/bounchScores");
+require("../services/xpWalletGate").setXpWalletAutoLinkForTests(true);
 const {
   loadPoints,
   mutatePoints,

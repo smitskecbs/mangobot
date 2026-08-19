@@ -8,6 +8,7 @@ const os = require("os");
 const path = require("path");
 const assert = require("assert");
 
+require("../services/xpWalletGate").setXpWalletAutoLinkForTests(true);
 const {
   createConnectFourService,
   parsePvpCallbackData,

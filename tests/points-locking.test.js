@@ -20,6 +20,7 @@ const {
   POINTS_LOCK_OPTIONS,
 } = require("../services/points");
 const { writeJsonFileAtomic } = require("../utils/json");
+require("../services/xpWalletGate").setXpWalletAutoLinkForTests(true);
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-points-lock-test-"));
 const testFile = path.join(tempDir, "points.json");

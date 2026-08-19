@@ -7,6 +7,7 @@ const os = require("os");
 const path = require("path");
 const assert = require("assert");
 
+require("../services/xpWalletGate").setXpWalletAutoLinkForTests(true);
 const { verifyGameToken } = require("../utils/gameToken");
 const { GAME_LINK_UNAVAILABLE_MESSAGE } = require("../utils/gameLinks");
 const {

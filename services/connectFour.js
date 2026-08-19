@@ -229,6 +229,9 @@ function formatXpLine(xpResult, rewardEligible) {
   if (xpResult && xpResult.reason === "excluded") {
     return "PvP XP: none";
   }
+  if (xpResult && xpResult.reason === "wallet-required") {
+    return "PvP XP: wallet required — /wallet";
+  }
   return "PvP XP: none";
 }
 
