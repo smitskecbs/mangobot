@@ -20,6 +20,7 @@ const STATUS = Object.freeze({
 });
 
 const LOBBY_MS = 60 * 1000;
+const LOBBY_COUNTDOWN_MS = 5 * 1000;
 const BOMB_MIN_MS = 8 * 1000;
 const BOMB_MAX_MS = 20 * 1000;
 const PASS_COOLDOWN_MS = 400;
@@ -81,6 +82,11 @@ function passKeyboard(gameId) {
 function playerCountLine(count) {
   const n = Number(count) || 0;
   return `Players: ${n}`;
+}
+
+function isMessageNotModifiedError(err) {
+  const desc = err && (err.description || err.message || "");
+  return String(desc).toLowerCase().includes("message is not modified");
 }
 
 function buildLobbyText(playerCount, lobbySeconds) {
@@ -152,6 +158,10 @@ function createMangoBombService(options = {}) {
       ? options.randomIdFn
       : () => crypto.randomBytes(4).toString("hex");
   const lobbyMs = Number.isFinite(options.lobbyMs) ? options.lobbyMs : LOBBY_MS;
+  const countdownMs =
+    Number.isFinite(options.countdownMs) && options.countdownMs > 0
+      ? options.countdownMs
+      : LOBBY_COUNTDOWN_MS;
   const bombMinMs = Number.isFinite(options.bombMinMs) ? options.bombMinMs : BOMB_MIN_MS;
   const bombMaxMs = Number.isFinite(options.bombMaxMs) ? options.bombMaxMs : BOMB_MAX_MS;
   const passCooldownMs =
@@ -240,6 +250,16 @@ function createMangoBombService(options = {}) {
     return n;
   }
 
+  function getActiveCountdownTimerCount() {
+    let n = 0;
+    for (const game of gamesById.values()) {
+      if (game.countdownTimer != null) {
+        n += 1;
+      }
+    }
+    return n;
+  }
+
   function whenIdle(chatId) {
     if (chatId != null) {
       return queues.get(String(chatId)) || Promise.resolve();
@@ -282,9 +302,11 @@ function createMangoBombService(options = {}) {
       return;
     }
     clearHandle(game.lobbyTimer);
+    clearHandle(game.countdownTimer);
     clearHandle(game.bombTimer);
     clearHandle(game.pauseTimer);
     game.lobbyTimer = null;
+    game.countdownTimer = null;
     game.bombTimer = null;
     game.pauseTimer = null;
   }
@@ -307,9 +329,75 @@ function createMangoBombService(options = {}) {
     }
     try {
       await editMessage(game.chatId, game.messageId, text, extra || emptyInlineKeyboardExtra());
-    } catch (_err) {
-      /* non-fatal */
+    } catch (err) {
+      if (!isMessageNotModifiedError(err)) {
+        /* Telegram edit failure must not stop the game. */
+      }
     }
+  }
+
+  function lobbyRemainingSeconds(game) {
+    const ms = game.lobbyEndsAt - nowFn();
+    return Math.max(0, Math.ceil(ms / 1000));
+  }
+
+  function lobbyDisplaySeconds(game) {
+    return Math.max(1, lobbyRemainingSeconds(game));
+  }
+
+  async function renderLobbyMessage(game) {
+    if (!game || game.status !== STATUS.LOBBY) {
+      return false;
+    }
+    if (game.messageId == null || typeof editMessage !== "function") {
+      return false;
+    }
+    await render(
+      game,
+      buildLobbyText(game.players.size, lobbyDisplaySeconds(game)),
+      joinKeyboard(game.id)
+    );
+    return true;
+  }
+
+  function msUntilNextCountdown(game) {
+    const now = nowFn();
+    if (game.lobbyEndsAt - now <= 0) {
+      return null;
+    }
+    const elapsed = Math.max(0, now - game.startedAt);
+    const nextOffset = (Math.floor(elapsed / countdownMs) + 1) * countdownMs;
+    const nextAt = game.startedAt + nextOffset;
+    if (nextAt >= game.lobbyEndsAt) {
+      return null;
+    }
+    return Math.max(1, nextAt - now);
+  }
+
+  function scheduleLobbyCountdown(game) {
+    if (!game) {
+      return;
+    }
+    clearHandle(game.countdownTimer);
+    game.countdownTimer = null;
+    if (game.status !== STATUS.LOBBY) {
+      return;
+    }
+    const wait = msUntilNextCountdown(game);
+    if (wait == null) {
+      return;
+    }
+    const gameId = game.id;
+    game.countdownTimer = wrapTimeout(() => {
+      enqueue(game.chatId, async () => {
+        const current = gamesById.get(gameId);
+        if (!current || current.status !== STATUS.LOBBY) {
+          return;
+        }
+        await renderLobbyMessage(current);
+        scheduleLobbyCountdown(current);
+      });
+    }, wait);
   }
 
   function award(userId, displayName, amount, roundId) {
@@ -451,7 +539,9 @@ function createMangoBombService(options = {}) {
       return { ok: false, reason: "inactive" };
     }
     clearHandle(game.lobbyTimer);
+    clearHandle(game.countdownTimer);
     game.lobbyTimer = null;
+    game.countdownTimer = null;
     if (game.players.size < MIN_PLAYERS) {
       game.status = STATUS.CANCELLED;
       log("[mango-bomb] cancelled");
@@ -506,6 +596,7 @@ function createMangoBombService(options = {}) {
       roundNumber: 0,
       source,
       lobbyTimer: null,
+      countdownTimer: null,
       bombTimer: null,
       pauseTimer: null,
     };
@@ -515,6 +606,7 @@ function createMangoBombService(options = {}) {
     game.lobbyTimer = wrapTimeout(() => {
       enqueue(chatId, () => closeLobby(id));
     }, lobbyMs);
+    scheduleLobbyCountdown(game);
     log("[mango-bomb] lobby started");
     const lobbySeconds = Math.max(1, Math.round(lobbyMs / 1000));
     return {
@@ -532,6 +624,9 @@ function createMangoBombService(options = {}) {
       return false;
     }
     game.messageId = messageId;
+    if (game.status === STATUS.LOBBY && game.countdownTimer == null) {
+      scheduleLobbyCountdown(game);
+    }
     return true;
   }
 
@@ -563,7 +658,7 @@ function createMangoBombService(options = {}) {
     game.players.set(uid, { displayName: name });
     game.alive.add(uid);
     log("[mango-bomb] player joined");
-    const lobbySeconds = Math.max(1, Math.round((game.lobbyEndsAt - nowFn()) / 1000));
+    const lobbySeconds = lobbyDisplaySeconds(game);
     return {
       ok: true,
       text: buildLobbyText(game.players.size, lobbySeconds),
@@ -678,6 +773,7 @@ function createMangoBombService(options = {}) {
   return {
     STATUS,
     LOBBY_MS: lobbyMs,
+    LOBBY_COUNTDOWN_MS: countdownMs,
     BOMB_MIN_MS: bombMinMs,
     BOMB_MAX_MS: bombMaxMs,
     PASS_COOLDOWN_MS: passCooldownMs,
@@ -701,6 +797,7 @@ function createMangoBombService(options = {}) {
     getGameByChat: (chatId) => snapshot(activeGameForChat(chatId), true),
     getPendingTimerCount,
     getActiveBombTimerCount,
+    getActiveCountdownTimerCount,
     whenIdle,
     setEditMessageHandler(fn) {
       editMessage = typeof fn === "function" ? fn : null;
@@ -716,7 +813,13 @@ function createMangoBombService(options = {}) {
       if (!game) {
         return Promise.resolve({ ok: false, reason: "stale", toast: STALE_CALLBACK });
       }
-      return enqueue(game.chatId, () => tryJoin(input));
+      return enqueue(game.chatId, async () => {
+        const result = tryJoin(input);
+        if (result.ok) {
+          result.rendered = await renderLobbyMessage(gamesById.get(input.gameId));
+        }
+        return result;
+      });
     },
     enqueuePass(input) {
       const game = gamesById.get(input && input.gameId);
@@ -740,6 +843,7 @@ const defaultService = createMangoBombService();
 module.exports = {
   STATUS,
   LOBBY_MS,
+  LOBBY_COUNTDOWN_MS,
   BOMB_MIN_MS,
   BOMB_MAX_MS,
   PASS_COOLDOWN_MS,

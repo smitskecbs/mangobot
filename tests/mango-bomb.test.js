@@ -21,6 +21,7 @@ const {
   STATUS,
   BOMB_MIN_MS,
   BOMB_MAX_MS,
+  LOBBY_COUNTDOWN_MS,
   STALE_CALLBACK,
   getMangoBombRuntime,
 } = require("../services/mangoBomb");
@@ -318,6 +319,16 @@ function pointsOf(file, userId) {
   const data = loadPoints(file);
   const user = data.users[String(userId)];
   return user && typeof user.points === "number" ? user.points : 0;
+}
+
+function lobbySecondsFrom(text) {
+  const match = String(text).match(/You have (\d+) seconds to join/);
+  return match ? Number(match[1]) : null;
+}
+
+function playersFrom(text) {
+  const match = String(text).match(/Players: (\d+)/);
+  return match ? Number(match[1]) : null;
 }
 
 async function main() {
@@ -1069,6 +1080,152 @@ async function main() {
     assert.strictEqual(typeof result.rankUp, "boolean");
     assert.ok(result.rank);
     assert.ok(result.previousRank);
+  });
+
+  await runTest("countdown. 60 then 55/50, JOIN keeps remaining and player count", async () => {
+    assert.strictEqual(LOBBY_COUNTDOWN_MS, 5000);
+    const { service, timers, edits } = createService();
+    const started = service.startLobby({ chatId: COMMUNITY_CHAT, threadId: 123 });
+    assert.strictEqual(lobbySecondsFrom(started.text), 60);
+    assert.strictEqual(playersFrom(started.text), 0);
+    service.setMessageId(started.gameId, 9001);
+    assert.strictEqual(service.getActiveCountdownTimerCount(), 1);
+
+    timers.advance(5000);
+    await service.whenIdle(COMMUNITY_CHAT);
+    const at55 = edits.filter((row) => lobbySecondsFrom(row.text) === 55);
+    assert.ok(at55.length >= 1);
+    assert.strictEqual(playersFrom(at55[0].text), 0);
+
+    timers.advance(2000);
+    const joined = await service.enqueueJoin({
+      gameId: started.gameId,
+      userId: USER_A,
+      displayName: { first_name: "Kevin" },
+      isBot: false,
+      chatId: COMMUNITY_CHAT,
+      threadId: 123,
+    });
+    await service.whenIdle(COMMUNITY_CHAT);
+    assert.strictEqual(joined.ok, true);
+    assert.strictEqual(playersFrom(joined.text), 1);
+    assert.ok(lobbySecondsFrom(joined.text) <= 53);
+    assert.ok(lobbySecondsFrom(joined.text) >= 52);
+    assert.notStrictEqual(lobbySecondsFrom(joined.text), 60);
+
+    timers.advance(3000);
+    await service.whenIdle(COMMUNITY_CHAT);
+    const at50 = edits.filter((row) => lobbySecondsFrom(row.text) === 50);
+    assert.ok(at50.length >= 1);
+    assert.strictEqual(playersFrom(at50[at50.length - 1].text), 1);
+    assert.ok(
+      !edits.some(
+        (row) =>
+          lobbySecondsFrom(row.text) === 60 && playersFrom(row.text) === 1
+      )
+    );
+    assert.strictEqual(service.getActiveCountdownTimerCount(), 1);
+
+    join(service, started.gameId, USER_B, "Lojay");
+    const endsAt = service.getGame(started.gameId).lobbyEndsAt;
+    timers.advance(50000);
+    await service.whenIdle(COMMUNITY_CHAT);
+    assert.strictEqual(timers.now(), endsAt);
+    assert.strictEqual(service.getStatus(COMMUNITY_CHAT), STATUS.RUNNING);
+    assert.strictEqual(service.getActiveCountdownTimerCount(), 0);
+  });
+
+  await runTest("countdown. JOIN/countdown queue uses live player count", async () => {
+    const { service, timers, edits } = createService();
+    const started = service.startLobby({ chatId: COMMUNITY_CHAT, threadId: 123 });
+    service.setMessageId(started.gameId, 9001);
+    timers.advance(5000);
+    const joinP = service.enqueueJoin({
+      gameId: started.gameId,
+      userId: USER_A,
+      displayName: { first_name: "Kevin" },
+      isBot: false,
+      chatId: COMMUNITY_CHAT,
+      threadId: 123,
+    });
+    await Promise.all([joinP, service.whenIdle(COMMUNITY_CHAT)]);
+    const lastLobby = [...edits]
+      .reverse()
+      .find((row) => lobbySecondsFrom(row.text) != null);
+    assert.ok(lastLobby);
+    assert.strictEqual(playersFrom(lastLobby.text), 1);
+    assert.notStrictEqual(lobbySecondsFrom(lastLobby.text), 60);
+  });
+
+  await runTest("countdown. edit failure does not stop lobby", async () => {
+    const { service, timers } = createService();
+    service.setEditMessageHandler(async () => {
+      throw new Error("telegram down");
+    });
+    const started = service.startLobby({ chatId: COMMUNITY_CHAT, threadId: 123 });
+    service.setMessageId(started.gameId, 9001);
+    join(service, started.gameId, USER_A, "Kevin");
+    join(service, started.gameId, USER_B, "Lojay");
+    timers.advance(5000);
+    await service.whenIdle(COMMUNITY_CHAT);
+    assert.strictEqual(service.getStatus(COMMUNITY_CHAT), STATUS.LOBBY);
+    timers.advance(55000);
+    await service.whenIdle(COMMUNITY_CHAT);
+    assert.strictEqual(service.getStatus(COMMUNITY_CHAT), STATUS.RUNNING);
+  });
+
+  await runTest("countdown. message-not-modified is ignored", async () => {
+    const { service, timers } = createService();
+    let calls = 0;
+    service.setEditMessageHandler(async () => {
+      calls += 1;
+      const err = new Error("Bad Request: message is not modified");
+      err.description = "Bad Request: message is not modified";
+      throw err;
+    });
+    const started = service.startLobby({ chatId: COMMUNITY_CHAT, threadId: 123 });
+    service.setMessageId(started.gameId, 9001);
+    timers.advance(5000);
+    await service.whenIdle(COMMUNITY_CHAT);
+    assert.ok(calls >= 1);
+    assert.strictEqual(service.getStatus(COMMUNITY_CHAT), STATUS.LOBBY);
+    join(service, started.gameId, USER_A, "Kevin");
+    join(service, started.gameId, USER_B, "Lojay");
+    timers.advance(55000);
+    await service.whenIdle(COMMUNITY_CHAT);
+    assert.strictEqual(service.getStatus(COMMUNITY_CHAT), STATUS.RUNNING);
+  });
+
+  await runTest("countdown. one timer; cleanup on start/cancel/shutdown", async () => {
+    const { service, timers } = createService();
+    const started = service.startLobby({ chatId: COMMUNITY_CHAT, threadId: 123 });
+    service.setMessageId(started.gameId, 9001);
+    assert.strictEqual(service.getActiveCountdownTimerCount(), 1);
+    timers.advance(5000);
+    await service.whenIdle(COMMUNITY_CHAT);
+    assert.strictEqual(service.getActiveCountdownTimerCount(), 1);
+
+    join(service, started.gameId, USER_A, "Kevin");
+    join(service, started.gameId, USER_B, "Lojay");
+    timers.advance(55000);
+    await service.whenIdle(COMMUNITY_CHAT);
+    assert.strictEqual(service.getActiveCountdownTimerCount(), 0);
+
+    const { service: cancelled } = createService();
+    const lobby = cancelled.startLobby({ chatId: COMMUNITY_CHAT });
+    cancelled.setMessageId(lobby.gameId, 9001);
+    assert.strictEqual(cancelled.getActiveCountdownTimerCount(), 1);
+    await cancelled.forceLobbyEnd(lobby.gameId);
+    assert.strictEqual(cancelled.getActiveCountdownTimerCount(), 0);
+
+    const { service: halted } = createService();
+    const open = halted.startLobby({ chatId: COMMUNITY_CHAT });
+    halted.setMessageId(open.gameId, 9001);
+    assert.ok(halted.getPendingTimerCount() > 1);
+    halted.clearAllTimers();
+    assert.strictEqual(halted.getActiveCountdownTimerCount(), 0);
+    assert.strictEqual(halted.getPendingTimerCount(), 0);
+    assert.strictEqual(halted.getStatus(COMMUNITY_CHAT), STATUS.IDLE);
   });
 
   for (const file of prodRoots) {

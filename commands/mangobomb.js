@@ -244,17 +244,24 @@ async function handleMangoBombCallback(ctx, options = {}) {
 
   await answer(parsed.action === "join" ? "Joined!" : "Passed!");
 
-  if (result.text && typeof ctx.editMessageText === "function") {
+  const shouldEdit =
+    result.text &&
+    typeof ctx.editMessageText === "function" &&
+    !(parsed.action === "join" && result.rendered);
+  if (shouldEdit) {
     try {
       await ctx.editMessageText(
         result.text,
         result.extra || emptyInlineKeyboardExtra()
       );
     } catch (err) {
-      logError(
-        "[mango-bomb] editMessageText failed:",
-        err && err.message ? err.message : err
-      );
+      const desc = err && (err.description || err.message || "");
+      if (!String(desc).toLowerCase().includes("message is not modified")) {
+        logError(
+          "[mango-bomb] editMessageText failed:",
+          err && err.message ? err.message : err
+        );
+      }
     }
   }
 }
