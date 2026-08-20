@@ -1,7 +1,7 @@
 /**
  * /menu — private reply keyboard, or compact inline group menu with submenus.
  * Rankings / Help use public replies; Snake/Bounch/Points/Streak/Wallet/Rewards
- * use private deep-links. Tic-Tac-Toe / Connect Four / Trivia reuse command handlers.
+ * use private deep-links. Tic-Tac-Toe / Connect Four / Trivia / ManGo Bomb reuse command handlers.
  */
 
 const { handlePoints } = require("./points");
@@ -14,6 +14,7 @@ const { handleHelp } = require("./help");
 const { handleTicTacToe } = require("./tictactoe");
 const { handleConnectFour } = require("./connect4");
 const { handleTrivia } = require("./trivia");
+const { handleMangoBomb } = require("./mangobomb");
 const { handleWallet } = require("./wallet");
 const { handleRewards } = require("./rewards");
 const { handlePresale } = require("./presale");
@@ -63,6 +64,7 @@ const GROUP_MENU_ACTION_RE = new RegExp(
     GROUP_MENU_CALLBACK.TICTACTOE,
     GROUP_MENU_CALLBACK.CONNECT4,
     GROUP_MENU_CALLBACK.TRIVIA,
+    GROUP_MENU_CALLBACK.MANGOBOMB,
   ].join("|")})$`
 );
 
@@ -241,6 +243,9 @@ async function handleGroupMenuCallback(ctx, options = {}) {
   }
   if (data === GROUP_MENU_CALLBACK.TRIVIA) {
     return handleTrivia(ctx, options);
+  }
+  if (data === GROUP_MENU_CALLBACK.MANGOBOMB) {
+    return handleMangoBomb(ctx, options);
   }
 }
 

@@ -47,6 +47,17 @@ function isTriviaBusy() {
   }
 }
 
+function isMangoBombBusy() {
+  try {
+    const mangoBomb = require("./mangoBomb");
+    return typeof mangoBomb.isMangoBombOpen === "function"
+      ? Boolean(mangoBomb.isMangoBombOpen())
+      : false;
+  } catch (_err) {
+    return false;
+  }
+}
+
 function isPvpBusy(options = {}) {
   const tttOpen =
     typeof options.isTicTacToeOpenFn === "function"
@@ -65,6 +76,7 @@ function isPvpBusy(options = {}) {
  * @param {() => boolean} [options.isTicTacToeOpenFn]
  * @param {() => boolean} [options.isConnectFourOpenFn]
  * @param {() => boolean} [options.isTriviaOpenFn]
+ * @param {() => boolean} [options.isMangoBombOpenFn]
  */
 function isCommunityChallengeBusy(options = {}) {
   const fightOpen =
@@ -75,11 +87,15 @@ function isCommunityChallengeBusy(options = {}) {
     typeof options.isTriviaOpenFn === "function"
       ? options.isTriviaOpenFn()
       : isTriviaBusy();
-  return Boolean(fightOpen || isPvpBusy(options) || triviaOpen);
+  const bombOpen =
+    typeof options.isMangoBombOpenFn === "function"
+      ? options.isMangoBombOpenFn()
+      : isMangoBombBusy();
+  return Boolean(fightOpen || isPvpBusy(options) || triviaOpen || bombOpen);
 }
 
 /**
- * @returns {"chatfight"|"tictactoe"|"connect4"|"trivia"|null}
+ * @returns {"chatfight"|"tictactoe"|"connect4"|"trivia"|"mangobomb"|null}
  */
 function getCommunityBusyReason(options = {}) {
   const fightOpen =
@@ -110,6 +126,13 @@ function getCommunityBusyReason(options = {}) {
   if (triviaOpen) {
     return "trivia";
   }
+  const bombOpen =
+    typeof options.isMangoBombOpenFn === "function"
+      ? options.isMangoBombOpenFn()
+      : isMangoBombBusy();
+  if (bombOpen) {
+    return "mangobomb";
+  }
   return null;
 }
 
@@ -126,6 +149,9 @@ function formatCommunityBusyReply(reason) {
   if (reason === "trivia") {
     return "🧠 A Trivia challenge is already open.";
   }
+  if (reason === "mangobomb") {
+    return "🥭💣 A ManGo Bomb round is already running.";
+  }
   return "🎮 A PvP challenge is already open.";
 }
 
@@ -137,5 +163,6 @@ module.exports = {
   isTicTacToeBusy,
   isConnectFourBusy,
   isTriviaBusy,
+  isMangoBombBusy,
   isPvpBusy,
 };

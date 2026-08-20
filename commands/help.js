@@ -23,6 +23,7 @@ const HELP_MESSAGE = `🥭 Commands
 /tictactoe — Start Tic-Tac-Toe
 /connect4 — Start Connect Four
 /trivia — Start a Trivia round
+/mangobomb — Start a ManGo Bomb round
 /streak — Active streak leaderboard
 /streakrecord — Longest streak leaderboard
 

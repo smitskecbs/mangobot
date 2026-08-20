@@ -65,6 +65,7 @@ async function handleConnectFour(ctx, options = {}) {
       isTicTacToeOpenFn: options.isTicTacToeOpenFn,
       isConnectFourOpenFn: options.isConnectFourOpenFn,
       isTriviaOpenFn: options.isTriviaOpenFn,
+      isMangoBombOpenFn: options.isMangoBombOpenFn,
     })
   ) {
     const reason = busyReasonFn({
@@ -72,6 +73,7 @@ async function handleConnectFour(ctx, options = {}) {
       isTicTacToeOpenFn: options.isTicTacToeOpenFn,
       isConnectFourOpenFn: options.isConnectFourOpenFn,
       isTriviaOpenFn: options.isTriviaOpenFn,
+      isMangoBombOpenFn: options.isMangoBombOpenFn,
     });
     if (reason === "chatfight") {
       return ctx.reply("⚔️ A ChatFight is already running.");
@@ -81,6 +83,9 @@ async function handleConnectFour(ctx, options = {}) {
     }
     if (reason === "trivia") {
       return ctx.reply("🧠 A Trivia challenge is already open.");
+    }
+    if (reason === "mangobomb") {
+      return ctx.reply("🥭💣 A ManGo Bomb round is already running.");
     }
     return ctx.reply("🟡 A Connect Four challenge is already open.");
   }

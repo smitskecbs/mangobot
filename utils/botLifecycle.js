@@ -96,6 +96,15 @@ function startBotRuntime({
       /* ignore */
     }
     try {
+      const { getMangoBombRuntime } = require("../services/mangoBomb");
+      const runtime = getMangoBombRuntime();
+      if (runtime && typeof runtime.clearAllTimers === "function") {
+        runtime.clearAllTimers();
+      }
+    } catch (_err) {
+      /* ignore */
+    }
+    try {
       bot.stop(signal);
     } catch (_err) {
       /* ignore */

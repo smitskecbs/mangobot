@@ -59,6 +59,7 @@ const GROUP_MENU_CALLBACK = Object.freeze({
   TICTACTOE: "gmenu:tictactoe",
   CONNECT4: "gmenu:connect4",
   TRIVIA: "gmenu:trivia",
+  MANGOBOMB: "gmenu:mangobomb",
 });
 
 const PRIVATE_HUB_CALLBACK = Object.freeze({
@@ -294,7 +295,7 @@ function getGroupRankingsMenuExtra() {
 }
 
 /**
- * Games submenu — Snake/Bounch deep-links; TTT/C4/Trivia callbacks.
+ * Games submenu — Snake/Bounch deep-links; TTT/C4/Trivia/ManGo Bomb callbacks.
  * @param {object} [ctx]
  * @returns {object}
  */
@@ -321,8 +322,9 @@ function getGroupGamesMenuExtra(ctx) {
   ]);
   rows.push([
     Markup.button.callback("Trivia", GROUP_MENU_CALLBACK.TRIVIA),
-    Markup.button.callback("⬅️ Back", GROUP_MENU_CALLBACK.BACK),
+    Markup.button.callback("ManGo Bomb", GROUP_MENU_CALLBACK.MANGOBOMB),
   ]);
+  rows.push([Markup.button.callback("⬅️ Back", GROUP_MENU_CALLBACK.BACK)]);
 
   return Markup.inlineKeyboard(rows);
 }
@@ -423,7 +425,8 @@ function isGroupMenuCallback(data) {
     data === GROUP_MENU_CALLBACK.HELP ||
     data === GROUP_MENU_CALLBACK.TICTACTOE ||
     data === GROUP_MENU_CALLBACK.CONNECT4 ||
-    data === GROUP_MENU_CALLBACK.TRIVIA
+    data === GROUP_MENU_CALLBACK.TRIVIA ||
+    data === GROUP_MENU_CALLBACK.MANGOBOMB
   );
 }
 

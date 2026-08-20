@@ -168,6 +168,31 @@ async function assertCanStartInteractiveGame(ctx, options = {}) {
   return { ok: true };
 }
 
+/**
+ * Public Games-topic URL for private-menu deep links.
+ * Uses TELEGRAM_CHAT_ID + TELEGRAM_GAMES_TOPIC_ID. No new env vars.
+ * @returns {string|null}
+ */
+function buildGamesTopicUrl() {
+  const raw = process.env.TELEGRAM_CHAT_ID;
+  if (raw == null) {
+    return null;
+  }
+  const chat = String(raw).trim();
+  if (!chat.startsWith("-100")) {
+    return null;
+  }
+  const internalId = chat.slice(4);
+  if (!/^\d+$/.test(internalId)) {
+    return null;
+  }
+  const topic = getConfiguredGamesTopicId();
+  if (topic && /^\d+$/.test(String(topic))) {
+    return `https://t.me/c/${internalId}/${topic}`;
+  }
+  return `https://t.me/c/${internalId}`;
+}
+
 module.exports = {
   GAMES_TOPIC_REQUIRED_MESSAGE,
   getConfiguredGamesTopicId,
@@ -177,4 +202,5 @@ module.exports = {
   applyGamesTopicToExtra,
   withCtxThreadExtra,
   assertCanStartInteractiveGame,
+  buildGamesTopicUrl,
 };

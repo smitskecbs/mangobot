@@ -1199,6 +1199,171 @@ function awardTriviaWinXp(userId, userName, pointsFile = POINTS_FILE) {
   return awardTriviaRoundXp(userId, userName, TRIVIA_ROUND_WIN_XP, pointsFile);
 }
 
+/** ManGo Bomb participation XP (awarded once when a round actually starts). */
+const MANGO_BOMB_PARTICIPATE_XP = 1;
+/** ManGo Bomb survival XP per explosion while still alive. */
+const MANGO_BOMB_SURVIVE_XP = 1;
+/** ManGo Bomb winner bonus XP. */
+const MANGO_BOMB_WIN_XP = 5;
+/** Max rewarded ManGo Bomb rounds per UTC day per user. */
+const MANGO_BOMB_DAILY_ROUND_CAP = 1;
+
+/**
+ * Ensure optional ManGo Bomb XP state exists (backward compatible).
+ * @param {object} user
+ * @returns {{ rewardDate: string|null, rewardedRounds: number, rewardedRoundId: string|null }}
+ */
+function ensureMangoBombState(user) {
+  if (!user.mangoBomb || typeof user.mangoBomb !== "object") {
+    user.mangoBomb = {
+      rewardDate: null,
+      rewardedRounds: 0,
+      rewardedRoundId: null,
+    };
+  }
+  if (!Object.prototype.hasOwnProperty.call(user.mangoBomb, "rewardDate")) {
+    user.mangoBomb.rewardDate = null;
+  }
+  if (!Object.prototype.hasOwnProperty.call(user.mangoBomb, "rewardedRoundId")) {
+    user.mangoBomb.rewardedRoundId = null;
+  }
+  let rounds = user.mangoBomb.rewardedRounds;
+  if (typeof rounds !== "number" || !Number.isInteger(rounds) || rounds < 0) {
+    rounds = 0;
+  }
+  user.mangoBomb.rewardedRounds = rounds;
+  return user.mangoBomb;
+}
+
+function resetMangoBombIfNewDay(user) {
+  const today = getTodayDate();
+  ensureMangoBombState(user);
+  if (user.mangoBomb.rewardDate !== today) {
+    user.mangoBomb.rewardDate = today;
+    user.mangoBomb.rewardedRounds = 0;
+    user.mangoBomb.rewardedRoundId = null;
+  }
+}
+
+/**
+ * Read-only: rewarded ManGo Bomb rounds today (UTC). Missing/legacy → 0.
+ */
+function getMangoBombRewardedRoundsToday(user) {
+  if (!user || typeof user !== "object" || !user.mangoBomb || typeof user.mangoBomb !== "object") {
+    return 0;
+  }
+  if (user.mangoBomb.rewardDate !== getTodayDate()) {
+    return 0;
+  }
+  const rounds = user.mangoBomb.rewardedRounds;
+  if (typeof rounds !== "number" || !Number.isInteger(rounds) || rounds < 0) {
+    return 0;
+  }
+  return rounds;
+}
+
+/**
+ * ManGo Bomb XP with one rewarded round per UTC day.
+ * Later awards in the same roundId still pay; a new round the same day is capped.
+ */
+function awardMangoBombXp(
+  userId,
+  userName,
+  pointsToAdd,
+  roundId,
+  pointsFile = POINTS_FILE,
+  walletFile
+) {
+  const amount =
+    typeof pointsToAdd === "number" && Number.isInteger(pointsToAdd) && pointsToAdd > 0
+      ? pointsToAdd
+      : 0;
+  const rid = roundId == null ? "" : String(roundId);
+
+  if (!amount || !rid) {
+    const data = readPointsSnapshot(pointsFile);
+    const user = data.users[String(userId)];
+    const points = user && typeof user.points === "number" ? user.points : 0;
+    return {
+      awarded: false,
+      reason: "invalid",
+      points,
+      pointsToAdd: 0,
+      rankUp: false,
+      rank: getRank(points),
+      previousRank: getRank(points),
+      rewardedRoundsToday: 0,
+      dailyCap: MANGO_BOMB_DAILY_ROUND_CAP,
+    };
+  }
+
+  if (isCommunityCompetitionExcluded(userId)) {
+    return excludedAwardResult(userId, pointsFile, {
+      pointsToAdd: 0,
+      rewardedRoundsToday: 0,
+      dailyCap: MANGO_BOMB_DAILY_ROUND_CAP,
+    });
+  }
+
+  if (!canEarnXp(userId, walletFile)) {
+    return walletLockedSnapshot(userId, pointsFile, {
+      pointsToAdd: 0,
+      rewardedRoundsToday: 0,
+      dailyCap: MANGO_BOMB_DAILY_ROUND_CAP,
+    });
+  }
+
+  return mutatePoints((data) => {
+    const id = String(userId);
+    const user = ensureUserRecord(data, id, userName);
+    user.name = userName;
+    resetWeeklyIfNewWeek(user, id);
+    resetMangoBombIfNewDay(user);
+
+    if (
+      user.mangoBomb.rewardedRounds >= MANGO_BOMB_DAILY_ROUND_CAP &&
+      user.mangoBomb.rewardedRoundId !== rid
+    ) {
+      return {
+        awarded: false,
+        reason: "daily-cap",
+        points: user.points,
+        pointsToAdd: 0,
+        rewardedRoundsToday: user.mangoBomb.rewardedRounds,
+        dailyCap: MANGO_BOMB_DAILY_ROUND_CAP,
+        rankUp: false,
+        rank: getRank(user.points),
+        previousRank: getRank(user.points),
+      };
+    }
+
+    if (user.mangoBomb.rewardedRounds === 0) {
+      user.mangoBomb.rewardedRounds = 1;
+      user.mangoBomb.rewardedRoundId = rid;
+    }
+
+    const pointsBefore = user.points;
+    user.points += amount;
+    user.weeklyPoints += amount;
+    noteWeeklyStandingSafe(id, user);
+
+    const previousRank = getRank(pointsBefore);
+    const rank = getRank(user.points);
+    const rankUp = previousRank.title !== rank.title;
+
+    return {
+      awarded: true,
+      points: user.points,
+      pointsToAdd: amount,
+      rewardedRoundsToday: user.mangoBomb.rewardedRounds,
+      dailyCap: MANGO_BOMB_DAILY_ROUND_CAP,
+      rankUp,
+      rank,
+      previousRank,
+    };
+  }, pointsFile);
+}
+
 /** PvP board-game win XP (Tic-Tac-Toe, later Connect Four). */
 const PVP_WIN_XP = 3;
 /** Max rewarded PvP wins per UTC day per user. */
@@ -1372,6 +1537,13 @@ module.exports = {
   TRIVIA_DAILY_REWARD_CAP,
   ensureTriviaState,
   getTriviaRewardedRoundsToday,
+  awardMangoBombXp,
+  MANGO_BOMB_PARTICIPATE_XP,
+  MANGO_BOMB_SURVIVE_XP,
+  MANGO_BOMB_WIN_XP,
+  MANGO_BOMB_DAILY_ROUND_CAP,
+  ensureMangoBombState,
+  getMangoBombRewardedRoundsToday,
   awardPvpWinXp,
   PVP_WIN_XP,
   PVP_DAILY_WIN_CAP,
