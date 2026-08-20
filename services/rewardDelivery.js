@@ -610,10 +610,12 @@ async function prepareTokenAssetDelivery(input, ctx, assetType) {
       return { ok: false, reason: "invalid-mint", error: "Enter a valid Solana mint address." };
     }
     const inspectFn = typeof input.inspectMint === "function" ? input.inspectMint : inspectMint;
+    const inspectRpcUrl =
+      (typeof input.rpcUrl === "string" && input.rpcUrl.trim()) || ctx.config.rpcUrl;
     const info = await inspectFn(mint, {
       sourceOwner: ctx.config.distributionWallet,
       expectNft,
-      rpcUrl: input.rpcUrl,
+      rpcUrl: inspectRpcUrl,
       env: input.env,
     });
     if (!info || !info.ok) {

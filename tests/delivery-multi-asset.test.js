@@ -120,11 +120,24 @@ function makeSig(seed) {
   return raw.slice(0, 88);
 }
 
+const DELIVERY_RPC = "https://delivery-rpc.test.invalid/rpc";
+const INJECTED_RPC = "https://injected-rpc.test.invalid/rpc";
+
 function enabledEnv(distributionWallet) {
   return {
     REWARD_DELIVERY_ENABLED: "true",
     PRESALE_DISTRIBUTION_ENABLED: "true",
     MANGO_DISTRIBUTION_WALLET: distributionWallet,
+    SOLANA_RPC_URL: "https://example.invalid/rpc",
+    ADMIN_USER_ID: "9001",
+  };
+}
+
+function deliveryRpcEnv(distributionWallet) {
+  return {
+    REWARD_DELIVERY_ENABLED: "true",
+    MANGO_DISTRIBUTION_WALLET: distributionWallet,
+    DELIVERY_RPC_URL: DELIVERY_RPC,
     SOLANA_RPC_URL: "https://example.invalid/rpc",
     ADMIN_USER_ID: "9001",
   };
@@ -346,6 +359,84 @@ async function main() {
     assert.strictEqual(prepared.review.amountBaseUnits, humanAmountToBaseUnits("10", 6).baseUnits);
     assert.notStrictEqual(prepared.review.mint, MANGO_MINT);
     assertNoSecretFields(prepared.review);
+  });
+
+  await runTest("Telegram SPL inspect uses configured delivery RPC without input.rpcUrl", async () => {
+    const { walletFile, rewardsFile, deliveryFile, created } = seedPending();
+    const seen = [];
+    const inspect = async (mint, options = {}) => {
+      seen.push(options.rpcUrl);
+      return fakeInspect({ decimals: 6, sourceAmount: "100000000" })(mint, options);
+    };
+    const input = {
+      adminUserId: 9001,
+      rewardId: created.reward.rewardId,
+      assetType: ASSET_SPL,
+      mint: splMint,
+      amountHuman: "10",
+      inspectMint: inspect,
+      walletFile,
+      rewardsFile,
+      deliveryFile,
+      env: deliveryRpcEnv(dist.address),
+      now: 50,
+    };
+    assert.strictEqual(input.rpcUrl, undefined);
+    const prepared = await prepareRewardDelivery(input);
+    assert.strictEqual(prepared.ok, true, prepared.error);
+    assert.deepStrictEqual(seen, [DELIVERY_RPC]);
+    assert.ok(!seen.includes("https://example.invalid/rpc"));
+  });
+
+  await runTest("Telegram NFT inspect uses configured delivery RPC without input.rpcUrl", async () => {
+    const { walletFile, rewardsFile, deliveryFile, created } = seedPending();
+    const seen = [];
+    const inspect = async (mint, options = {}) => {
+      seen.push(options.rpcUrl);
+      return fakeInspect({ decimals: 0, supply: "1", sourceAmount: "1" })(mint, options);
+    };
+    const input = {
+      adminUserId: 9001,
+      rewardId: created.reward.rewardId,
+      assetType: ASSET_NFT,
+      mint: nftMint,
+      inspectMint: inspect,
+      walletFile,
+      rewardsFile,
+      deliveryFile,
+      env: deliveryRpcEnv(dist.address),
+      now: 50,
+    };
+    assert.strictEqual(input.rpcUrl, undefined);
+    const prepared = await prepareRewardDelivery(input);
+    assert.strictEqual(prepared.ok, true, prepared.error);
+    assert.deepStrictEqual(seen, [DELIVERY_RPC]);
+    assert.ok(!seen.includes("https://example.invalid/rpc"));
+  });
+
+  await runTest("explicit inspect rpcUrl override still wins over delivery config", async () => {
+    const { walletFile, rewardsFile, deliveryFile, created } = seedPending();
+    const seen = [];
+    const inspect = async (mint, options = {}) => {
+      seen.push(options.rpcUrl);
+      return fakeInspect({ decimals: 6, sourceAmount: "100000000" })(mint, options);
+    };
+    const prepared = await prepareRewardDelivery({
+      adminUserId: 9001,
+      rewardId: created.reward.rewardId,
+      assetType: ASSET_SPL,
+      mint: splMint,
+      amountHuman: "10",
+      inspectMint: inspect,
+      rpcUrl: INJECTED_RPC,
+      walletFile,
+      rewardsFile,
+      deliveryFile,
+      env: deliveryRpcEnv(dist.address),
+      now: 50,
+    });
+    assert.strictEqual(prepared.ok, true, prepared.error);
+    assert.deepStrictEqual(seen, [INJECTED_RPC]);
   });
 
   await runTest("7-10. SPL verify rejects wrong mint/amount/destination/signer", async () => {
