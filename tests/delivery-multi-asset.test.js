@@ -40,6 +40,8 @@ const {
 const {
   UNSUPPORTED_TOKEN_2022: INSPECT_UNSUPPORTED_TOKEN,
   UNSUPPORTED_NFT: INSPECT_UNSUPPORTED_NFT,
+  UNSUPPORTED_EXTENSION,
+  UNSUPPORTED_TOKEN_2022_NFT,
 } = require("../services/deliveryMintInspect");
 const { verifyDeliveryTransaction } = require("../services/deliveryVerify");
 const {
@@ -214,6 +216,7 @@ function fakeInspect(info) {
       decimals: 6,
       supply: "1000000000",
       sourceAmount: "1000000000000",
+      extensions: [],
       ...info,
     };
   };
@@ -1046,6 +1049,228 @@ async function main() {
     });
     assert.strictEqual(verified.ok, false);
     assert.strictEqual(verified.reason, "unsupported-token-program");
+  });
+
+  await runTest("Token-2022 safe SPL freeze uses Token-2022 program and decimals", async () => {
+    const { walletFile, rewardsFile, deliveryFile, created, env } = seedPending();
+    const prepared = await prepareRewardDelivery({
+      adminUserId: 9001,
+      rewardId: created.reward.rewardId,
+      assetType: ASSET_SPL,
+      mint: splMint,
+      amountHuman: "10",
+      inspectMint: fakeInspect({
+        decimals: 6,
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
+        extensions: ["MetadataPointer", "TokenMetadata"],
+        sourceAmount: "100000000",
+      }),
+      walletFile,
+      rewardsFile,
+      deliveryFile,
+      env,
+      now: 50,
+    });
+    assert.strictEqual(prepared.ok, true, prepared.error);
+    assert.strictEqual(prepared.review.tokenProgram, TOKEN_2022_PROGRAM_ID);
+    assert.strictEqual(prepared.review.decimals, 6);
+    assert.strictEqual(prepared.review.mint, splMint);
+    const good = tokenTx({
+      signer: dist.address,
+      destination: userWallet.address,
+      mint: splMint,
+      amount: prepared.review.amountBaseUnits,
+      memo: deliveryMemo(prepared.review.deliveryId),
+      programId: TOKEN_2022_PROGRAM_ID,
+      program: "spl-token-2022",
+      decimals: 6,
+    });
+    const verified = verifyDeliveryTransaction(good, expectedFromRecord(prepared.review, {
+      expectedSigner: dist.address,
+      destinationOwner: userWallet.address,
+      createdAt: 50,
+    }));
+    assert.strictEqual(verified.ok, true, verified.reason);
+  });
+
+  await runTest("Token-2022 verify rejects wrong mint/amount/destination/signer/program/extra transfer", async () => {
+    const { walletFile, rewardsFile, deliveryFile, created, env } = seedPending();
+    const prepared = await prepareRewardDelivery({
+      adminUserId: 9001,
+      rewardId: created.reward.rewardId,
+      assetType: ASSET_SPL,
+      mint: splMint,
+      amountHuman: "10",
+      inspectMint: fakeInspect({
+        decimals: 6,
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
+        extensions: ["MintCloseAuthority"],
+      }),
+      walletFile,
+      rewardsFile,
+      deliveryFile,
+      env,
+      now: 50,
+    });
+    const expected = expectedFromRecord({
+      expectedSigner: dist.address,
+      destination: userWallet.address,
+      mint: splMint,
+      amountBaseUnits: prepared.review.amountBaseUnits,
+      deliveryId: prepared.review.deliveryId,
+      tokenProgram: TOKEN_2022_PROGRAM_ID,
+      createdAt: 50,
+    });
+    const memo = deliveryMemo(prepared.review.deliveryId);
+    const base = {
+      signer: dist.address,
+      destination: userWallet.address,
+      mint: splMint,
+      amount: prepared.review.amountBaseUnits,
+      memo,
+      programId: TOKEN_2022_PROGRAM_ID,
+      program: "spl-token-2022",
+      decimals: 6,
+    };
+    assert.strictEqual(
+      verifyDeliveryTransaction(tokenTx({ ...base, mint: generateSolanaWallet().address }), expected).reason,
+      "wrong-mint"
+    );
+    assert.strictEqual(verifyDeliveryTransaction(tokenTx({ ...base, amount: "1" }), expected).reason, "wrong-amount");
+    assert.strictEqual(
+      verifyDeliveryTransaction(tokenTx({ ...base, destination: generateSolanaWallet().address }), expected).reason,
+      "wrong-destination"
+    );
+    assert.strictEqual(
+      verifyDeliveryTransaction(tokenTx({ ...base, signer: userWallet.address }), expected).reason,
+      "wrong-signer"
+    );
+    assert.strictEqual(
+      verifyDeliveryTransaction(
+        tokenTx({ ...base, programId: TOKEN_PROGRAM_ID, program: "spl-token" }),
+        expected
+      ).reason,
+      "wrong-token-program"
+    );
+    const extra = tokenTx(base);
+    extra.transaction.message.instructions.push(
+      extra.transaction.message.instructions[0]
+    );
+    assert.strictEqual(verifyDeliveryTransaction(extra, expected).reason, "multiple-transfers");
+    assert.strictEqual(
+      verifyDeliveryTransaction(tokenTx({ ...base, memo: "mango-delivery:other" }), expected).reason,
+      "memo-mismatch"
+    );
+  });
+
+  await runTest("client tokenProgram override rejected; unsafe Token-2022 extensions fail closed", async () => {
+    const { walletFile, rewardsFile, deliveryFile, created, env } = seedPending();
+    const prepared = await prepareRewardDelivery({
+      adminUserId: 9001,
+      rewardId: created.reward.rewardId,
+      assetType: ASSET_SPL,
+      mint: splMint,
+      amountHuman: "10",
+      inspectMint: fakeInspect({
+        decimals: 6,
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
+        extensions: ["MetadataPointer"],
+      }),
+      walletFile,
+      rewardsFile,
+      deliveryFile,
+      env,
+      now: 50,
+    });
+    const ignored = ignoreClientOverrides(
+      { tokenProgram: TOKEN_PROGRAM_ID },
+      {
+        destination: userWallet.address,
+        mint: splMint,
+        amountBaseUnits: prepared.review.amountBaseUnits,
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
+        assetType: ASSET_SPL,
+      }
+    );
+    assert.strictEqual(ignored.ok, false);
+    assert.strictEqual(ignored.reason, "wrong-token-program");
+    const unsafe = [
+      "TransferFeeConfig",
+      "TransferHook",
+      "NonTransferable",
+      "ConfidentialTransferMint",
+      "PermanentDelegate",
+      "weirdPlugin",
+    ];
+    for (const extension of unsafe) {
+      const { created: next, walletFile: w, rewardsFile: r, deliveryFile: d, env: e } = seedPending();
+      const result = await prepareRewardDelivery({
+        adminUserId: 9001,
+        rewardId: next.reward.rewardId,
+        assetType: ASSET_SPL,
+        mint: splMint,
+        amountHuman: "10",
+        inspectMint: fakeInspect({
+          tokenProgram: TOKEN_2022_PROGRAM_ID,
+          extensions: [extension],
+          decimals: 6,
+        }),
+        walletFile: w,
+        rewardsFile: r,
+        deliveryFile: d,
+        env: e,
+        now: 50,
+      });
+      assert.strictEqual(result.ok, false, extension);
+      assert.strictEqual(result.error, UNSUPPORTED_EXTENSION);
+      assert.ok(String(result.reason).startsWith("unsupported-extension:"));
+    }
+  });
+
+  await runTest("Token-2022 NFT safe allowed; unsafe NFT extension rejected", async () => {
+    const { walletFile, rewardsFile, deliveryFile, created, env } = seedPending();
+    const prepared = await prepareRewardDelivery({
+      adminUserId: 9001,
+      rewardId: created.reward.rewardId,
+      assetType: ASSET_NFT,
+      mint: nftMint,
+      inspectMint: fakeInspect({
+        decimals: 0,
+        supply: "1",
+        sourceAmount: "1",
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
+        extensions: ["MetadataPointer", "TokenMetadata"],
+      }),
+      walletFile,
+      rewardsFile,
+      deliveryFile,
+      env,
+      now: 50,
+    });
+    assert.strictEqual(prepared.ok, true, prepared.error);
+    assert.strictEqual(prepared.review.tokenProgram, TOKEN_2022_PROGRAM_ID);
+    assert.strictEqual(prepared.review.amountBaseUnits, "1");
+    const { created: created2, walletFile: w2, rewardsFile: r2, deliveryFile: d2, env: env2 } = seedPending();
+    const unsafeNft = await prepareRewardDelivery({
+      adminUserId: 9001,
+      rewardId: created2.reward.rewardId,
+      assetType: ASSET_NFT,
+      mint: nftMint,
+      inspectMint: fakeInspect({
+        decimals: 0,
+        supply: "1",
+        sourceAmount: "1",
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
+        extensions: ["TransferHook"],
+      }),
+      walletFile: w2,
+      rewardsFile: r2,
+      deliveryFile: d2,
+      env: env2,
+      now: 50,
+    });
+    assert.strictEqual(unsafeNft.ok, false);
+    assert.strictEqual(unsafeNft.error, UNSUPPORTED_TOKEN_2022_NFT);
   });
 
   await runTest("picker is private-only; amount path works in group", () => {

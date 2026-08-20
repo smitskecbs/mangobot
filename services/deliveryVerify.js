@@ -48,35 +48,60 @@ function instructionProgramId(ix) {
   return "";
 }
 
-function isToken2022TransferIx(ix) {
+function isToken2022ProgramIx(ix) {
   if (!ix || typeof ix !== "object") {
     return false;
   }
   const programId = instructionProgramId(ix);
-  if (programId !== TOKEN_2022_PROGRAM_ID && ix.program !== "spl-token-2022") {
-    return false;
-  }
-  const parsed = ix.parsed;
-  if (!parsed || typeof parsed !== "object") {
-    return programId === TOKEN_2022_PROGRAM_ID;
-  }
-  return parsed.type === "transferChecked" || parsed.type === "transfer";
+  return programId === TOKEN_2022_PROGRAM_ID || ix.program === "spl-token-2022";
 }
 
-function parseTokenTransfer(ix) {
+function isTokenkegProgramIx(ix) {
+  if (!ix || typeof ix !== "object") {
+    return false;
+  }
+  const programId = instructionProgramId(ix);
+  return programId === TOKEN_PROGRAM_ID || ix.program === "spl-token";
+}
+
+function isToken2022TransferIx(ix) {
+  if (!isToken2022ProgramIx(ix)) {
+    return false;
+  }
+  const parsed = ix.parsed;
+  if (!parsed || typeof parsed !== "object") {
+    return instructionProgramId(ix) === TOKEN_2022_PROGRAM_ID;
+  }
+  return (
+    parsed.type === "transferChecked" ||
+    parsed.type === "transfer" ||
+    parsed.type === "transferCheckedWithFee"
+  );
+}
+
+function isUnsafeToken2022TransferType(ix) {
+  const parsed = ix && ix.parsed;
+  return Boolean(parsed && parsed.type === "transferCheckedWithFee");
+}
+
+function parseTokenTransfer(ix, allowedProgram) {
   if (!ix || typeof ix !== "object") {
     return null;
   }
-  const programId = instructionProgramId(ix);
   const parsed = ix.parsed;
-  if (programId === TOKEN_2022_PROGRAM_ID || ix.program === "spl-token-2022") {
-    return null;
-  }
-  if (programId !== TOKEN_PROGRAM_ID && ix.program !== "spl-token") {
+  const expectedProgram = allowedProgram || TOKEN_PROGRAM_ID;
+  if (expectedProgram === TOKEN_2022_PROGRAM_ID) {
+    if (!isToken2022ProgramIx(ix)) {
+      return null;
+    }
+  } else if (isToken2022ProgramIx(ix) || !isTokenkegProgramIx(ix)) {
     return null;
   }
   if (!parsed || typeof parsed !== "object") {
     return null;
+  }
+  if (parsed.type === "transferCheckedWithFee") {
+    return { unsafeFee: true };
   }
   if (parsed.type !== "transferChecked" && parsed.type !== "transfer") {
     return null;
@@ -162,7 +187,7 @@ function verifyDeliveryTransaction(tx, expected, options = {}) {
   if (!expectedSigner || !destinationOwner || !mint || !expectedAmount.ok) {
     return { ok: false, reason: "invalid-expected", error: "This transaction could not be verified." };
   }
-  if (expectedProgram !== TOKEN_PROGRAM_ID) {
+  if (expectedProgram !== TOKEN_PROGRAM_ID && expectedProgram !== TOKEN_2022_PROGRAM_ID) {
     return {
       ok: false,
       reason: "unsupported-token-program",
@@ -186,14 +211,35 @@ function verifyDeliveryTransaction(tx, expected, options = {}) {
   }
 
   const instructions = collectInstructions(tx);
-  if (instructions.some(isToken2022TransferIx)) {
+  if (expectedProgram === TOKEN_PROGRAM_ID && instructions.some(isToken2022TransferIx)) {
     return {
       ok: false,
       reason: "unsupported-token-program",
       error: "This transaction could not be verified.",
     };
   }
-  const transfers = instructions.map(parseTokenTransfer).filter(Boolean);
+  if (expectedProgram === TOKEN_2022_PROGRAM_ID) {
+    const kegTransfers = instructions
+      .map((ix) => parseTokenTransfer(ix, TOKEN_PROGRAM_ID))
+      .filter((row) => row && !row.unsafeFee);
+    if (kegTransfers.length) {
+      return {
+        ok: false,
+        reason: "wrong-token-program",
+        error: "This transaction could not be verified.",
+      };
+    }
+    if (instructions.some(isUnsafeToken2022TransferType)) {
+      return {
+        ok: false,
+        reason: "unsupported-extension:TransferFeeConfig",
+        error: "This transaction could not be verified.",
+      };
+    }
+  }
+  const transfers = instructions
+    .map((ix) => parseTokenTransfer(ix, expectedProgram))
+    .filter((row) => row && !row.unsafeFee);
   if (transfers.length !== 1) {
     return {
       ok: false,
