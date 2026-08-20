@@ -535,13 +535,19 @@ function createMangoBombService(options = {}) {
     return true;
   }
 
-  function tryJoin({ gameId, userId, displayName, isBot, chatId } = {}) {
+  function tryJoin({ gameId, userId, displayName, isBot, chatId, threadId } = {}) {
     const game = gamesById.get(gameId);
     if (!game || game.status === STATUS.FINISHED || game.status === STATUS.CANCELLED) {
       return { ok: false, reason: "stale", toast: STALE_CALLBACK };
     }
     if (chatId != null && String(chatId) !== String(game.chatId)) {
       return { ok: false, reason: "wrong-chat", toast: STALE_CALLBACK };
+    }
+    if (
+      game.threadId != null &&
+      (threadId == null || String(threadId) !== String(game.threadId))
+    ) {
+      return { ok: false, reason: "wrong-topic", toast: STALE_CALLBACK };
     }
     if (isBot) {
       return { ok: false, reason: "bot", toast: "Bots cannot join." };
@@ -566,13 +572,19 @@ function createMangoBombService(options = {}) {
     };
   }
 
-  function tryPass({ gameId, userId, isBot, chatId } = {}) {
+  function tryPass({ gameId, userId, isBot, chatId, threadId } = {}) {
     const game = gamesById.get(gameId);
     if (!game || game.status === STATUS.FINISHED || game.status === STATUS.CANCELLED) {
       return { ok: false, reason: "stale", toast: STALE_CALLBACK };
     }
     if (chatId != null && String(chatId) !== String(game.chatId)) {
       return { ok: false, reason: "wrong-chat", toast: STALE_CALLBACK };
+    }
+    if (
+      game.threadId != null &&
+      (threadId == null || String(threadId) !== String(game.threadId))
+    ) {
+      return { ok: false, reason: "wrong-topic", toast: STALE_CALLBACK };
     }
     if (isBot) {
       return { ok: false, reason: "bot", toast: "Bots cannot play." };

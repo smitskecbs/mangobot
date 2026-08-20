@@ -22,7 +22,6 @@ const {
   emptyInlineKeyboardExtra,
 } = require("../utils/expiredMessageCleanup");
 const {
-  GAMES_TOPIC_REQUIRED_MESSAGE,
   assertCanStartInteractiveGame,
   withCtxThreadExtra,
   getMessageThreadId,
@@ -33,7 +32,11 @@ const PRIVATE_MANGO_BOMB_TEXT = `🥭💣 ManGo Bomb
 
 This is a live community game.
 
-Start or join the next round in the ManGo Games chat.`;
+Play it in the ManGo Games topic.`;
+
+const MANGO_BOMB_TOPIC_REQUIRED_TEXT = `🥭💣 ManGo Bomb is played in the Games topic.
+
+Open Games and start the next round there. 🎮`;
 
 function busyOptions(options = {}) {
   return {
@@ -45,12 +48,12 @@ function busyOptions(options = {}) {
   };
 }
 
-function privateOpenGamesExtra() {
+function openGamesExtra() {
   const url = buildGamesTopicUrl();
   if (!url) {
     return undefined;
   }
-  return Markup.inlineKeyboard([[Markup.button.url("Open Games", url)]]);
+  return Markup.inlineKeyboard([[Markup.button.url("🎮 Open Games", url)]]);
 }
 
 function wireMangoBombRuntime(runtime, botOrTelegram, options = {}) {
@@ -126,16 +129,22 @@ async function handleMangoBomb(ctx, options = {}) {
   }
 
   if (isPrivateChat(ctx) || !isGroupChat(ctx)) {
-    return ctx.reply(PRIVATE_MANGO_BOMB_TEXT, privateOpenGamesExtra());
+    return ctx.reply(PRIVATE_MANGO_BOMB_TEXT, openGamesExtra());
   }
 
-  const gate = await assertStartFn(ctx, options);
+  const gate = await assertStartFn(ctx, {
+    ...options,
+    allowAdminTopicBypass: false,
+  });
   if (!gate.ok) {
     if (gate.reason === "bot") {
       return ctx.reply("🥭💣 Bots cannot start ManGo Bomb.");
     }
     if (gate.reason === "wrong-topic") {
-      return ctx.reply(GAMES_TOPIC_REQUIRED_MESSAGE);
+      return ctx.reply(
+        MANGO_BOMB_TOPIC_REQUIRED_TEXT,
+        withCtxThreadExtra(ctx, openGamesExtra())
+      );
     }
     return ctx.reply("🥭💣 ManGo Bomb is not available in this group.");
   }
@@ -220,6 +229,7 @@ async function handleMangoBombCallback(ctx, options = {}) {
     displayName: ctx.from,
     isBot: Boolean(ctx.from.is_bot),
     chatId,
+    threadId: getMessageThreadId(ctx),
   };
 
   const result =
@@ -264,3 +274,4 @@ module.exports.handleMangoBomb = handleMangoBomb;
 module.exports.handleMangoBombCallback = handleMangoBombCallback;
 module.exports.wireMangoBombRuntime = wireMangoBombRuntime;
 module.exports.PRIVATE_MANGO_BOMB_TEXT = PRIVATE_MANGO_BOMB_TEXT;
+module.exports.MANGO_BOMB_TOPIC_REQUIRED_TEXT = MANGO_BOMB_TOPIC_REQUIRED_TEXT;

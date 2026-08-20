@@ -37,6 +37,7 @@ const {
   handleMangoBomb,
   handleMangoBombCallback,
   PRIVATE_MANGO_BOMB_TEXT,
+  MANGO_BOMB_TOPIC_REQUIRED_TEXT,
 } = require("../commands/mangobomb");
 const {
   isCommunityChallengeBusy,
@@ -44,10 +45,11 @@ const {
 } = require("../services/communityGameState");
 const { GROUP_MENU_CALLBACK, getGroupGamesMenuExtra } = require("../utils/botMenu");
 const { HELP_MESSAGE } = require("../commands/help");
+const { buildGamesTopicUrl } = require("../utils/gameTopic");
+const { handleGroupMenuCallback } = require("../commands/menu");
 const {
-  GAMES_TOPIC_REQUIRED_MESSAGE,
-  buildGamesTopicUrl,
-} = require("../utils/gameTopic");
+  ACTION_REGISTRY,
+} = require("../services/communityActivityEngine");
 const {
   registerManualWallet,
   setWalletFileForTests,
@@ -182,22 +184,24 @@ function createService(overrides = {}) {
   return { service, timers, edits };
 }
 
-function join(service, gameId, userId, name) {
+function join(service, gameId, userId, name, extra = {}) {
   return service.tryJoin({
     gameId,
     userId,
     displayName: { first_name: name, id: userId },
     isBot: false,
     chatId: COMMUNITY_CHAT,
+    threadId: extra.threadId !== undefined ? extra.threadId : 123,
   });
 }
 
-function pass(service, gameId, userId) {
+function pass(service, gameId, userId, extra = {}) {
   return service.tryPass({
     gameId,
     userId,
     isBot: false,
     chatId: COMMUNITY_CHAT,
+    threadId: extra.threadId !== undefined ? extra.threadId : 123,
   });
 }
 
@@ -421,11 +425,13 @@ async function main() {
       gameId,
       userId: USER_A,
       chatId: COMMUNITY_CHAT,
+      threadId: 123,
     });
     const replay = await service.enqueuePass({
       gameId,
       userId: USER_A,
       chatId: COMMUNITY_CHAT,
+      threadId: 123,
     });
     assert.strictEqual(first.ok, true);
     assert.strictEqual(replay.ok, false);
@@ -662,8 +668,18 @@ async function main() {
     const gameId = await startWithPlayers(service, ["Kevin", "Lojay"]);
     await service.forceLobbyEnd(gameId);
     const before = pointsOf(pFile, USER_A);
-    await service.enqueuePass({ gameId, userId: USER_A, chatId: COMMUNITY_CHAT });
-    await service.enqueuePass({ gameId, userId: USER_A, chatId: COMMUNITY_CHAT });
+    await service.enqueuePass({
+      gameId,
+      userId: USER_A,
+      chatId: COMMUNITY_CHAT,
+      threadId: 123,
+    });
+    await service.enqueuePass({
+      gameId,
+      userId: USER_A,
+      chatId: COMMUNITY_CHAT,
+      threadId: 123,
+    });
     assert.strictEqual(pointsOf(pFile, USER_A), before);
   });
 
@@ -703,29 +719,64 @@ async function main() {
     assert.ok(HELP_MESSAGE.includes("/mangobomb"));
   });
 
-  await runTest("36. private menu behavior", async () => {
+  await runTest("36. private /mangobomb → no lobby + Open Games", async () => {
     process.env.TELEGRAM_CHAT_ID = String(COMMUNITY_CHAT);
     process.env.TELEGRAM_GAMES_TOPIC_ID = "77";
+    const { service } = createService();
+    let started = false;
     const ctx = createMockCtx({ chatType: "private", chatId: USER_A });
-    await handleMangoBomb(ctx, { isBusyFn: () => false, startLobbyFn: () => ({ ok: true }) });
+    await handleMangoBomb(ctx, {
+      isBusyFn: () => false,
+      startLobbyFn: (p) => {
+        started = true;
+        return service.startLobby(p);
+      },
+    });
+    assert.strictEqual(started, false);
+    assert.strictEqual(service.isMangoBombOpen(COMMUNITY_CHAT), false);
     assert.ok(ctx.replies[0].text.includes(PRIVATE_MANGO_BOMB_TEXT.split("\n")[0]));
     assert.ok(ctx.replies[0].text.includes("live community game"));
+    assert.ok(ctx.replies[0].text.includes("ManGo Games topic"));
     const extra = ctx.replyExtras[0];
     const url = extra && extra.reply_markup && extra.reply_markup.inline_keyboard[0][0].url;
+    const label = extra && extra.reply_markup && extra.reply_markup.inline_keyboard[0][0].text;
     assert.strictEqual(url, buildGamesTopicUrl());
     assert.ok(url.includes("/77"));
+    assert.strictEqual(label, "🎮 Open Games");
   });
 
-  await runTest("37. group/topic routing", async () => {
+  await runTest("37. /mangobomb Games topic starts; General/wrong topic/admin do not", async () => {
     process.env.TELEGRAM_GAMES_TOPIC_ID = "123";
     const { service } = createService();
+
     const general = createMockCtx({ userId: USER_A, memberStatus: "member" });
     await handleMangoBomb(general, {
       startLobbyFn: (p) => service.startLobby(p),
       isBusyFn: () => false,
-      canManageGroupFn: async () => false,
+      canManageGroupFn: async () => true,
     });
-    assert.ok(String(general.replies[0].text).includes("Games topic"));
+    assert.strictEqual(general.replies[0].text, MANGO_BOMB_TOPIC_REQUIRED_TEXT);
+    assert.strictEqual(service.isMangoBombOpen(COMMUNITY_CHAT), false);
+    const generalBtn = general.replyExtras[0];
+    assert.strictEqual(
+      generalBtn && generalBtn.reply_markup.inline_keyboard[0][0].text,
+      "🎮 Open Games"
+    );
+    assert.ok(
+      generalBtn.reply_markup.inline_keyboard[0][0].url.includes("/123")
+    );
+
+    const wrong = createMockCtx({
+      userId: USER_A,
+      memberStatus: "administrator",
+      messageThreadId: 1,
+    });
+    await handleMangoBomb(wrong, {
+      startLobbyFn: (p) => service.startLobby(p),
+      isBusyFn: () => false,
+      canManageGroupFn: async () => true,
+    });
+    assert.strictEqual(wrong.replies[0].text, MANGO_BOMB_TOPIC_REQUIRED_TEXT);
     assert.strictEqual(service.isMangoBombOpen(COMMUNITY_CHAT), false);
 
     const ok = createMockCtx({
@@ -740,7 +791,124 @@ async function main() {
     });
     assert.ok(String(ok.replies[0].text).includes("MANGO BOMB"));
     assert.strictEqual(ok.replyExtras[0].message_thread_id, 123);
-    assert.strictEqual(GAMES_TOPIC_REQUIRED_MESSAGE.includes("Games topic"), true);
+    assert.strictEqual(service.isMangoBombOpen(COMMUNITY_CHAT), true);
+  });
+
+  await runTest("routing. menu private ManGo Bomb → Open Games, no lobby", async () => {
+    process.env.TELEGRAM_CHAT_ID = String(COMMUNITY_CHAT);
+    process.env.TELEGRAM_GAMES_TOPIC_ID = "123";
+    const { service } = createService();
+    let started = false;
+    const ctx = createMockCtx({
+      chatType: "private",
+      chatId: USER_A,
+      callbackData: GROUP_MENU_CALLBACK.MANGOBOMB,
+    });
+    await handleGroupMenuCallback(ctx, {
+      isBusyFn: () => false,
+      startLobbyFn: (p) => {
+        started = true;
+        return service.startLobby(p);
+      },
+    });
+    assert.strictEqual(started, false);
+    assert.ok(ctx.replies[0].text.includes("live community game"));
+    assert.strictEqual(
+      ctx.replyExtras[0].reply_markup.inline_keyboard[0][0].text,
+      "🎮 Open Games"
+    );
+  });
+
+  await runTest("routing. wrong-topic JOIN/PASS rejected, no mutation, no XP", async () => {
+    const pFile = pointsFile();
+    const wFile = walletFile();
+    setWalletFileForTests(wFile);
+    const { service } = createService();
+    attachXp(service, pFile, wFile);
+    const gameId = await startWithPlayers(service, ["Kevin", "Lojay"]);
+    const beforePlayers = service.getGame(gameId).playerCount;
+    const beforePointsA = pointsOf(pFile, USER_A);
+
+    const badJoin = createMockCtx({
+      callbackData: joinCallbackData(gameId),
+      userId: USER_C,
+      firstName: "Ada",
+      messageThreadId: 1,
+    });
+    await handleMangoBombCallback(badJoin, { runtime: service });
+    assert.strictEqual(badJoin.cbAnswers[0], STALE_CALLBACK);
+    assert.strictEqual(service.getGame(gameId).playerCount, beforePlayers);
+    assert.strictEqual(service.getGame(gameId).status, "lobby");
+    assert.strictEqual(pointsOf(pFile, USER_A), beforePointsA);
+    assert.strictEqual(pointsOf(pFile, USER_C), 0);
+
+    await service.forceLobbyEnd(gameId);
+    const afterStartA = pointsOf(pFile, USER_A);
+    const afterStartB = pointsOf(pFile, USER_B);
+    const holder = service.getGame(gameId).currentHolder;
+    const badPass = createMockCtx({
+      callbackData: passCallbackData(gameId),
+      userId: Number(holder),
+      firstName: "Kevin",
+      messageThreadId: 1,
+    });
+    await handleMangoBombCallback(badPass, { runtime: service });
+    assert.strictEqual(badPass.cbAnswers[0], STALE_CALLBACK);
+    assert.strictEqual(service.getGame(gameId).currentHolder, holder);
+    assert.strictEqual(pointsOf(pFile, USER_A), afterStartA);
+    assert.strictEqual(pointsOf(pFile, USER_B), afterStartB);
+  });
+
+  await runTest("routing. Games-topic JOIN/PASS still work", async () => {
+    const { service } = createService();
+    const started = service.startLobby({ chatId: COMMUNITY_CHAT, threadId: 123 });
+    const joinCtx = createMockCtx({
+      callbackData: joinCallbackData(started.gameId),
+      userId: USER_A,
+      firstName: "Kevin",
+      messageThreadId: 123,
+    });
+    await handleMangoBombCallback(joinCtx, { runtime: service });
+    assert.strictEqual(joinCtx.cbAnswers[0], "Joined!");
+    const joinB = createMockCtx({
+      callbackData: joinCallbackData(started.gameId),
+      userId: USER_B,
+      firstName: "Lojay",
+      messageThreadId: 123,
+    });
+    await handleMangoBombCallback(joinB, { runtime: service });
+    await service.forceLobbyEnd(started.gameId);
+    const holder = service.getGame(started.gameId).currentHolder;
+    const passCtx = createMockCtx({
+      callbackData: passCallbackData(started.gameId),
+      userId: Number(holder),
+      firstName: "Kevin",
+      messageThreadId: 123,
+    });
+    await handleMangoBombCallback(passCtx, { runtime: service });
+    assert.strictEqual(passCtx.cbAnswers[0], "Passed!");
+    assert.notStrictEqual(service.getGame(started.gameId).currentHolder, holder);
+  });
+
+  await runTest("routing. activity engine does not start ManGo Bomb / no General fallback", () => {
+    const engineSrc = fs.readFileSync(
+      path.join(__dirname, "../services/communityActivityEngine.js"),
+      "utf8"
+    );
+    assert.strictEqual(ACTION_REGISTRY.mangobomb, undefined);
+    assert.ok(!engineSrc.includes("getMangoBombRuntime"));
+    assert.ok(!engineSrc.includes("startLobby"));
+    assert.ok(engineSrc.includes("isMangoBombBusy"));
+    const gateSrc = fs.readFileSync(
+      path.join(__dirname, "../utils/gameTopic.js"),
+      "utf8"
+    );
+    assert.ok(gateSrc.includes("allowAdminTopicBypass"));
+    const cmdSrc = fs.readFileSync(
+      path.join(__dirname, "../commands/mangobomb.js"),
+      "utf8"
+    );
+    assert.ok(cmdSrc.includes("allowAdminTopicBypass: false"));
   });
 
   await runTest("38-40. simultaneous pass and explode vs pass", async () => {
@@ -748,8 +916,18 @@ async function main() {
     const gameId = await startWithPlayers(service, ["Kevin", "Lojay", "Ada"]);
     await service.forceLobbyEnd(gameId);
     const [a, b] = await Promise.all([
-      service.enqueuePass({ gameId, userId: USER_A, chatId: COMMUNITY_CHAT }),
-      service.enqueuePass({ gameId, userId: USER_A, chatId: COMMUNITY_CHAT }),
+      service.enqueuePass({
+        gameId,
+        userId: USER_A,
+        chatId: COMMUNITY_CHAT,
+        threadId: 123,
+      }),
+      service.enqueuePass({
+        gameId,
+        userId: USER_A,
+        chatId: COMMUNITY_CHAT,
+        threadId: 123,
+      }),
     ]);
     const oks = [a, b].filter((r) => r.ok);
     assert.strictEqual(oks.length, 1);
@@ -759,7 +937,12 @@ async function main() {
     const id2 = await startWithPlayers(s2, ["Kevin", "Lojay", "Ada"]);
     await s2.forceLobbyEnd(id2);
     const [p, e] = await Promise.all([
-      s2.enqueuePass({ gameId: id2, userId: USER_A, chatId: COMMUNITY_CHAT }),
+      s2.enqueuePass({
+        gameId: id2,
+        userId: USER_A,
+        chatId: COMMUNITY_CHAT,
+        threadId: 123,
+      }),
       s2.forceExplode(id2),
     ]);
     const game = s2.getGame(id2) || { status: STATUS.FINISHED, aliveCount: 1 };

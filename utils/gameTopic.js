@@ -2,7 +2,8 @@
  * Optional Telegram Games topic gating for interactive community games.
  *
  * TELEGRAM_GAMES_TOPIC_ID unset → games allowed anywhere in TELEGRAM_CHAT_ID.
- * Set → normal members must start in that forum topic; admins may bypass.
+ * Set → normal members must start in that forum topic; admins may bypass
+ * unless the caller sets allowAdminTopicBypass: false (ManGo Bomb).
  */
 
 const { canManageGroup } = require("./admin");
@@ -69,6 +70,7 @@ function getMessageThreadId(ctx) {
  * @param {Function} [options.isAdminFn]
  * @param {Function} [options.getChatMember]
  * @param {string|null} [options.gamesTopicId] test override
+ * @param {boolean} [options.allowAdminTopicBypass] default true (Trivia/TTT/C4)
  * @returns {Promise<boolean>}
  */
 async function isAllowedGameTopic(ctx, options = {}) {
@@ -86,6 +88,10 @@ async function isAllowedGameTopic(ctx, options = {}) {
   const threadId = getMessageThreadId(ctx);
   if (threadId != null && String(threadId) === String(configured)) {
     return true;
+  }
+
+  if (options.allowAdminTopicBypass === false) {
+    return false;
   }
 
   const canManageFn =
