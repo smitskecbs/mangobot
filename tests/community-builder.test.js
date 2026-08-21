@@ -800,6 +800,11 @@ async function main() {
     handleCommunityBuilder(privateCtx, h.opts);
     assert.ok(privateCtx.replies[0].text.includes("Community Builder"));
     assert.ok(privateCtx.replies[0].text.includes("Builder Points:"));
+    const homeButtons = JSON.stringify(privateCtx.replies[0].extra);
+    assert.ok(homeButtons.includes("🏆 Open Builder Board"));
+    assert.ok(homeButtons.includes(BUILDER_CALLBACK.OPEN_BOARD));
+    assert.ok(homeButtons.includes("🏆 Builder Leaderboard"));
+    assert.ok(homeButtons.includes(BUILDER_CALLBACK.BOARD));
     const groupCtx = mockCtx({ chatType: "supergroup", chatId: Number(COMMUNITY_CHAT) });
     handleCommunityBuilder(groupCtx, h.opts);
     assert.strictEqual(groupCtx.replies[0].text, GROUP_BUILDER_TEXT);

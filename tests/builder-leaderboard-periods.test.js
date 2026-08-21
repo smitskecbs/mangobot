@@ -41,6 +41,11 @@ const {
   leaderboardText,
   periodChooserText,
   handleGroupLeaderboardCallback,
+  handleCommunityBuilder,
+  resetOpenBoardCooldownForTests,
+  OPEN_BOARD_COOLDOWN_MS,
+  OPEN_BOARD_COOLDOWN_TEXT,
+  OPEN_BOARD_OPENED_TEXT,
 } = require("../commands/communitybuilder");
 const { registerManualWallet, setWalletFileForTests } = require("../services/walletLinks");
 const { mutatePoints, loadPoints, awardMangoBombXp, canEarnXp } = require("../services/points");
@@ -899,6 +904,165 @@ async function main() {
     );
     assert.ok(!src.includes("TELEGRAM_GAMES_TOPIC_ID"));
     assert.ok(!src.includes("gameTopic"));
+  });
+
+  await runTest("open builder board from private menu", async () => {
+    resetOpenBoardCooldownForTests();
+    const now = Date.UTC(2026, 7, 21, 16, 0, 0);
+    const h = harness(now);
+    mutateBuilderStore((store) => {
+      store.builders[INVITER] = {
+        points: 8,
+        referralIds: [],
+        displayName: "Alice",
+        createdAt: 1,
+        activeInviteId: null,
+      };
+    }, h.storeFile);
+    putEvent(h.storeFile, {
+      eventId: "ob1:join",
+      builderUserId: INVITER,
+      points: 8,
+      reason: BUILDER_EVENT_REASON.JOIN,
+      referralUserId: "4004",
+      createdAt: now,
+      displayName: "Alice",
+    });
+
+    const home = mockCtx({ chatType: "private", userId: Number(INVITER) });
+    handleCommunityBuilder(home, h.opts);
+    const homeExtra = JSON.stringify(home.replies[0].extra);
+    assert.ok(homeExtra.includes("🏆 Open Builder Board"));
+    assert.ok(homeExtra.includes(BUILDER_CALLBACK.OPEN_BOARD));
+    assert.ok(homeExtra.includes("🏆 Builder Leaderboard"));
+    assert.ok(homeExtra.includes(BUILDER_CALLBACK.BOARD));
+
+    const posts = [];
+    const telegram = {
+      async sendMessage(chatId, text, extra) {
+        posts.push({ chat_id: chatId, text, extra });
+        return { message_id: posts.length };
+      },
+    };
+    const storeBefore = JSON.stringify(loadBuilderStore(h.storeFile));
+    const pointsBefore = JSON.stringify(loadPoints(h.pointsFile));
+    const bpBefore = builderSummary(INVITER, h.opts).builderPoints;
+
+    const member = mockCtx({
+      callbackData: BUILDER_CALLBACK.OPEN_BOARD,
+      userId: Number(INVITER),
+      telegram,
+    });
+    await handleBuilderCallback(member, { ...h.opts, now });
+    assert.strictEqual(posts.length, 1);
+    assert.strictEqual(String(posts[0].chat_id), COMMUNITY_CHAT);
+    assert.ok(posts[0].text.includes("All-time Community Builders"));
+    assert.ok(posts[0].text.includes("Alice — 8 BP"));
+    assert.ok(!posts[0].text.includes(INVITER));
+    assert.ok(!/wallet/i.test(posts[0].text));
+    const posted = JSON.stringify(posts[0]);
+    assert.ok(!posted.includes("message_thread_id"));
+    const postedExtra = JSON.stringify(posts[0].extra);
+    assert.ok(postedExtra.includes(GROUP_BOARD_CALLBACK.WEEKLY));
+    assert.ok(postedExtra.includes(GROUP_BOARD_CALLBACK.MONTHLY));
+    assert.ok(postedExtra.includes(GROUP_BOARD_CALLBACK.ALLTIME));
+    assert.ok(postedExtra.includes("📅 Weekly"));
+    assert.ok(postedExtra.includes("🗓 Monthly"));
+    assert.ok(postedExtra.includes("🌍 All-time"));
+    assert.strictEqual(member.replies[0].text, OPEN_BOARD_OPENED_TEXT);
+
+    const groupWeekly = mockCtx({
+      chatType: "supergroup",
+      chatId: Number(COMMUNITY_CHAT),
+      callbackData: GROUP_BOARD_CALLBACK.WEEKLY,
+      userId: Number(OTHER),
+    });
+    await handleGroupLeaderboardCallback(groupWeekly, { ...h.opts, now });
+    assert.strictEqual(groupWeekly.cbAnswers.length, 1);
+    assert.ok(groupWeekly.edits[0].text.includes("Weekly Community Builders"));
+
+    const spam = mockCtx({
+      callbackData: BUILDER_CALLBACK.OPEN_BOARD,
+      userId: Number(INVITER),
+      telegram,
+    });
+    await handleBuilderCallback(spam, { ...h.opts, now: now + 1_000 });
+    assert.strictEqual(posts.length, 1);
+    assert.strictEqual(spam.replies[0].text, OPEN_BOARD_COOLDOWN_TEXT);
+
+    const stillCool = mockCtx({
+      callbackData: BUILDER_CALLBACK.OPEN_BOARD,
+      userId: Number(INVITER),
+      telegram,
+    });
+    await handleBuilderCallback(stillCool, {
+      ...h.opts,
+      now: now + OPEN_BOARD_COOLDOWN_MS - 1,
+    });
+    assert.strictEqual(posts.length, 1);
+
+    const admin = mockCtx({
+      callbackData: BUILDER_CALLBACK.OPEN_BOARD,
+      userId: Number(ADMIN_ID),
+      telegram,
+    });
+    await handleBuilderCallback(admin, { ...h.opts, now });
+    assert.strictEqual(posts.length, 2);
+    assert.strictEqual(String(posts[1].chat_id), COMMUNITY_CHAT);
+    assert.ok(posts[1].text.includes("All-time Community Builders"));
+    assert.strictEqual(admin.replies[0].text, OPEN_BOARD_OPENED_TEXT);
+
+    const botCtx = mockCtx({
+      callbackData: BUILDER_CALLBACK.OPEN_BOARD,
+      userId: 777,
+      isBot: true,
+      telegram,
+    });
+    await handleBuilderCallback(botCtx, { ...h.opts, now });
+    assert.strictEqual(posts.length, 2);
+    assert.strictEqual(botCtx.replies.length, 0);
+
+    const afterCooldown = mockCtx({
+      callbackData: BUILDER_CALLBACK.OPEN_BOARD,
+      userId: Number(INVITER),
+      telegram,
+    });
+    await handleBuilderCallback(afterCooldown, {
+      ...h.opts,
+      now: now + OPEN_BOARD_COOLDOWN_MS,
+    });
+    assert.strictEqual(posts.length, 3);
+
+    const chooser = mockCtx({ callbackData: BUILDER_CALLBACK.BOARD });
+    await handleBuilderCallback(chooser, h.opts);
+    const chooserView = chooser.edits[0] || chooser.replies[0];
+    assert.ok(chooserView.text.includes("Choose a period"));
+    const chooserExtra = JSON.stringify(chooserView.extra);
+    assert.ok(chooserExtra.includes(BUILDER_CALLBACK.WEEKLY));
+    assert.ok(chooserExtra.includes(BUILDER_CALLBACK.HOME));
+
+    const adminWeekly = mockCtx({
+      callbackData: BUILDER_CALLBACK.WEEKLY,
+      userId: Number(ADMIN_ID),
+    });
+    await handleBuilderCallback(adminWeekly, h.opts);
+    const adminView = adminWeekly.edits[0] || adminWeekly.replies[0];
+    assert.ok(adminView.text.includes("Weekly Community Builders"));
+    const shareExtra = JSON.stringify(adminView.extra);
+    assert.ok(shareExtra.includes(BUILDER_CALLBACK.SHARE_WEEKLY));
+    assert.ok(shareExtra.includes(BUILDER_CALLBACK.PERIODS));
+
+    assert.strictEqual(builderSummary(INVITER, h.opts).builderPoints, bpBefore);
+    assert.strictEqual(JSON.stringify(loadBuilderStore(h.storeFile)), storeBefore);
+    assert.strictEqual(JSON.stringify(loadPoints(h.pointsFile)), pointsBefore);
+
+    const src = fs.readFileSync(
+      path.join(__dirname, "..", "commands", "communitybuilder.js"),
+      "utf8"
+    );
+    assert.ok(!src.includes("TELEGRAM_GAMES_TOPIC_ID"));
+    assert.ok(!src.includes("gameTopic"));
+    resetOpenBoardCooldownForTests();
   });
 
   await runTest("formatBuilderLeaderboard empty weekly copy", () => {

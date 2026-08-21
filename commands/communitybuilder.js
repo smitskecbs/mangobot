@@ -5,6 +5,7 @@
 const { Markup } = require("telegraf");
 const { isAdmin } = require("../services/points");
 const { parseCommandArg } = require("../utils/telegramReplyTarget");
+const { pruneTimestampMap } = require("../utils/boundedMap");
 const {
   isPrivateChat,
   isGroupChat,
@@ -31,6 +32,7 @@ const BUILDER_CALLBACK = Object.freeze({
   INVITE: "cbuild:invite",
   REFS: "cbuild:refs",
   BOARD: "cbuild:board",
+  OPEN_BOARD: "cbuild:openboard",
   BACK: "cbuild:back",
   PERIODS: "cb:lb:pick",
   WEEKLY: "cb:lb:w",
@@ -55,6 +57,47 @@ const GROUP_BUILDER_TEXT =
 
 const PERMISSION_NEEDED_TEXT =
   "Couldn't create your invite link. The bot needs permission to invite users in the ManGo group.";
+
+const OPEN_BOARD_COOLDOWN_MS = 60_000;
+const OPEN_BOARD_COOLDOWN_TEXT = "Builder Board was just opened in the group. 🥭";
+const OPEN_BOARD_OPENED_TEXT = "Opened in the ManGo group.";
+const OPEN_BOARD_FAILED_TEXT = "Couldn't open the Builder Board right now.";
+const OPEN_BOARD_COOLDOWN_MAX_KEYS = 5_000;
+
+const openBoardOpenedAt = new Map();
+
+function nowMsFromOptions(options = {}) {
+  return Number.isFinite(options.now) ? options.now : Date.now();
+}
+
+function resetOpenBoardCooldownForTests() {
+  openBoardOpenedAt.clear();
+}
+
+function isOpenBoardOnCooldown(userId, nowMs) {
+  pruneTimestampMap(
+    openBoardOpenedAt,
+    nowMs,
+    OPEN_BOARD_COOLDOWN_MS,
+    OPEN_BOARD_COOLDOWN_MAX_KEYS
+  );
+  const last = openBoardOpenedAt.get(String(userId));
+  return Number.isFinite(last) && nowMs - last < OPEN_BOARD_COOLDOWN_MS;
+}
+
+function markOpenBoardOpened(userId, nowMs) {
+  pruneTimestampMap(
+    openBoardOpenedAt,
+    nowMs,
+    OPEN_BOARD_COOLDOWN_MS,
+    OPEN_BOARD_COOLDOWN_MAX_KEYS
+  );
+  openBoardOpenedAt.set(String(userId), nowMs);
+}
+
+function clearOpenBoardOpened(userId) {
+  openBoardOpenedAt.delete(String(userId));
+}
 
 function mark(ok) {
   return ok ? "✅" : "⬜";
@@ -86,6 +129,7 @@ function builderHomeExtra() {
     [Markup.button.callback("📨 My Invite Link", BUILDER_CALLBACK.INVITE)],
     [Markup.button.callback("👥 My Referrals", BUILDER_CALLBACK.REFS)],
     [Markup.button.callback("🏆 Builder Leaderboard", BUILDER_CALLBACK.BOARD)],
+    [Markup.button.callback("🏆 Open Builder Board", BUILDER_CALLBACK.OPEN_BOARD)],
     [Markup.button.callback("⬅️ Back", BUILDER_CALLBACK.BACK)],
   ]);
 }
@@ -288,6 +332,7 @@ function isBuilderCallback(data) {
     data === BUILDER_CALLBACK.INVITE ||
     data === BUILDER_CALLBACK.REFS ||
     data === BUILDER_CALLBACK.BOARD ||
+    data === BUILDER_CALLBACK.OPEN_BOARD ||
     data === BUILDER_CALLBACK.BACK ||
     data === BUILDER_CALLBACK.PERIODS ||
     data === BUILDER_CALLBACK.WEEKLY ||
@@ -485,6 +530,10 @@ async function handleBuilderCallback(ctx, options = {}) {
     );
   }
 
+  if (data === BUILDER_CALLBACK.OPEN_BOARD) {
+    return handleOpenBuilderBoard(ctx, options);
+  }
+
   if (data === BUILDER_CALLBACK.BOARD || data === BUILDER_CALLBACK.PERIODS) {
     return showMenuView(ctx, periodChooserText(), periodChooserExtra());
   }
@@ -531,8 +580,46 @@ async function handleBuilderCallback(ctx, options = {}) {
   }
 }
 
+async function handleOpenBuilderBoard(ctx, options = {}) {
+  if (!ctx.from || ctx.from.is_bot) {
+    return;
+  }
+
+  const nowMs = nowMsFromOptions(options);
+  const userId = ctx.from.id;
+  if (isOpenBoardOnCooldown(userId, nowMs)) {
+    return ctx.reply(OPEN_BOARD_COOLDOWN_TEXT);
+  }
+
+  const chatId = mangoGroupChatId(options);
+  const telegram = ctx.telegram;
+  if (!chatId || !telegram || typeof telegram.sendMessage !== "function") {
+    return ctx.reply(OPEN_BOARD_FAILED_TEXT);
+  }
+
+  const board = getBuilderLeaderboard({
+    ...options,
+    period: BUILDER_PERIOD.ALLTIME,
+  });
+  const text = leaderboardText(board, BUILDER_PERIOD.ALLTIME);
+  const extra = groupLeaderboardExtra();
+  markOpenBoardOpened(userId, nowMs);
+  try {
+    await telegram.sendMessage(chatId, text, extra);
+  } catch (err) {
+    clearOpenBoardOpened(userId);
+    const { error: logError } = require("../utils/logger");
+    logError(
+      "[community-builder] open builder board failed:",
+      err && err.message ? err.message : err
+    );
+    return ctx.reply(OPEN_BOARD_FAILED_TEXT);
+  }
+  return ctx.reply(OPEN_BOARD_OPENED_TEXT);
+}
+
 const BUILDER_ACTION_RE =
-  /^(cbuild:(home|invite|refs|board|back)|cbuild:r:\d+|cb:lb:(pick|w|m|a)|cb:share:(w|m|a))$/;
+  /^(cbuild:(home|invite|refs|board|openboard|back)|cbuild:r:\d+|cb:lb:(pick|w|m|a)|cb:share:(w|m|a))$/;
 const GROUP_BOARD_ACTION_RE = /^cblb:[wma]$/;
 
 module.exports = (bot) => {
@@ -548,8 +635,12 @@ module.exports.handleBuilderBoard = handleBuilderBoard;
 module.exports.handleBuilderStats = handleBuilderStats;
 module.exports.handleBuilderCallback = handleBuilderCallback;
 module.exports.handleGroupLeaderboardCallback = handleGroupLeaderboardCallback;
+module.exports.resetOpenBoardCooldownForTests = resetOpenBoardCooldownForTests;
 module.exports.BUILDER_CALLBACK = BUILDER_CALLBACK;
 module.exports.GROUP_BOARD_CALLBACK = GROUP_BOARD_CALLBACK;
+module.exports.OPEN_BOARD_COOLDOWN_MS = OPEN_BOARD_COOLDOWN_MS;
+module.exports.OPEN_BOARD_COOLDOWN_TEXT = OPEN_BOARD_COOLDOWN_TEXT;
+module.exports.OPEN_BOARD_OPENED_TEXT = OPEN_BOARD_OPENED_TEXT;
 module.exports.BUILDER_REFS_PREFIX = BUILDER_REFS_PREFIX;
 module.exports.BUILDER_START_PAYLOAD = BUILDER_START_PAYLOAD;
 module.exports.GROUP_BUILDER_TEXT = GROUP_BUILDER_TEXT;
