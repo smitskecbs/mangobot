@@ -18,6 +18,7 @@ const { handleMangoBomb } = require("./mangobomb");
 const { handleWallet } = require("./wallet");
 const { handleRewards } = require("./rewards");
 const { handlePresale } = require("./presale");
+const { handleCommunityBuilder } = require("./communitybuilder");
 const {
   handleStreak,
   handleStreakRecord,
@@ -65,6 +66,7 @@ const GROUP_MENU_ACTION_RE = new RegExp(
     GROUP_MENU_CALLBACK.CONNECT4,
     GROUP_MENU_CALLBACK.TRIVIA,
     GROUP_MENU_CALLBACK.MANGOBOMB,
+    GROUP_MENU_CALLBACK.BUILDER,
   ].join("|")})$`
 );
 
@@ -247,6 +249,9 @@ async function handleGroupMenuCallback(ctx, options = {}) {
   if (data === GROUP_MENU_CALLBACK.MANGOBOMB) {
     return handleMangoBomb(ctx, options);
   }
+  if (data === GROUP_MENU_CALLBACK.BUILDER) {
+    return handleCommunityBuilder(ctx, options);
+  }
 }
 
 module.exports = (bot) => {
@@ -330,6 +335,13 @@ module.exports = (bot) => {
       return;
     }
     return handleHelp(ctx);
+  });
+
+  bot.hears(MENU_LABELS.COMMUNITY_BUILDER, (ctx) => {
+    if (!isPrivateChat(ctx)) {
+      return;
+    }
+    return handleCommunityBuilder(ctx);
   });
 };
 

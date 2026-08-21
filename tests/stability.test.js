@@ -185,8 +185,10 @@ async function main() {
     const stops = [];
     const fake = {
       telegram: {},
-      launch(cb) {
-        if (typeof cb === "function") cb();
+      launch(configOrCb, maybeCb) {
+        const onLaunch =
+          typeof configOrCb === "function" ? configOrCb : maybeCb;
+        if (typeof onLaunch === "function") onLaunch();
         return new Promise(() => {});
       },
       stop(signal) {

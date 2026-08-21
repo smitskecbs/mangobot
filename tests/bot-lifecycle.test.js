@@ -403,14 +403,17 @@ async function main() {
     assert.strictEqual(sched.isTimerRunning(), false);
   });
 
-  await runTest("uses bot.launch(onLaunch) signature — first arg is function", async () => {
-    let firstArgType = null;
+  await runTest("launch includes chat_member in allowedUpdates", async () => {
+    const { TELEGRAM_ALLOWED_UPDATES } = require("../utils/botLifecycle");
+    let firstArg = null;
+    let secondArgType = null;
     const bot = {
       telegram: {},
-      launch(first) {
-        firstArgType = typeof first;
-        if (typeof first === "function") {
-          first();
+      launch(first, second) {
+        firstArg = first;
+        secondArgType = typeof second;
+        if (typeof second === "function") {
+          second();
         }
         return new Promise(() => {});
       },
@@ -423,7 +426,13 @@ async function main() {
       logFn: () => {},
     });
 
-    assert.strictEqual(firstArgType, "function");
+    assert.strictEqual(typeof firstArg, "object");
+    assert.ok(Array.isArray(firstArg.allowedUpdates));
+    assert.ok(firstArg.allowedUpdates.includes("chat_member"));
+    assert.ok(firstArg.allowedUpdates.includes("message"));
+    assert.ok(firstArg.allowedUpdates.includes("callback_query"));
+    assert.strictEqual(secondArgType, "function");
+    assert.ok(TELEGRAM_ALLOWED_UPDATES.includes("chat_member"));
   });
 
   await runTest("index.js does not use launch().then for scheduler", () => {

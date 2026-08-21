@@ -19,6 +19,7 @@ const HELP_MESSAGE = `🥭 Commands
 /leaderboard
 /weekly
 /weeklywinners
+/builderboard
 /chatfight
 /tictactoe — Start Tic-Tac-Toe
 /connect4 — Start Connect Four

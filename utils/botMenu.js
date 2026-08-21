@@ -9,6 +9,7 @@ const MENU_LABELS = Object.freeze({
   WALLET: "👛 Wallet",
   REWARDS: "🎁 Rewards",
   HELP: "ℹ️ Help",
+  COMMUNITY_BUILDER: "🤝 Community Builder",
   SNAKE: "🎮 Play Snake",
   BOUNCH: "🏀 Play Bounch",
   POINTS: "🥭 My Points",
@@ -39,7 +40,7 @@ Check your XP, streak, wallet status and rewards.`;
 const GROUP_PROGRESS_TEXT = GROUP_PROFILE_TEXT;
 
 const PRIVATE_MENU_HINT =
-  "🥭 Use the menu below to open your profile, wallet, rewards, or play.";
+  "🥭 Use the menu below to open your profile, wallet, rewards, community builder, or play.";
 
 const GROUP_MENU_CALLBACK = Object.freeze({
   RANKINGS: "gmenu:rankings",
@@ -60,6 +61,7 @@ const GROUP_MENU_CALLBACK = Object.freeze({
   CONNECT4: "gmenu:connect4",
   TRIVIA: "gmenu:trivia",
   MANGOBOMB: "gmenu:mangobomb",
+  BUILDER: "gmenu:builder",
 });
 
 const PRIVATE_HUB_CALLBACK = Object.freeze({
@@ -204,6 +206,7 @@ function getPrivateMenuKeyboard() {
   return Markup.keyboard([
     [MENU_LABELS.MY_PROFILE, MENU_LABELS.WALLET],
     [MENU_LABELS.REWARDS, MENU_LABELS.HELP],
+    [MENU_LABELS.COMMUNITY_BUILDER],
     [MENU_LABELS.SNAKE, MENU_LABELS.BOUNCH],
   ]).resize();
 }
@@ -266,6 +269,14 @@ function getGroupMenuExtra(ctx) {
     [
       privateDeepLinkButton(ctx, "🎁 Rewards", "rewards", GROUP_MENU_CALLBACK.REWARDS),
       Markup.button.callback("ℹ️ Help", GROUP_MENU_CALLBACK.HELP),
+    ],
+    [
+      privateDeepLinkButton(
+        ctx,
+        "🤝 Community Builder",
+        "builder",
+        GROUP_MENU_CALLBACK.BUILDER
+      ),
     ],
   ]);
 }
@@ -426,7 +437,8 @@ function isGroupMenuCallback(data) {
     data === GROUP_MENU_CALLBACK.TICTACTOE ||
     data === GROUP_MENU_CALLBACK.CONNECT4 ||
     data === GROUP_MENU_CALLBACK.TRIVIA ||
-    data === GROUP_MENU_CALLBACK.MANGOBOMB
+    data === GROUP_MENU_CALLBACK.MANGOBOMB ||
+    data === GROUP_MENU_CALLBACK.BUILDER
   );
 }
 

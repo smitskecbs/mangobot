@@ -1,5 +1,5 @@
 /**
- * /start — welcome, private menu, and deep-link payloads (snake / bounch / points / streak / wallet / rewards / presale).
+ * /start — welcome, private menu, and deep-link payloads (snake / bounch / points / streak / wallet / rewards / presale / builder).
  */
 
 const { handleSnake } = require("./snake");
@@ -9,6 +9,7 @@ const { handleMyStreak } = require("./streak");
 const { handleWallet } = require("./wallet");
 const { handleRewards } = require("./rewards");
 const { handlePresale } = require("./presale");
+const { handleCommunityBuilder } = require("./communitybuilder");
 const {
   isPrivateChat,
   getPrivateMenuKeyboard,
@@ -45,6 +46,9 @@ function handleStart(ctx, options = {}) {
     }
     if (payload === "presale") {
       return handlePresale(ctx, options);
+    }
+    if (payload === "builder") {
+      return handleCommunityBuilder(ctx, options);
     }
 
     return ctx.reply(WELCOME_MESSAGE, getPrivateMenuKeyboard());

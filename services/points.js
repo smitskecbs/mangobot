@@ -326,16 +326,41 @@ function loadPoints(pointsFile = POINTS_FILE) {
  * @param {string} [pointsFile]
  * @returns {T}
  */
+function snapshotUserPoints(data) {
+  const out = Object.create(null);
+  const users =
+    data && data.users && typeof data.users === "object" ? data.users : {};
+  for (const id of Object.keys(users)) {
+    const user = users[id];
+    out[id] = user && typeof user.points === "number" ? user.points : 0;
+  }
+  return out;
+}
+
+function notifyReferralLifetimeCrossings(before, after, pointsFile) {
+  try {
+    const { onLifetimeXpMutated } = require("./communityBuilder");
+    onLifetimeXpMutated(before, after, { pointsFile });
+  } catch (_err) {
+    /* Referral milestones must never break XP awards. */
+  }
+}
+
 function mutatePoints(mutator, pointsFile = POINTS_FILE) {
   if (typeof mutator !== "function") {
     throw new TypeError("mutatePoints requires a mutator function");
   }
 
   const release = acquirePointsLock(pointsFile);
+  let beforePoints = null;
+  let afterPoints = null;
+  let mutated = false;
+  let result;
 
   try {
     const data = readPointsSnapshot(pointsFile, { strict: true });
-    const result = mutator(data);
+    beforePoints = snapshotUserPoints(data);
+    result = mutator(data);
 
     try {
       writeJsonFileAtomic(pointsFile, data);
@@ -344,7 +369,8 @@ function mutatePoints(mutator, pointsFile = POINTS_FILE) {
       throw new Error(`Failed to write points.json: ${message}`);
     }
 
-    return result;
+    afterPoints = snapshotUserPoints(data);
+    mutated = true;
   } finally {
     try {
       release();
@@ -352,6 +378,11 @@ function mutatePoints(mutator, pointsFile = POINTS_FILE) {
       logError("Failed to release points.json lock:", err);
     }
   }
+
+  if (mutated) {
+    notifyReferralLifetimeCrossings(beforePoints, afterPoints, pointsFile);
+  }
+  return result;
 }
 
 /**
@@ -1483,6 +1514,64 @@ function awardPvpWinXp(userId, userName, pointsFile = POINTS_FILE, walletFile) {
   }, pointsFile);
 }
 
+/**
+ * Community Builder referral XP for the inviter.
+ * Uses the existing wallet gate. No daily cap. No retroactive unlock.
+ */
+function awardCommunityBuilderXp(
+  userId,
+  userName,
+  pointsToAdd,
+  pointsFile = POINTS_FILE,
+  walletFile
+) {
+  const amount =
+    typeof pointsToAdd === "number" && Number.isInteger(pointsToAdd) && pointsToAdd > 0
+      ? pointsToAdd
+      : 0;
+  if (!amount) {
+    return {
+      awarded: false,
+      reason: "invalid",
+      points: 0,
+      pointsToAdd: 0,
+      rankUp: false,
+      rank: getRank(0),
+    };
+  }
+
+  if (isCommunityCompetitionExcluded(userId)) {
+    return excludedAwardResult(userId, pointsFile, { pointsToAdd: 0 });
+  }
+
+  if (!canEarnXp(userId, walletFile)) {
+    return walletLockedSnapshot(userId, pointsFile, { pointsToAdd: 0 });
+  }
+
+  return mutatePoints((data) => {
+    const id = String(userId);
+    const user = ensureUserRecord(data, id, userName);
+    user.name = userName;
+    resetWeeklyIfNewWeek(user, id);
+
+    const pointsBefore = user.points;
+    user.points += amount;
+    user.weeklyPoints += amount;
+    noteWeeklyStandingSafe(id, user);
+
+    const previousRank = getRank(pointsBefore);
+    const rank = getRank(user.points);
+    return {
+      awarded: true,
+      points: user.points,
+      pointsToAdd: amount,
+      rankUp: previousRank.title !== rank.title,
+      rank,
+      previousRank,
+    };
+  }, pointsFile);
+}
+
 function resetWeeklyForAll(pointsFile = POINTS_FILE) {
   mutatePoints((data) => {
     const currentWeek = getWeekId();
@@ -1549,6 +1638,7 @@ module.exports = {
   PVP_DAILY_WIN_CAP,
   ensurePvpState,
   getPvpRewardedWinsToday,
+  awardCommunityBuilderXp,
   awardSnakeGameXp,
   awardBounchGameXp,
   ensureGameState,

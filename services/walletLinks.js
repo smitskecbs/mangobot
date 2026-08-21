@@ -545,7 +545,7 @@ function registerManualWallet(userId, wallet, walletFile, now = Date.now()) {
     return { ok: false, reason: "invalid" };
   }
   const ts = Number.isFinite(now) ? now : Date.now();
-  return mutateWalletStore((store) => {
+  const result = mutateWalletStore((store) => {
     pruneExpired(store, ts);
     const applied = applyRegisteredWallet(store, uid, canonical, ts);
     if (!applied.ok) {
@@ -556,6 +556,14 @@ function registerManualWallet(userId, wallet, walletFile, now = Date.now()) {
     }
     return { ok: true, wallet: canonical, verified: Boolean(applied.verified) };
   }, walletFile);
+  if (result && result.ok === true) {
+    try {
+      require("./communityBuilder").onWalletLinked(uid, { walletFile });
+    } catch (_err) {
+      /* Referral wallet milestone must never break wallet linking. */
+    }
+  }
+  return result;
 }
 
 function beginWalletAddressInput(userId, chatId, purpose, walletFile, now = Date.now()) {

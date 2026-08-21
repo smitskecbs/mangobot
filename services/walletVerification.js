@@ -466,6 +466,13 @@ function verifyWalletSignature(body, options = {}) {
       return errorResult("failed", 500);
     }
     console.log("[wallet-verify] verified persistence success");
+    try {
+      require("./communityBuilder").onWalletLinked(result.persistedUserId, {
+        walletFile: options.walletFile,
+      });
+    } catch (_err) {
+      /* Referral wallet milestone must never break verification. */
+    }
     return {
       ok: true,
       status: 200,

@@ -14,6 +14,21 @@
 
 const { noteRuntimeEvent } = require("./runtimeHealth");
 
+const TELEGRAM_ALLOWED_UPDATES = Object.freeze([
+  "message",
+  "edited_message",
+  "callback_query",
+  "inline_query",
+  "chosen_inline_result",
+  "my_chat_member",
+  "chat_member",
+  "chat_join_request",
+  "poll",
+  "poll_answer",
+  "pre_checkout_query",
+  "shipping_query",
+]);
+
 function startBotRuntime({
   bot,
   startScheduler,
@@ -59,7 +74,10 @@ function startBotRuntime({
     }
   }
 
-  const launchResult = bot.launch(onBotLaunched);
+  const launchResult = bot.launch(
+    { allowedUpdates: [...TELEGRAM_ALLOWED_UPDATES] },
+    onBotLaunched
+  );
   Promise.resolve(launchResult).catch((err) => {
     if (typeof onLaunchFailed === "function") {
       onLaunchFailed(err);
@@ -120,4 +138,5 @@ function startBotRuntime({
 
 module.exports = {
   startBotRuntime,
+  TELEGRAM_ALLOWED_UPDATES,
 };
