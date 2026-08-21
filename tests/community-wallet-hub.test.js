@@ -603,11 +603,13 @@ runTest("userFacingRewardLine hides mystery contents", () => {
     type: "mystery-gift",
     status: "pending",
     label: "hidden jackpot",
+    offchainGiftLabel: "Telegram Gift",
     createdAt: 1_700_000_000_000,
     walletSnapshot: "should-not-appear",
   });
   assert.ok(line.includes("🎁 Mystery Gift"));
   assert.ok(!line.includes("hidden jackpot"));
+  assert.ok(!line.includes("Telegram Gift"));
   assert.ok(!line.includes("should-not-appear"));
 });
 

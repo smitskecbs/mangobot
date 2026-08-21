@@ -7,16 +7,21 @@ const { Markup } = require("telegraf");
 const { isAdmin } = require("../services/points");
 const { isPrivateChat } = require("../utils/botMenu");
 const { getReplyTargetUser, parseCommandArg } = require("../utils/telegramReplyTarget");
-const { shortenWallet, normalizeSolanaPublicKey } = require("../utils/solanaWallet");
+const { shortenWallet, normalizeSolanaPublicKey, escapeTelegramHtml } = require("../utils/solanaWallet");
 const {
   prepareRewardDelivery,
   preparePresaleDistribution,
   listPendingRewardsForAdmin,
   findPendingPresaleContribution,
   markOffchainDelivered,
+  setOffchainGiftLabel,
   isOffchainRecord,
 } = require("../services/rewardDelivery");
-const { getReward } = require("../services/memberRewards");
+const {
+  getReward,
+  normalizeOffchainGiftLabel,
+  OFFCHAIN_GIFT_LABEL_MAX,
+} = require("../services/memberRewards");
 const {
   formatMangoGrouped,
   formatMangoHuman,
@@ -34,6 +39,7 @@ const USAGE_PRESALE =
   "Reply to a member's message with /presaledistribute.";
 const PICKER_PRIVATE_ONLY =
   "Open a private chat with the bot to choose SPL, NFT, or off-chain. In a group, use /deliver <rewardId> <mangoAmount>.";
+const OFFCHAIN_GIFT_PROMPT = `Send what the gift is (max ${OFFCHAIN_GIFT_LABEL_MAX} characters).`;
 const PENDING_TTL_MS = 10 * 60 * 1000;
 
 const pendingByAdmin = new Map();
@@ -78,11 +84,56 @@ function deliveryKeyboard(url) {
   return Markup.inlineKeyboard([[Markup.button.url("Confirm in Wallet", url)]]);
 }
 
-function offchainKeyboard(rewardId) {
+function offchainEnterGiftKeyboard(rewardId) {
   return Markup.inlineKeyboard([
-    [Markup.button.callback("Mark Delivered", `dlv:d:${rewardId}`)],
-    [Markup.button.callback("Cancel", `dlv:x:${rewardId}`)],
+    [Markup.button.callback("✍️ Enter Gift", `dlv:g:${rewardId}`)],
+    [Markup.button.callback("❌ Cancel", `dlv:x:${rewardId}`)],
   ]);
+}
+
+function offchainReviewKeyboard(rewardId) {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("✅ Mark Delivered", `dlv:d:${rewardId}`)],
+    [Markup.button.callback("✏️ Change Gift", `dlv:g:${rewardId}`)],
+    [Markup.button.callback("❌ Cancel", `dlv:x:${rewardId}`)],
+  ]);
+}
+
+function htmlKeyboard(keyboard) {
+  return {
+    parse_mode: "HTML",
+    reply_markup: keyboard && keyboard.reply_markup,
+  };
+}
+
+function formatOffchainPrompt(rewardId) {
+  return {
+    text: ["🎁 Off-chain Mystery Gift", "", OFFCHAIN_GIFT_PROMPT].join("\n"),
+    extra: offchainEnterGiftKeyboard(rewardId),
+  };
+}
+
+function formatOffchainReview(reward) {
+  const gift = escapeTelegramHtml(
+    reward && typeof reward.offchainGiftLabel === "string"
+      ? reward.offchainGiftLabel
+      : ""
+  );
+  const recipient = escapeTelegramHtml(
+    (reward && (reward.displayNameSnapshot || reward.displayName)) || "Member"
+  );
+  return {
+    text: [
+      "🎁 Off-chain Mystery Gift",
+      "",
+      "Gift:",
+      gift,
+      "",
+      "Recipient:",
+      recipient,
+    ].join("\n"),
+    extra: htmlKeyboard(offchainReviewKeyboard(reward && reward.rewardId)),
+  };
 }
 
 function pickerKeyboard(rewardId) {
@@ -136,19 +187,13 @@ function formatReady(review, url) {
   if (review.expectedSignerShort) {
     lines.push(`From: ${review.expectedSignerShort}`);
   }
-  lines.push("");
-  if (offchain) {
-    lines.push("Mark delivered after you have sent this gift off-chain.");
-    lines.push("Optional: send a delivery note, then tap Mark Delivered.");
-  } else {
+  if (!offchain) {
+    lines.push("");
     lines.push("Sign with the configured distribution wallet.");
     lines.push("The bot never holds private keys.");
   }
 
-  const extra = offchain
-    ? offchainKeyboard(review.deliveryId ? review.rewardId : "")
-    : deliveryKeyboard(url);
-  return { text: lines.join("\n"), extra };
+  return { text: lines.join("\n"), extra: offchain ? undefined : deliveryKeyboard(url) };
 }
 
 function formatReadyForReward(result) {
@@ -156,12 +201,6 @@ function formatReadyForReward(result) {
     ...result.review,
     rewardId: result.reward && result.reward.rewardId,
   };
-  if (result.offchain || isOffchainRecord(result.reward) || isOffchainRecord(result.review)) {
-    return {
-      text: formatReady(review, null).text,
-      extra: offchainKeyboard(result.reward && result.reward.rewardId),
-    };
-  }
   return formatReady(review, result.url);
 }
 
@@ -329,7 +368,7 @@ async function handleDeliverCallback(ctx, options = {}) {
     ctx.callbackQuery && typeof ctx.callbackQuery.data === "string"
       ? ctx.callbackQuery.data
       : "";
-  const match = /^dlv:([msnoxd]):([A-Za-z0-9_-]{8,24})$/.exec(data);
+  const match = /^dlv:([msnoxdg]):([A-Za-z0-9_-]{8,24})$/.exec(data);
   if (!match) {
     return undefined;
   }
@@ -347,19 +386,30 @@ async function handleDeliverCallback(ctx, options = {}) {
   }
 
   if (action === "d") {
-    const pending = getPending(ctx.from.id);
-    const note = pending && pending.kind === "offchain_note" ? pending.deliveryNote : "";
-    clearPending(ctx.from.id);
     const result = await markOffchainDelivered({
       adminUserId: ctx.from.id,
       rewardId,
-      deliveryNote: note || undefined,
       ...files,
     });
     if (!result.ok) {
       return ctx.reply(result.error || "Invalid request.");
     }
+    clearPending(ctx.from.id);
     return ctx.reply("🎁 Off-chain Mystery Gift marked delivered.");
+  }
+
+  if (action === "g") {
+    const reward = getReward(rewardId, files.rewardsFile);
+    if (!reward || !isOffchainRecord(reward)) {
+      return ctx.reply("This reward is not an off-chain delivery.");
+    }
+    setPending(ctx.from.id, {
+      kind: "offchain_gift",
+      rewardId,
+      files: snapshotFiles(files),
+    });
+    const prompt = formatOffchainPrompt(rewardId);
+    return ctx.reply(prompt.text, prompt.extra);
   }
 
   if (action === "m") {
@@ -400,12 +450,12 @@ async function handleDeliverCallback(ctx, options = {}) {
       return ctx.reply(result.error || "Invalid request.");
     }
     setPending(ctx.from.id, {
-      kind: "offchain_note",
+      kind: "offchain_gift",
       rewardId,
       files: snapshotFiles(files),
-      deliveryNote: "",
     });
-    return replyPrepared(ctx, result);
+    const prompt = formatOffchainPrompt(rewardId);
+    return ctx.reply(prompt.text, prompt.extra);
   }
 
   return undefined;
@@ -419,10 +469,6 @@ async function handleDeliverText(ctx, options = {}) {
   if (!ctx || !ctx.from || !isAdmin(ctx.from.id)) {
     return false;
   }
-  const text = ctx.message && typeof ctx.message.text === "string" ? ctx.message.text.trim() : "";
-  if (!text || isCommandLike(text)) {
-    return false;
-  }
   const pending = getPending(ctx.from.id);
   if (!pending) {
     return false;
@@ -430,14 +476,42 @@ async function handleDeliverText(ctx, options = {}) {
   if (!isPrivateChat(ctx)) {
     return false;
   }
+  const raw = ctx.message && typeof ctx.message.text === "string" ? ctx.message.text : "";
+  if (isCommandLike(raw)) {
+    return false;
+  }
   const files = fileOptionsFrom(options, pending);
 
-  if (pending.kind === "offchain_note") {
-    pending.deliveryNote = text.slice(0, 500);
+  if (pending.kind === "offchain_gift") {
+    const normalized = normalizeOffchainGiftLabel(raw);
+    if (!normalized.ok) {
+      await ctx.reply(
+        normalized.reason === "too-long"
+          ? `Gift name is too long (max ${OFFCHAIN_GIFT_LABEL_MAX} characters).`
+          : `Send what the gift is (1–${OFFCHAIN_GIFT_LABEL_MAX} characters).`
+      );
+      return true;
+    }
+    const saved = setOffchainGiftLabel({
+      adminUserId: ctx.from.id,
+      rewardId: pending.rewardId,
+      label: normalized.label,
+      ...files,
+    });
+    if (!saved.ok) {
+      await ctx.reply(saved.error || "Invalid request.");
+      return true;
+    }
     pending.expiresAt = Date.now() + PENDING_TTL_MS;
     pendingByAdmin.set(String(ctx.from.id), pending);
-    await ctx.reply("Delivery note saved. Tap Mark Delivered when the gift has been sent.");
+    const review = formatOffchainReview(saved.reward);
+    await ctx.reply(review.text, review.extra);
     return true;
+  }
+
+  const text = raw.trim();
+  if (!text) {
+    return false;
   }
 
   if (pending.kind === "mango_amount") {
@@ -512,7 +586,7 @@ async function handleDeliverText(ctx, options = {}) {
 module.exports = (bot) => {
   bot.command("deliver", (ctx) => handleDeliver(ctx));
   bot.command("presaledistribute", (ctx) => handlePresaleDistribute(ctx));
-  bot.action(/^dlv:[msnoxd]:[A-Za-z0-9_-]{8,24}$/, (ctx) =>
+  bot.action(/^dlv:[msnoxdg]:[A-Za-z0-9_-]{8,24}$/, (ctx) =>
     Promise.resolve(handleDeliverCallback(ctx)).catch(() => undefined)
   );
   bot.on("text", (ctx, next) => {
@@ -536,7 +610,10 @@ module.exports.ADMIN_ONLY = ADMIN_ONLY;
 module.exports.USAGE_DELIVER = USAGE_DELIVER;
 module.exports.USAGE_PRESALE = USAGE_PRESALE;
 module.exports.PICKER_PRIVATE_ONLY = PICKER_PRIVATE_ONLY;
+module.exports.OFFCHAIN_GIFT_PROMPT = OFFCHAIN_GIFT_PROMPT;
 module.exports.formatReady = formatReady;
+module.exports.formatOffchainPrompt = formatOffchainPrompt;
+module.exports.formatOffchainReview = formatOffchainReview;
 module.exports.pickerKeyboard = pickerKeyboard;
 module.exports.shortenWallet = shortenWallet;
 module.exports.formatMangoGrouped = formatMangoGrouped;

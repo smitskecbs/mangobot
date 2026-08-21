@@ -39,7 +39,32 @@ function resolveBotToken(options = {}) {
   return typeof process.env.BOT_TOKEN === "string" ? process.env.BOT_TOKEN.trim() : "";
 }
 
-function buildMysteryGiftRecipientMessage() {
+function isOffchainSent(reward) {
+  if (!reward || reward.status !== "sent") {
+    return false;
+  }
+  return reward.assetType === "offchain" || reward.deliveryType === "offchain";
+}
+
+function offchainRecipientMessage(label) {
+  return [
+    "🎁 Mystery Gift delivered!",
+    "",
+    "You received:",
+    label,
+    "",
+    "Status: ✅ Delivered",
+  ].join("\n");
+}
+
+function buildMysteryGiftRecipientMessage(reward) {
+  const label =
+    isOffchainSent(reward) && typeof reward.offchainGiftLabel === "string"
+      ? reward.offchainGiftLabel.trim()
+      : "";
+  if (label) {
+    return offchainRecipientMessage(label);
+  }
   return RECIPIENT_MESSAGE;
 }
 
@@ -78,7 +103,7 @@ async function notifyMysteryGiftRecipient(rewardId, options = {}) {
   const fetchFn = typeof options.fetchImpl === "function" ? options.fetchImpl : fetch;
   const payload = {
     chat_id: uid,
-    text: RECIPIENT_MESSAGE,
+    text: buildMysteryGiftRecipientMessage(claimed.reward),
     disable_web_page_preview: true,
   };
 

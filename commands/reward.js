@@ -42,7 +42,11 @@ function formatRewardHistory(rewards, displayName) {
       reward.type === "mystery-gift"
         ? "Mystery Gift"
         : defaultLabelForType(reward.type);
-    lines.push(`• ${title} · ${reward.status} · ${reward.rewardId}`);
+    const gift =
+      typeof reward.offchainGiftLabel === "string" && reward.offchainGiftLabel.trim()
+        ? ` · ${reward.offchainGiftLabel.trim()}`
+        : "";
+    lines.push(`• ${title} · ${reward.status} · ${reward.rewardId}${gift}`);
   }
   return lines.join("\n");
 }

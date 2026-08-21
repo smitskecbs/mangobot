@@ -22,6 +22,7 @@ const { normalizeSolanaPublicKey, shortenWallet } = require("../utils/solanaWall
 const DEFAULT_REWARDS_FILE = path.resolve(__dirname, "..", "data", "member-rewards.json");
 
 const REWARD_TYPES = Object.freeze(["mystery-gift", "airdrop", "nft", "other"]);
+const OFFCHAIN_GIFT_LABEL_MAX = 120;
 const STATUSES = Object.freeze([
   "pending",
   "prepared",
@@ -340,7 +341,58 @@ function publicReward(record) {
     groupAnnouncedAt: record.groupAnnouncedAt || null,
     offchainDeliveredAt: record.offchainDeliveredAt || null,
     deliveryNote: record.deliveryNote || null,
+    offchainGiftLabel: record.offchainGiftLabel || null,
   };
+}
+
+function isOffchainReward(record) {
+  if (!record || typeof record !== "object") {
+    return false;
+  }
+  return record.assetType === "offchain" || record.deliveryType === "offchain";
+}
+
+/**
+ * Trim, collapse whitespace, reject empty/too-long/slash-command labels.
+ * @param {unknown} value
+ * @returns {{ ok: true, label: string } | { ok: false, reason: string }}
+ */
+function normalizeOffchainGiftLabel(value) {
+  if (typeof value !== "string") {
+    return { ok: false, reason: "empty" };
+  }
+  const trimmed = value.replace(/[\u0000-\u001F\u007F]/g, " ").replace(/\s+/g, " ").trim();
+  if (!trimmed) {
+    return { ok: false, reason: "empty" };
+  }
+  if (trimmed.startsWith("/")) {
+    return { ok: false, reason: "command" };
+  }
+  if (trimmed.length > OFFCHAIN_GIFT_LABEL_MAX) {
+    return { ok: false, reason: "too-long" };
+  }
+  return { ok: true, label: trimmed };
+}
+
+function writeOffchainGiftLabel(rewardId, label, rewardsFile) {
+  const id = typeof rewardId === "string" ? rewardId.trim() : "";
+  if (!id) {
+    return { ok: false, reason: "missing" };
+  }
+  return mutateRewardsStore((store) => {
+    const record = store.rewards[id];
+    if (!record || typeof record !== "object") {
+      return { ok: false, reason: "missing" };
+    }
+    if (record.status === "sent" || record.status === "cancelled") {
+      return { ok: false, reason: "already-sent" };
+    }
+    if (!isOffchainReward(record)) {
+      return { ok: false, reason: "not-offchain" };
+    }
+    record.offchainGiftLabel = label;
+    return { ok: true, reward: publicReward({ ...record, rewardId: id }) };
+  }, rewardsFile);
 }
 
 function isRewardEligible(userId, walletFile) {
@@ -826,6 +878,16 @@ function userFacingRewardLine(reward) {
           : reward.status === "submitted"
             ? "Pending"
             : "Pending";
+  if (reward.status === "sent" && isOffchainReward(reward)) {
+    const label =
+      typeof reward.offchainGiftLabel === "string" ? reward.offchainGiftLabel.trim() : "";
+    const lines = ["🎁 Mystery Gift delivered!"];
+    if (label) {
+      lines.push("", "You received:", label);
+    }
+    lines.push("", "Status: ✅ Delivered");
+    return lines.join("\n");
+  }
   const lines = [`🎁 ${title}`, `Status: ${statusLabel}`];
   const created = formatCreatedDate(reward.createdAt);
   if (created) {
@@ -871,6 +933,10 @@ module.exports = {
   listRewardsForUser,
   countRewardsForUser,
   userFacingRewardLine,
+  isOffchainReward,
+  normalizeOffchainGiftLabel,
+  writeOffchainGiftLabel,
+  OFFCHAIN_GIFT_LABEL_MAX,
   deliverReward,
   defaultLabelForType,
   normalizeRewardType,

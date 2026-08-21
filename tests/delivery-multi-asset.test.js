@@ -52,6 +52,7 @@ const {
   ignoreClientOverrides,
   expectedFromRecord,
   markOffchainDelivered,
+  setOffchainGiftLabel,
 } = require("../services/rewardDelivery");
 const { tryHandleDeliveryRequest } = require("../services/deliveryApi");
 const {
@@ -59,8 +60,11 @@ const {
   handleDeliverCallback,
   handleDeliverText,
   PICKER_PRIVATE_ONLY,
+  clearPendingDeliverInput,
 } = require("../commands/deliver");
-const { buildMysteryGiftDeliveredMessage } = require("../services/mysteryGiftAnnounce");
+const { handleMemberRewards } = require("../commands/reward");
+const { handleRewards } = require("../commands/rewards");
+const { buildMysteryGiftDeliveredMessage, announceMysteryGiftDelivered } = require("../services/mysteryGiftAnnounce");
 const { buildMysteryGiftRecipientMessage } = require("../services/mysteryGiftNotify");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-multi-asset-"));
@@ -729,6 +733,22 @@ async function main() {
     assert.strictEqual(prepared.review.assetType, ASSET_OFFCHAIN);
     const paid = await issueDeliveryPayment("not-a-token", { deliveryFile, env, now: 60 });
     assert.strictEqual(paid.ok, false);
+    const unlabeled = await markOffchainDelivered({
+      adminUserId: 9001,
+      rewardId: created.reward.rewardId,
+      rewardsFile,
+      deliveryFile,
+      now: 65,
+    });
+    assert.strictEqual(unlabeled.ok, false);
+    assert.strictEqual(unlabeled.reason, "gift-required");
+    const labeled = setOffchainGiftLabel({
+      adminUserId: 9001,
+      rewardId: created.reward.rewardId,
+      label: "Telegram Gift",
+      rewardsFile,
+    });
+    assert.strictEqual(labeled.ok, true, labeled.error);
     const marked = await markOffchainDelivered({
       adminUserId: 9001,
       rewardId: created.reward.rewardId,
@@ -742,6 +762,7 @@ async function main() {
     assert.strictEqual(reward.status, "sent");
     assert.ok(reward.offchainDeliveredAt);
     assert.ok(!reward.txSignature);
+    assert.strictEqual(reward.offchainGiftLabel, "Telegram Gift");
     assert.strictEqual(reward.deliveryNote, "handed to member");
     const recon = await reconcileDeliveryPayment({
       adminUserId: 9001,
@@ -1314,24 +1335,237 @@ async function main() {
     assert.ok(!src.includes("picker list"));
   });
 
-  await runTest("offchain callback marks delivered without signature", async () => {
+  await runTest("offchain callback asks for gift label before mark delivered", async () => {
     const { walletFile, rewardsFile, deliveryFile, created, env } = seedPending();
+    clearPendingDeliverInput(9001);
+    const files = { walletFile, rewardsFile, deliveryFile, env, now: 50 };
     const ctx = createMockCtx({
       callbackData: `dlv:o:${created.reward.rewardId}`,
     });
-    await handleDeliverCallback(ctx, {
+    await handleDeliverCallback(ctx, files);
+    assert.ok(ctx.replies.some((row) => String(row.text).includes("Enter Gift") || String(row.text).includes("what the gift is") || String(row.extra && JSON.stringify(row.extra)).includes("Enter Gift")));
+    const mark = createMockCtx({ callbackData: `dlv:d:${created.reward.rewardId}` });
+    await handleDeliverCallback(mark, files);
+    const reward = getReward(created.reward.rewardId, rewardsFile);
+    assert.notStrictEqual(reward.status, "sent");
+    assert.ok(mark.replies.some((row) => String(row.text).includes("Enter the gift")));
+  });
+
+  await runTest("offchain gift label flow 1-18", async () => {
+    const { walletFile, rewardsFile, deliveryFile, created, env } = seedPending();
+    clearPendingDeliverInput(9001);
+    const files = { walletFile, rewardsFile, deliveryFile, env, now: 50 };
+    const rewardId = created.reward.rewardId;
+    const choose = createMockCtx({ callbackData: `dlv:o:${rewardId}` });
+    await handleDeliverCallback(choose, files);
+    const chooseText = choose.replies.map((row) => String(row.text)).join("\n");
+    const chooseExtra = JSON.stringify(choose.replies.map((row) => row.extra));
+    assert.ok(chooseText.includes("Off-chain Mystery Gift"));
+    assert.ok(chooseText.includes("what the gift is") || chooseExtra.includes("Enter Gift"));
+    assert.ok(chooseExtra.includes("dlv:g:"));
+    assert.ok(!chooseExtra.includes("dlv:d:"));
+
+    const empty = createMockCtx({ text: "   " });
+    empty.message = { text: "   " };
+    const emptyHandled = await handleDeliverText(empty, files);
+    assert.strictEqual(emptyHandled, true);
+    assert.ok(empty.replies[0].text.includes("1–120") || empty.replies[0].text.includes("1-120"));
+    assert.strictEqual(getReward(rewardId, rewardsFile).offchainGiftLabel, null);
+
+    const tooLong = createMockCtx();
+    tooLong.message = { text: "x".repeat(121) };
+    await handleDeliverText(tooLong, files);
+    assert.ok(tooLong.replies[0].text.includes("too long"));
+    assert.strictEqual(getReward(rewardId, rewardsFile).offchainGiftLabel, null);
+
+    const slash = createMockCtx();
+    slash.message = { text: "/wallet" };
+    const slashHandled = await handleDeliverText(slash, files);
+    assert.strictEqual(slashHandled, false);
+    assert.strictEqual(getReward(rewardId, rewardsFile).offchainGiftLabel, null);
+
+    const cancel = createMockCtx({ callbackData: `dlv:x:${rewardId}` });
+    await handleDeliverCallback(cancel, files);
+    assert.ok(cancel.replies[0].text.includes("cancelled"));
+    const afterCancel = createMockCtx();
+    afterCancel.message = { text: "Telegram Gift" };
+    const afterCancelHandled = await handleDeliverText(afterCancel, files);
+    assert.strictEqual(afterCancelHandled, false);
+
+    const chooseAgain = createMockCtx({ callbackData: `dlv:o:${rewardId}` });
+    await handleDeliverCallback(chooseAgain, files);
+    const valid = createMockCtx();
+    valid.message = { text: "  Telegram Gift  " };
+    const validHandled = await handleDeliverText(valid, files);
+    assert.strictEqual(validHandled, true);
+    assert.strictEqual(getReward(rewardId, rewardsFile).offchainGiftLabel, "Telegram Gift");
+    assert.ok(valid.replies[0].text.includes("Telegram Gift"));
+    assert.ok(valid.replies[0].text.includes("Recipient:"));
+    assert.strictEqual(valid.replies[0].extra.parse_mode, "HTML");
+    const reviewKb = JSON.stringify(valid.replies[0].extra);
+    assert.ok(reviewKb.includes("Mark Delivered"));
+    assert.ok(reviewKb.includes("Change Gift"));
+
+    const change = createMockCtx({ callbackData: `dlv:g:${rewardId}` });
+    await handleDeliverCallback(change, files);
+    const renamed = createMockCtx();
+    renamed.message = { text: "Pokémon card" };
+    await handleDeliverText(renamed, files);
+    assert.strictEqual(getReward(rewardId, rewardsFile).offchainGiftLabel, "Pokémon card");
+
+    const nonAdmin = createMockCtx({ userId: 77 });
+    nonAdmin.message = { text: "Stolen gift" };
+    const nonAdminHandled = await handleDeliverText(nonAdmin, files);
+    assert.strictEqual(nonAdminHandled, false);
+    assert.strictEqual(getReward(rewardId, rewardsFile).offchainGiftLabel, "Pokémon card");
+    const nonAdminSet = setOffchainGiftLabel({
+      adminUserId: 77,
+      rewardId,
+      label: "Stolen gift",
+      rewardsFile,
+    });
+    assert.strictEqual(nonAdminSet.ok, false);
+    assert.strictEqual(nonAdminSet.reason, "not-admin");
+
+    const group = createMockCtx({ chatType: "supergroup" });
+    group.message = { text: "Group gift" };
+    const groupHandled = await handleDeliverText(group, files);
+    assert.strictEqual(groupHandled, false);
+    assert.strictEqual(getReward(rewardId, rewardsFile).offchainGiftLabel, "Pokémon card");
+
+    const pendingLine = userFacingRewardLine(getReward(rewardId, rewardsFile));
+    assert.ok(pendingLine.includes("Pending"));
+    assert.ok(!pendingLine.includes("Pokémon card"));
+    assert.ok(!pendingLine.includes("Telegram Gift"));
+
+    const html = createMockCtx();
+    html.message = { text: "<b>Voucher</b>" };
+    await handleDeliverText(html, files);
+    assert.ok(html.replies[0].text.includes("&lt;b&gt;Voucher&lt;/b&gt;"));
+    assert.ok(!html.replies[0].text.includes("<b>Voucher</b>"));
+    assert.strictEqual(getReward(rewardId, rewardsFile).offchainGiftLabel, "<b>Voucher</b>");
+
+    const restore = createMockCtx();
+    restore.message = { text: "Pokémon card" };
+    await handleDeliverText(restore, files);
+
+    const memberCtx = {
+      from: { id: 9001 },
+      chat: { type: "private", id: 9001 },
+      message: {
+        text: "/memberrewards",
+        reply_to_message: { from: { id: 61, first_name: "Pippi", is_bot: false } },
+      },
+      replies: [],
+      reply(text) {
+        this.replies.push({ text });
+      },
+    };
+    handleMemberRewards(memberCtx, { rewardsFile });
+    assert.ok(memberCtx.replies[0].text.includes("Pokémon card"));
+
+    const userPending = {
+      from: { id: 61 },
+      chat: { type: "private", id: 61 },
+      replies: [],
+      reply(text) {
+        this.replies.push({ text });
+      },
+    };
+    handleRewards(userPending, { rewardsFile });
+    assert.ok(userPending.replies[0].text.includes("Pending"));
+    assert.ok(!userPending.replies[0].text.includes("Pokémon card"));
+
+    const marked = createMockCtx({ callbackData: `dlv:d:${rewardId}` });
+    const posts = [];
+    await handleDeliverCallback(marked, {
+      ...files,
+      now: 80,
+    });
+    assert.ok(marked.replies.some((row) => String(row.text).includes("marked delivered")));
+    const sent = getReward(rewardId, rewardsFile);
+    assert.strictEqual(sent.status, "sent");
+    assert.strictEqual(sent.txSignature, null);
+    assert.ok(sent.offchainDeliveredAt);
+    assert.strictEqual(sent.offchainGiftLabel, "Pokémon card");
+    assert.ok(!sent.mint);
+    assert.ok(!sent.amountBaseUnits);
+
+    const sentLine = userFacingRewardLine(sent);
+    assert.ok(sentLine.includes("Mystery Gift delivered"));
+    assert.ok(sentLine.includes("You received:"));
+    assert.ok(sentLine.includes("Pokémon card"));
+    assert.ok(sentLine.includes("Delivered"));
+
+    const userSent = {
+      from: { id: 61 },
+      chat: { type: "private", id: 61 },
+      replies: [],
+      reply(text) {
+        this.replies.push({ text });
+      },
+    };
+    handleRewards(userSent, { rewardsFile });
+    assert.ok(userSent.replies[0].text.includes("Pokémon card"));
+    assert.ok(userSent.replies[0].text.includes("You received:"));
+
+    const dm = buildMysteryGiftRecipientMessage(sent);
+    assert.ok(dm.includes("You received:"));
+    assert.ok(dm.includes("Pokémon card"));
+    assert.ok(dm.includes("Delivered"));
+    assert.ok(!dm.toLowerCase().includes("solana wallet"));
+
+    const telegram = {
+      posts,
+      fetchImpl: async (_url, init) => {
+        posts.push(JSON.parse(init.body));
+        return { ok: true };
+      },
+    };
+    const announced = await announceMysteryGiftDelivered(rewardId, {
+      announceMysteryGift: true,
+      rewardsFile,
+      botToken: "TESTTOKEN",
+      chatId: "-1003916996602",
+      fetchImpl: telegram.fetchImpl,
+      now: 90,
+    });
+    assert.strictEqual(announced.sent, true);
+    const groupText = posts[0].text;
+    assert.ok(groupText.includes("Mystery Gift delivered"));
+    assert.ok(groupText.includes("Delivered"));
+    assert.ok(!groupText.includes("Pokémon card"));
+    assert.ok(!groupText.includes("You received:"));
+    assert.ok(!groupText.includes("<b>Voucher</b>"));
+
+    const genericDm = buildMysteryGiftRecipientMessage();
+    assert.ok(genericDm.includes("registered Solana wallet"));
+    assert.ok(!genericDm.includes("Pokémon card"));
+  });
+
+  await runTest("offchain gift label ignored on MANGO/SPL/NFT prepare", async () => {
+    const { walletFile, rewardsFile, deliveryFile, created, env } = seedPending();
+    const prepared = await prepareRewardDelivery({
+      adminUserId: 9001,
+      rewardId: created.reward.rewardId,
+      amountHuman: "10",
       walletFile,
       rewardsFile,
       deliveryFile,
-      env: { ...env, SOLANA_RPC_URL: undefined },
+      env,
       now: 50,
     });
-    assert.ok(ctx.replies.some((row) => String(row.text).includes("Off-chain") || String(row.text).includes("Mark delivered") || String(row.text).includes("Mystery Gift")));
-    const mark = createMockCtx({ callbackData: `dlv:d:${created.reward.rewardId}` });
-    await handleDeliverCallback(mark, { walletFile, rewardsFile, deliveryFile, env, now: 60 });
-    const reward = getReward(created.reward.rewardId, rewardsFile);
-    assert.strictEqual(reward.status, "sent");
-    assert.ok(!reward.txSignature);
+    assert.strictEqual(prepared.ok, true, prepared.error);
+    assert.notStrictEqual(prepared.review.assetType, ASSET_OFFCHAIN);
+    const forced = setOffchainGiftLabel({
+      adminUserId: 9001,
+      rewardId: created.reward.rewardId,
+      label: "Should not stick",
+      rewardsFile,
+    });
+    assert.strictEqual(forced.ok, false);
+    assert.strictEqual(forced.reason, "not-offchain");
+    assert.ok(!getReward(created.reward.rewardId, rewardsFile).offchainGiftLabel);
   });
 
   process.env.ADMIN_USER_ID = originalAdmin;

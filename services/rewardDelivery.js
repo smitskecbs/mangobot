@@ -14,6 +14,8 @@ const {
   markRewardSubmitted,
   markRewardDeliveryReview,
   findRewardIdByTxSignature,
+  normalizeOffchainGiftLabel,
+  writeOffchainGiftLabel,
 } = require("./memberRewards");
 const { getPresaleParticipation } = require("./presaleLedger");
 const { mutatePresaleStore } = require("./presaleStore");
@@ -99,6 +101,15 @@ function publicError(reason) {
   }
   if (reason === "in-flight") {
     return "This delivery is already submitted and waiting for confirmation.";
+  }
+  if (reason === "gift-required") {
+    return "Enter the gift before marking delivered.";
+  }
+  if (reason === "empty") {
+    return "Send what the gift is (1–120 characters).";
+  }
+  if (reason === "too-long") {
+    return "Gift name is too long (max 120 characters).";
   }
   return "Invalid request.";
 }
@@ -1431,6 +1442,40 @@ function listPendingRewardsForAdmin(userId, rewardsFile) {
   );
 }
 
+function setOffchainGiftLabel(input = {}) {
+  if (!isAdmin(input.adminUserId)) {
+    return { ok: false, reason: "not-admin", error: publicError("not-admin") };
+  }
+  const rewardId = typeof input.rewardId === "string" ? input.rewardId.trim() : "";
+  const reward = getReward(rewardId, input.rewardsFile);
+  if (!reward) {
+    return { ok: false, reason: "missing", error: publicError("invalid") };
+  }
+  if (!isOffchainRecord(reward)) {
+    return {
+      ok: false,
+      reason: "not-offchain",
+      error: "This reward is not an off-chain delivery.",
+    };
+  }
+  const normalized = normalizeOffchainGiftLabel(input.label);
+  if (!normalized.ok) {
+    return {
+      ok: false,
+      reason: normalized.reason,
+      error: publicError(normalized.reason),
+    };
+  }
+  const done = writeOffchainGiftLabel(rewardId, normalized.label, input.rewardsFile);
+  if (!done.ok) {
+    return { ok: false, reason: done.reason, error: publicError(done.reason) };
+  }
+  return {
+    ok: true,
+    reward: getReward(rewardId, input.rewardsFile),
+  };
+}
+
 async function markOffchainDelivered(input = {}) {
   if (!isAdmin(input.adminUserId)) {
     return { ok: false, reason: "not-admin", error: publicError("not-admin") };
@@ -1462,6 +1507,16 @@ async function markOffchainDelivered(input = {}) {
     };
   }
 
+  const storedLabel =
+    typeof reward.offchainGiftLabel === "string" ? reward.offchainGiftLabel.trim() : "";
+  if (!storedLabel) {
+    return {
+      ok: false,
+      reason: "gift-required",
+      error: publicError("gift-required"),
+    };
+  }
+
   const note =
     typeof input.deliveryNote === "string" ? input.deliveryNote.trim().slice(0, 500) : "";
 
@@ -1479,6 +1534,9 @@ async function markOffchainDelivered(input = {}) {
     record.status = "sent";
     record.sentAt = now;
     record.offchainDeliveredAt = now;
+    if (typeof record.offchainGiftLabel !== "string" || !record.offchainGiftLabel.trim()) {
+      return { ok: false, reason: "gift-required" };
+    }
     if (note) {
       record.deliveryNote = note;
     }
@@ -1527,6 +1585,7 @@ module.exports = {
   confirmDelivery,
   reconcileDeliveryPayment,
   markOffchainDelivered,
+  setOffchainGiftLabel,
   publicStatusForSession,
   publicDeliveryState,
   listPendingRewardsForAdmin,
