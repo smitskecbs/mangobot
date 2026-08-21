@@ -258,7 +258,7 @@ async function handleMangoBombCallback(ctx, options = {}) {
       const desc = err && (err.description || err.message || "");
       if (!String(desc).toLowerCase().includes("message is not modified")) {
         logError(
-          "[mango-bomb] editMessageText failed:",
+          "[mango-bomb] render failed stage=callback",
           err && err.message ? err.message : err
         );
       }
@@ -270,10 +270,24 @@ module.exports = (bot) => {
   wireMangoBombRuntime(getMangoBombRuntime(), bot);
 
   bot.command("mangobomb", (ctx) =>
-    Promise.resolve(handleMangoBomb(ctx)).catch(() => undefined)
+    Promise.resolve(handleMangoBomb(ctx)).catch((err) => {
+      logError(
+        "[mango-bomb] internal error stage=start",
+        err && err.message ? err.message : err
+      );
+    })
   );
   bot.action(/^mb:(join|pass):[a-f0-9]{8,16}$/i, (ctx) =>
-    Promise.resolve(handleMangoBombCallback(ctx)).catch(() => undefined)
+    Promise.resolve(handleMangoBombCallback(ctx)).catch((err) => {
+      logError(
+        "[mango-bomb] internal error stage=callback",
+        err && err.message ? err.message : err
+      );
+      if (ctx && typeof ctx.answerCbQuery === "function") {
+        return ctx.answerCbQuery(STALE_CALLBACK).catch(() => {});
+      }
+      return undefined;
+    })
   );
 };
 

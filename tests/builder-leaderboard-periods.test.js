@@ -27,6 +27,8 @@ const {
   BUILDER_PERIOD,
   formatBuilderLeaderboard,
   shareBuilderLeaderboard,
+  reconcileBuilderEventHistory,
+  persistReconcileBuilderEvents,
 } = require("../services/communityBuilder");
 const { getWeekId } = require("../services/points");
 const { loadBuilderStore, mutateBuilderStore } = require("../services/communityBuilderStore");
@@ -35,8 +37,10 @@ const {
   handleBuilderCallback,
   handleBuilderStats,
   BUILDER_CALLBACK,
+  GROUP_BOARD_CALLBACK,
   leaderboardText,
   periodChooserText,
+  handleGroupLeaderboardCallback,
 } = require("../commands/communitybuilder");
 const { registerManualWallet, setWalletFileForTests } = require("../services/walletLinks");
 const { mutatePoints, loadPoints, awardMangoBombXp, canEarnXp } = require("../services/points");
@@ -142,7 +146,7 @@ function mockCtx(extra = {}) {
     from: {
       id: extra.userId || Number(INVITER),
       first_name: extra.name || "Alice",
-      is_bot: false,
+      is_bot: Boolean(extra.isBot),
     },
     message: { text },
     botInfo: { username: "ManGoTestBot", id: 55 },
@@ -150,15 +154,20 @@ function mockCtx(extra = {}) {
     callbackQuery: extra.callbackData ? { data: extra.callbackData } : undefined,
     replies,
     edits,
+    cbAnswers: [],
     reply(msg, extraArg) {
       replies.push({ text: msg, extra: extraArg });
       return Promise.resolve();
     },
     editMessageText(msg, extraArg) {
+      if (typeof extra.editImpl === "function") {
+        return extra.editImpl(msg, extraArg);
+      }
       edits.push({ text: msg, extra: extraArg });
       return Promise.resolve();
     },
-    answerCbQuery() {
+    answerCbQuery(msg) {
+      this.cbAnswers.push(msg || "");
       return Promise.resolve();
     },
   };
@@ -622,12 +631,282 @@ async function main() {
     assert.ok(admin.replies[0].text.includes("All-time BP: 9"));
   });
 
-  await runTest("formatBuilderLeaderboard empty weekly copy", () => {
-    const text = formatBuilderLeaderboard([], "weekly");
-    assert.strictEqual(
-      text,
-      "🏆 Weekly Community Builders\n\nNo Builder Points earned this week yet."
+  await runTest("1-15. reconstruct events from referral timestamps, no double BP", async () => {
+    const now = Date.UTC(2026, 7, 21, 15, 0, 0);
+    const lastWeek = Date.UTC(2026, 7, 10, 12, 0, 0);
+    const h = harness(now);
+    mutateBuilderStore((store) => {
+      store.builders[INVITER] = {
+        points: 4,
+        referralIds: [REFERRED],
+        displayName: "Alice",
+        createdAt: 1,
+        activeInviteId: null,
+      };
+      store.referrals[REFERRED] = {
+        inviterUserId: INVITER,
+        joinedAt: now,
+        inviteId: "hash",
+        displayName: "Bob",
+        walletMilestoneAt: now,
+        activeMilestoneAt: now,
+      };
+    }, h.storeFile);
+    assert.strictEqual(Object.keys(loadBuilderStore(h.storeFile).builderEvents || {}).length, 0);
+    const first = persistReconcileBuilderEvents(h.storeFile);
+    assert.strictEqual(first.added, 3);
+    const store = loadBuilderStore(h.storeFile);
+    assert.strictEqual(store.builders[INVITER].points, 4);
+    assert.strictEqual(store.builderEvents[`${REFERRED}:join`].createdAt, now);
+    assert.strictEqual(store.builderEvents[`${REFERRED}:wallet`].points, 1);
+    assert.strictEqual(store.builderEvents[`${REFERRED}:active`].points, 2);
+    const weekly = getBuilderLeaderboard("weekly", { ...h.opts, now });
+    assert.strictEqual(weekly[0].points, 4);
+    const monthly = getBuilderLeaderboard("monthly", { ...h.opts, now });
+    assert.strictEqual(monthly[0].points, 4);
+    const alltime = getBuilderLeaderboard("alltime", { ...h.opts, now });
+    assert.strictEqual(alltime[0].points, 4);
+    const second = persistReconcileBuilderEvents(h.storeFile);
+    assert.strictEqual(second.added, 0);
+    assert.strictEqual(loadBuilderStore(h.storeFile).builders[INVITER].points, 4);
+
+    const h2 = harness(now);
+    mutateBuilderStore((store) => {
+      store.builders[INVITER] = {
+        points: 3,
+        referralIds: ["5005", "5006"],
+        displayName: "Alice",
+        createdAt: 1,
+        activeInviteId: null,
+      };
+      store.referrals["5005"] = {
+        inviterUserId: INVITER,
+        joinedAt: lastWeek,
+        inviteId: "o",
+        displayName: "Old",
+        walletMilestoneAt: lastWeek,
+        activeMilestoneAt: null,
+      };
+      store.referrals["5006"] = {
+        inviterUserId: INVITER,
+        joinedAt: now,
+        inviteId: "n",
+        displayName: "New",
+        walletMilestoneAt: null,
+        activeMilestoneAt: null,
+      };
+    }, h2.storeFile);
+    persistReconcileBuilderEvents(h2.storeFile);
+    const week2 = getBuilderLeaderboard("weekly", { ...h2.opts, now });
+    assert.strictEqual(week2[0].points, 1);
+    const month2 = getBuilderLeaderboard("monthly", { ...h2.opts, now });
+    assert.strictEqual(month2[0].points, 3);
+
+    const h3 = harness(now);
+    mutateBuilderStore((store) => {
+      store.builders[INVITER] = {
+        points: 8,
+        referralIds: ["5007"],
+        displayName: "Alice",
+        createdAt: now,
+        activeInviteId: null,
+      };
+      store.referrals["5007"] = {
+        inviterUserId: INVITER,
+        joinedAt: null,
+        inviteId: "x",
+        displayName: "NoStamp",
+        walletMilestoneAt: null,
+        activeMilestoneAt: null,
+      };
+    }, h3.storeFile);
+    const none = persistReconcileBuilderEvents(h3.storeFile);
+    assert.strictEqual(none.added, 0);
+    assert.strictEqual(getBuilderLeaderboard("weekly", { ...h3.opts, now }).length, 0);
+    assert.strictEqual(getBuilderLeaderboard("alltime", { ...h3.opts, now })[0].points, 8);
+
+    const h4 = harness(now);
+    mutateBuilderStore((store) => {
+      store.builders[INVITER] = {
+        points: 2,
+        referralIds: [REFERRED],
+        displayName: "Alice",
+        createdAt: 1,
+        activeInviteId: null,
+      };
+      store.referrals[REFERRED] = {
+        inviterUserId: INVITER,
+        joinedAt: now,
+        inviteId: "p",
+        displayName: "Bob",
+        walletMilestoneAt: now,
+        activeMilestoneAt: null,
+      };
+      store.builderEvents[`${REFERRED}:join`] = {
+        eventId: `${REFERRED}:join`,
+        builderUserId: INVITER,
+        points: 1,
+        reason: BUILDER_EVENT_REASON.JOIN,
+        referralUserId: REFERRED,
+        createdAt: now,
+      };
+    }, h4.storeFile);
+    const partial = persistReconcileBuilderEvents(h4.storeFile);
+    assert.strictEqual(partial.added, 1);
+    assert.ok(loadBuilderStore(h4.storeFile).builderEvents[`${REFERRED}:wallet`]);
+    assert.strictEqual(loadBuilderStore(h4.storeFile).builders[INVITER].points, 2);
+
+    registerManualWallet(INVITER, generateSolanaWallet().address, h.walletFile);
+    const created = await seedInvite(h);
+    handleChatMemberUpdate(joinUpdate(OTHER, created.inviteUrl), { ...h.opts, now });
+    assert.strictEqual(builderSummary(INVITER, h.opts).builderPoints, 5);
+    assert.ok(loadBuilderStore(h.storeFile).builderEvents[`${OTHER}:join`]);
+  });
+
+  await runTest("16-32. group /builderboard board + period edits, no leak", async () => {
+    const now = Date.UTC(2026, 7, 21, 15, 0, 0);
+    const h = harness(now);
+    mutateBuilderStore((store) => {
+      store.builders[INVITER] = {
+        points: 8,
+        referralIds: [],
+        displayName: "Alice",
+        createdAt: 1,
+        activeInviteId: null,
+      };
+    }, h.storeFile);
+    putEvent(h.storeFile, {
+      eventId: "g1:join",
+      builderUserId: INVITER,
+      points: 8,
+      reason: BUILDER_EVENT_REASON.JOIN,
+      referralUserId: "g1",
+      createdAt: now,
+      displayName: "Alice",
+    });
+
+    const group = mockCtx({
+      chatType: "supergroup",
+      chatId: Number(COMMUNITY_CHAT),
+      text: "/builderboard",
+    });
+    handleBuilderBoard(group, { ...h.opts, now });
+    assert.ok(group.replies[0].text.includes("All-time Community Builders"));
+    const extra = JSON.stringify(group.replies[0].extra);
+    assert.ok(extra.includes("Weekly"));
+    assert.ok(extra.includes("Monthly"));
+    assert.ok(extra.includes("All-time"));
+    assert.ok(extra.includes(GROUP_BOARD_CALLBACK.WEEKLY));
+    assert.ok(extra.includes(GROUP_BOARD_CALLBACK.MONTHLY));
+    assert.ok(extra.includes(GROUP_BOARD_CALLBACK.ALLTIME));
+    assert.ok(!extra.includes("message_thread_id"));
+    assert.ok(!group.replies[0].text.includes(INVITER));
+    assert.ok(!/wallet/i.test(group.replies[0].text));
+
+    const weeklyCb = mockCtx({
+      chatType: "supergroup",
+      chatId: Number(COMMUNITY_CHAT),
+      callbackData: GROUP_BOARD_CALLBACK.WEEKLY,
+    });
+    await handleGroupLeaderboardCallback(weeklyCb, { ...h.opts, now });
+    assert.strictEqual(weeklyCb.cbAnswers.length, 1);
+    assert.ok(weeklyCb.edits[0].text.includes("Weekly Community Builders"));
+    assert.ok(weeklyCb.edits[0].text.includes("This week"));
+    assert.ok(JSON.stringify(weeklyCb.edits[0].extra).includes(GROUP_BOARD_CALLBACK.MONTHLY));
+
+    const monthlyCb = mockCtx({
+      chatType: "supergroup",
+      chatId: Number(COMMUNITY_CHAT),
+      callbackData: GROUP_BOARD_CALLBACK.MONTHLY,
+    });
+    await handleGroupLeaderboardCallback(monthlyCb, { ...h.opts, now });
+    assert.ok(monthlyCb.edits[0].text.includes("Monthly Community Builders"));
+    assert.ok(monthlyCb.edits[0].text.includes("August 2026"));
+
+    const allCb = mockCtx({
+      chatType: "supergroup",
+      chatId: Number(COMMUNITY_CHAT),
+      callbackData: GROUP_BOARD_CALLBACK.ALLTIME,
+    });
+    await handleGroupLeaderboardCallback(allCb, { ...h.opts, now });
+    assert.ok(allCb.edits[0].text.includes("All-time Community Builders"));
+
+    const unmodified = mockCtx({
+      chatType: "supergroup",
+      chatId: Number(COMMUNITY_CHAT),
+      callbackData: GROUP_BOARD_CALLBACK.WEEKLY,
+      editImpl: () => {
+        const err = new Error("Bad Request: message is not modified");
+        err.description = "Bad Request: message is not modified";
+        throw err;
+      },
+    });
+    await handleGroupLeaderboardCallback(unmodified, { ...h.opts, now });
+    assert.strictEqual(unmodified.cbAnswers.length, 1);
+
+    const wrong = mockCtx({
+      chatType: "supergroup",
+      chatId: -1000000000001,
+      callbackData: GROUP_BOARD_CALLBACK.WEEKLY,
+    });
+    await handleGroupLeaderboardCallback(wrong, { ...h.opts, now, chatId: COMMUNITY_CHAT });
+    assert.strictEqual(wrong.edits.length, 0);
+
+    const botCtx = mockCtx({
+      chatType: "supergroup",
+      chatId: Number(COMMUNITY_CHAT),
+      callbackData: GROUP_BOARD_CALLBACK.WEEKLY,
+      isBot: true,
+    });
+    await handleGroupLeaderboardCallback(botCtx, { ...h.opts, now });
+    assert.strictEqual(botCtx.edits.length, 0);
+
+    const privateBoard = mockCtx({ callbackData: BUILDER_CALLBACK.BOARD });
+    await handleBuilderCallback(privateBoard, h.opts);
+    const privateView = privateBoard.edits[0] || privateBoard.replies[0];
+    assert.ok(privateView.text.includes("Choose a period"));
+
+    const adminShare = mockCtx({
+      callbackData: BUILDER_CALLBACK.WEEKLY,
+      userId: Number(ADMIN_ID),
+    });
+    await handleBuilderCallback(adminShare, h.opts);
+    const shareExtra = JSON.stringify((adminShare.edits[0] || adminShare.replies[0]).extra);
+    assert.ok(shareExtra.includes(BUILDER_CALLBACK.SHARE_WEEKLY));
+
+    const weeklyCmd = mockCtx({
+      chatType: "supergroup",
+      chatId: Number(COMMUNITY_CHAT),
+      text: "/builderboard weekly",
+    });
+    handleBuilderBoard(weeklyCmd, { ...h.opts, now });
+    assert.ok(weeklyCmd.replies[0].text.includes("Weekly Community Builders"));
+
+    const pointsBefore = builderSummary(INVITER, h.opts).builderPoints;
+    await handleGroupLeaderboardCallback(
+      mockCtx({
+        chatType: "supergroup",
+        chatId: Number(COMMUNITY_CHAT),
+        callbackData: GROUP_BOARD_CALLBACK.MONTHLY,
+      }),
+      { ...h.opts, now }
     );
+    assert.strictEqual(builderSummary(INVITER, h.opts).builderPoints, pointsBefore);
+
+    const src = fs.readFileSync(
+      path.join(__dirname, "..", "commands", "communitybuilder.js"),
+      "utf8"
+    );
+    assert.ok(!src.includes("TELEGRAM_GAMES_TOPIC_ID"));
+    assert.ok(!src.includes("gameTopic"));
+  });
+
+  await runTest("formatBuilderLeaderboard empty weekly copy", () => {
+    const text = formatBuilderLeaderboard([], "weekly", "private", Date.UTC(2026, 7, 21));
+    assert.ok(text.includes("🏆 Weekly Community Builders"));
+    assert.ok(text.includes("Period:"));
+    assert.ok(text.includes("This week"));
+    assert.ok(text.includes("No Builder Points earned this week yet."));
   });
 
   if (originalChat === undefined) delete process.env.TELEGRAM_CHAT_ID;

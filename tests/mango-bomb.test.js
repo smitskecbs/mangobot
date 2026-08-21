@@ -23,6 +23,7 @@ const {
   BOMB_MAX_MS,
   LOBBY_COUNTDOWN_MS,
   STALE_CALLBACK,
+  INTERNAL_CANCEL_TEXT,
   getMangoBombRuntime,
 } = require("../services/mangoBomb");
 const {
@@ -178,6 +179,7 @@ function createService(overrides = {}) {
     passCooldownMs: overrides.passCooldownMs != null ? overrides.passCooldownMs : 400,
     betweenRoundsMs: overrides.betweenRoundsMs != null ? overrides.betweenRoundsMs : 2_500,
     startCooldownMs: overrides.startCooldownMs != null ? overrides.startCooldownMs : 0,
+    renderTimeoutMs: overrides.renderTimeoutMs,
   });
   service.setEditMessageHandler(async (chatId, messageId, text, extra) => {
     edits.push({ chatId, messageId, text, extra });
@@ -995,10 +997,186 @@ async function main() {
     assert.deepStrictEqual(service.getGame(started.gameId).alivePlayers, [String(USER_B)]);
   });
 
+  await runTest("33-47. queue/render failure injection does not freeze the bot", async () => {
+    const { service } = createService();
+    const started = service.startLobby({ chatId: COMMUNITY_CHAT, threadId: 123 });
+    service.setMessageId(started.gameId, 9001);
+    service.injectQueueThrow("join");
+    const failedJoin = await service.enqueueJoin({
+      gameId: started.gameId,
+      userId: USER_A,
+      displayName: { first_name: "Kevin" },
+      isBot: false,
+      chatId: COMMUNITY_CHAT,
+      threadId: 123,
+    });
+    assert.strictEqual(failedJoin.ok, false);
+    assert.strictEqual(service.getStatus(COMMUNITY_CHAT), STATUS.LOBBY);
+    const recoveredJoin = await service.enqueueJoin({
+      gameId: started.gameId,
+      userId: USER_A,
+      displayName: { first_name: "Kevin" },
+      isBot: false,
+      chatId: COMMUNITY_CHAT,
+      threadId: 123,
+    });
+    assert.strictEqual(recoveredJoin.ok, true);
+
+    await service.enqueueJoin({
+      gameId: started.gameId,
+      userId: USER_B,
+      displayName: { first_name: "Lojay" },
+      isBot: false,
+      chatId: COMMUNITY_CHAT,
+      threadId: 123,
+    });
+    await service.forceLobbyEnd(started.gameId);
+    assert.strictEqual(service.getStatus(COMMUNITY_CHAT), STATUS.RUNNING);
+    service.injectQueueThrow("pass");
+    const failedPass = await service.enqueuePass({
+      gameId: started.gameId,
+      userId: USER_A,
+      chatId: COMMUNITY_CHAT,
+      threadId: 123,
+    });
+    assert.strictEqual(failedPass.ok, false);
+    assert.strictEqual(service.getStatus(COMMUNITY_CHAT), STATUS.RUNNING);
+    assert.strictEqual(service.getActiveBombTimerCount(), 1);
+    const recoveredPass = await service.enqueuePass({
+      gameId: started.gameId,
+      userId: USER_A,
+      chatId: COMMUNITY_CHAT,
+      threadId: 123,
+    });
+    assert.strictEqual(recoveredPass.ok, true);
+    service.reset();
+
+    const { service: lobbyRender, timers: lobbyTimers } = createService({
+      lobbyMs: 60_000,
+      renderTimeoutMs: 25,
+    });
+    const lobby = lobbyRender.startLobby({ chatId: COMMUNITY_CHAT, threadId: 123 });
+    lobbyRender.setMessageId(lobby.gameId, 9001);
+    join(lobbyRender, lobby.gameId, USER_A, "Kevin");
+    join(lobbyRender, lobby.gameId, USER_B, "Lojay");
+    lobbyRender.injectRenderThrow();
+    lobbyTimers.advance(5_000);
+    await lobbyRender.whenIdle(COMMUNITY_CHAT);
+    assert.strictEqual(lobbyRender.getStatus(COMMUNITY_CHAT), STATUS.LOBBY);
+    lobbyRender.injectRenderHang();
+    const hangJoin = lobbyRender.enqueueJoin({
+      gameId: lobby.gameId,
+      userId: USER_C,
+      displayName: { first_name: "Ada" },
+      isBot: false,
+      chatId: COMMUNITY_CHAT,
+      threadId: 123,
+    });
+    lobbyTimers.advance(25);
+    const hangResult = await hangJoin;
+    assert.strictEqual(hangResult.ok, true);
+    assert.strictEqual(lobbyRender.getStatus(COMMUNITY_CHAT), STATUS.LOBBY);
+    lobbyRender.reset();
+
+    const { service: passRender } = createService();
+    const passId = await startWithPlayers(passRender, ["Kevin", "Lojay"]);
+    await passRender.forceLobbyEnd(passId);
+    const holder = passRender.getGame(passId).currentHolder;
+    const passCtx = createMockCtx({
+      callbackData: passCallbackData(passId),
+      userId: Number(holder),
+      firstName: "Kevin",
+      messageThreadId: 123,
+    });
+    passCtx.editMessageText = () => {
+      throw new Error("Bad Request: message can't be edited");
+    };
+    await handleMangoBombCallback(passCtx, { runtime: passRender });
+    assert.strictEqual(passRender.getStatus(COMMUNITY_CHAT), STATUS.RUNNING);
+    assert.strictEqual(passRender.getActiveBombTimerCount(), 1);
+    passRender.reset();
+
+    const { service: boomRender, timers: boomTimers } = createService({
+      betweenRoundsMs: 40,
+      renderTimeoutMs: 20,
+    });
+    const boomId = await startWithPlayers(boomRender, ["Kevin", "Lojay", "Ada"]);
+    await boomRender.forceLobbyEnd(boomId);
+    boomRender.injectRenderThrow();
+    const exploded = await boomRender.forceExplode(boomId);
+    assert.ok(exploded.ok);
+    assert.strictEqual(boomRender.getStatus(COMMUNITY_CHAT), STATUS.BETWEEN_ROUNDS);
+    boomTimers.advance(40);
+    await boomRender.whenIdle(COMMUNITY_CHAT);
+    assert.strictEqual(boomRender.getStatus(COMMUNITY_CHAT), STATUS.RUNNING);
+    boomRender.reset();
+
+    const { service: cbThrow } = createService();
+    const cbStart = cbThrow.startLobby({ chatId: COMMUNITY_CHAT, threadId: 123 });
+    cbThrow.setMessageId(cbStart.gameId, 9001);
+    cbThrow.injectQueueThrow("join");
+    const cbCtx = createMockCtx({
+      callbackData: joinCallbackData(cbStart.gameId),
+      userId: USER_A,
+      firstName: "Kevin",
+      messageThreadId: 123,
+    });
+    await handleMangoBombCallback(cbCtx, { runtime: cbThrow });
+    assert.ok(cbCtx.cbAnswers.length >= 1);
+    assert.strictEqual(cbThrow.getStatus(COMMUNITY_CHAT), STATUS.LOBBY);
+    cbThrow.reset();
+
+    const { service: betweenFail, timers: betweenTimers, edits: betweenEdits } = createService({
+      betweenRoundsMs: 30,
+    });
+    const betweenId = await startWithPlayers(betweenFail, ["Kevin", "Lojay", "Ada"]);
+    await betweenFail.forceLobbyEnd(betweenId);
+    await betweenFail.forceExplode(betweenId);
+    assert.strictEqual(betweenFail.getStatus(COMMUNITY_CHAT), STATUS.BETWEEN_ROUNDS);
+    betweenFail.injectQueueThrow("between-rounds");
+    betweenTimers.advance(30);
+    await betweenFail.whenIdle(COMMUNITY_CHAT);
+    assert.strictEqual(betweenFail.getStatus(COMMUNITY_CHAT), STATUS.IDLE);
+    assert.ok(betweenEdits.some((row) => row.text === INTERNAL_CANCEL_TEXT));
+    assert.strictEqual(isCommunityChallengeBusy({ isMangoBombOpenFn: () => betweenFail.isMangoBombOpen() }), false);
+    const restart = betweenFail.startLobby({ chatId: COMMUNITY_CHAT, threadId: 123 });
+    assert.strictEqual(restart.ok, true);
+    betweenFail.reset();
+
+    const { service: explodeFail, timers: explodeTimers } = createService({
+      bombMinMs: 20,
+      bombMaxMs: 20,
+    });
+    const explodeId = await startWithPlayers(explodeFail, ["Kevin", "Lojay"]);
+    await explodeFail.forceLobbyEnd(explodeId);
+    explodeFail.injectQueueThrow("explode");
+    explodeTimers.advance(20);
+    await explodeFail.whenIdle(COMMUNITY_CHAT);
+    assert.strictEqual(explodeFail.getStatus(COMMUNITY_CHAT), STATUS.IDLE);
+    assert.strictEqual(explodeFail.getPendingTimerCount(), 0);
+    const again = explodeFail.startLobby({ chatId: COMMUNITY_CHAT, threadId: 123 });
+    assert.strictEqual(again.ok, true);
+    explodeFail.reset();
+
+    const pFile = pointsFile();
+    const wFile = walletFile();
+    fs.writeFileSync(pFile, JSON.stringify({ users: {} }), "utf8");
+    const { service: xpGuard } = createService();
+    attachXp(xpGuard, pFile, wFile);
+    require("../services/xpWalletGate").setXpWalletAutoLinkForTests(true);
+    const xpId = await startWithPlayers(xpGuard, ["Kevin", "Lojay"]);
+    await xpGuard.forceLobbyEnd(xpId);
+    xpGuard.injectQueueThrow("explode");
+    await xpGuard.forceExplode(xpId);
+    assert.strictEqual(pointsOf(pFile, USER_A), 1);
+    assert.strictEqual(pointsOf(pFile, USER_B), 1);
+    xpGuard.reset();
+  });
+
   await runTest("44. no production files touched", () => {
     for (const file of prodRoots) {
       if (!fs.existsSync(file)) continue;
-      assert.strictEqual(fs.statSync(file).mtimeMs, prodMtimes[file]);
+      assert.strictEqual(fs.statSync(file).mtimeMs, prodMtimes[file], file);
     }
   });
 

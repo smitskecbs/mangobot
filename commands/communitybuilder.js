@@ -41,6 +41,12 @@ const BUILDER_CALLBACK = Object.freeze({
   SHARE_ALLTIME: "cb:share:a",
 });
 
+const GROUP_BOARD_CALLBACK = Object.freeze({
+  WEEKLY: "cblb:w",
+  MONTHLY: "cblb:m",
+  ALLTIME: "cblb:a",
+});
+
 const BUILDER_REFS_PREFIX = "cbuild:r:";
 const BUILDER_START_PAYLOAD = "builder";
 
@@ -122,6 +128,53 @@ function shareCallbackForPeriod(period) {
     return BUILDER_CALLBACK.SHARE_MONTHLY;
   }
   return BUILDER_CALLBACK.SHARE_ALLTIME;
+}
+
+function mangoGroupChatId(options = {}) {
+  if (options.chatId != null && String(options.chatId).trim()) {
+    return String(options.chatId).trim();
+  }
+  return typeof process.env.TELEGRAM_CHAT_ID === "string"
+    ? process.env.TELEGRAM_CHAT_ID.trim()
+    : "";
+}
+
+function isTargetMangoGroup(ctx, options = {}) {
+  const expected = mangoGroupChatId(options);
+  const got = ctx && ctx.chat && ctx.chat.id != null ? String(ctx.chat.id).trim() : "";
+  return Boolean(expected && got && expected === got);
+}
+
+function isMessageNotModifiedError(err) {
+  const desc = err && (err.description || err.message || "");
+  return String(desc).toLowerCase().includes("message is not modified");
+}
+
+function groupLeaderboardExtra() {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback("📅 Weekly", GROUP_BOARD_CALLBACK.WEEKLY),
+      Markup.button.callback("🗓 Monthly", GROUP_BOARD_CALLBACK.MONTHLY),
+    ],
+    [Markup.button.callback("🌍 All-time", GROUP_BOARD_CALLBACK.ALLTIME)],
+  ]);
+}
+
+function periodFromGroupCallback(data) {
+  if (data === GROUP_BOARD_CALLBACK.WEEKLY) {
+    return BUILDER_PERIOD.WEEKLY;
+  }
+  if (data === GROUP_BOARD_CALLBACK.MONTHLY) {
+    return BUILDER_PERIOD.MONTHLY;
+  }
+  if (data === GROUP_BOARD_CALLBACK.ALLTIME) {
+    return BUILDER_PERIOD.ALLTIME;
+  }
+  return null;
+}
+
+function isGroupBoardCallback(data) {
+  return Boolean(periodFromGroupCallback(data));
 }
 
 function inviteSuccessText(inviteUrl, reused) {
@@ -290,7 +343,7 @@ function handleBuilderBoard(ctx, options = {}) {
     return undefined;
   }
   if (isGroupChat(ctx)) {
-    return ctx.reply(GROUP_BUILDER_TEXT, groupBuilderExtra(ctx));
+    return handleGroupBuilderBoard(ctx, options);
   }
   if (!isPrivateChat(ctx)) {
     return undefined;
@@ -306,6 +359,66 @@ function handleBuilderBoard(ctx, options = {}) {
     leaderboardText(board, chosen),
     leaderboardExtra(chosen, isAdmin(ctx.from.id))
   );
+}
+
+function handleGroupBuilderBoard(ctx, options = {}) {
+  if (ctx.from && ctx.from.is_bot) {
+    return undefined;
+  }
+  if (!isTargetMangoGroup(ctx, options)) {
+    return ctx.reply("Open the ManGo group to view the Builder leaderboard.");
+  }
+  const arg = parseCommandArg(ctx);
+  const parsed = arg ? normalizeBuilderPeriod(arg) : BUILDER_PERIOD.ALLTIME;
+  if (arg && !parsed) {
+    return ctx.reply("Use /builderboard weekly, monthly, or alltime.");
+  }
+  const chosen = parsed || BUILDER_PERIOD.ALLTIME;
+  const board = getBuilderLeaderboard({ ...options, period: chosen });
+  return ctx.reply(leaderboardText(board, chosen), groupLeaderboardExtra());
+}
+
+async function handleGroupLeaderboardCallback(ctx, options = {}) {
+  const data =
+    ctx && ctx.callbackQuery && typeof ctx.callbackQuery.data === "string"
+      ? ctx.callbackQuery.data
+      : "";
+  const period = periodFromGroupCallback(data);
+  if (!period) {
+    return;
+  }
+
+  try {
+    if (typeof ctx.answerCbQuery === "function") {
+      await ctx.answerCbQuery();
+    }
+  } catch (_err) {
+    /* already answered */
+  }
+
+  if (!ctx.from || ctx.from.is_bot) {
+    return;
+  }
+  if (!isGroupChat(ctx) || !isTargetMangoGroup(ctx, options)) {
+    return;
+  }
+
+  const board = getBuilderLeaderboard({ ...options, period });
+  const text = leaderboardText(board, period);
+  if (typeof ctx.editMessageText !== "function") {
+    return ctx.reply(text, groupLeaderboardExtra());
+  }
+  try {
+    await ctx.editMessageText(text, groupLeaderboardExtra());
+  } catch (err) {
+    if (!isMessageNotModifiedError(err)) {
+      const { error: logError } = require("../utils/logger");
+      logError(
+        "[community-builder] group leaderboard edit failed:",
+        err && err.message ? err.message : err
+      );
+    }
+  }
 }
 
 function handleBuilderStats(ctx, options = {}) {
@@ -420,19 +533,23 @@ async function handleBuilderCallback(ctx, options = {}) {
 
 const BUILDER_ACTION_RE =
   /^(cbuild:(home|invite|refs|board|back)|cbuild:r:\d+|cb:lb:(pick|w|m|a)|cb:share:(w|m|a))$/;
+const GROUP_BOARD_ACTION_RE = /^cblb:[wma]$/;
 
 module.exports = (bot) => {
   bot.command("communitybuilder", (ctx) => handleCommunityBuilder(ctx));
   bot.command("builderboard", (ctx) => handleBuilderBoard(ctx));
   bot.command("builderstats", (ctx) => handleBuilderStats(ctx));
   bot.action(BUILDER_ACTION_RE, (ctx) => handleBuilderCallback(ctx));
+  bot.action(GROUP_BOARD_ACTION_RE, (ctx) => handleGroupLeaderboardCallback(ctx));
 };
 
 module.exports.handleCommunityBuilder = handleCommunityBuilder;
 module.exports.handleBuilderBoard = handleBuilderBoard;
 module.exports.handleBuilderStats = handleBuilderStats;
 module.exports.handleBuilderCallback = handleBuilderCallback;
+module.exports.handleGroupLeaderboardCallback = handleGroupLeaderboardCallback;
 module.exports.BUILDER_CALLBACK = BUILDER_CALLBACK;
+module.exports.GROUP_BOARD_CALLBACK = GROUP_BOARD_CALLBACK;
 module.exports.BUILDER_REFS_PREFIX = BUILDER_REFS_PREFIX;
 module.exports.BUILDER_START_PAYLOAD = BUILDER_START_PAYLOAD;
 module.exports.GROUP_BUILDER_TEXT = GROUP_BUILDER_TEXT;

@@ -253,6 +253,103 @@ function putBuilderAwardEvent(store, input) {
   return { recorded: true, duplicate: false, eventId };
 }
 
+function isTrustworthyTimestamp(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0;
+}
+
+/**
+ * Reconstruct missing builderEvents from referral milestone timestamps.
+ * Does NOT change builder.points. Idempotent. No invented timestamps.
+ */
+function reconcileBuilderEventHistory(store) {
+  if (!store || typeof store !== "object") {
+    return { added: 0 };
+  }
+  ensureBuilderEvents(store);
+  let added = 0;
+  for (const [referralId, referral] of Object.entries(store.referrals || {})) {
+    if (!referral || typeof referral !== "object") {
+      continue;
+    }
+    const builderUserId = normalizeUserId(referral.inviterUserId);
+    const referredId = normalizeUserId(referralId);
+    if (!builderUserId || !referredId) {
+      continue;
+    }
+    const specs = [
+      {
+        reason: BUILDER_EVENT_REASON.JOIN,
+        stamp: referral.joinedAt,
+        points: JOIN_BUILDER_POINTS,
+      },
+      {
+        reason: BUILDER_EVENT_REASON.WALLET,
+        stamp: referral.walletMilestoneAt,
+        points: WALLET_BUILDER_POINTS,
+      },
+      {
+        reason: BUILDER_EVENT_REASON.ACTIVE,
+        stamp: referral.activeMilestoneAt,
+        points: ACTIVE_BUILDER_POINTS,
+      },
+    ];
+    for (const spec of specs) {
+      if (!isTrustworthyTimestamp(spec.stamp)) {
+        continue;
+      }
+      const recorded = putBuilderAwardEvent(store, {
+        builderUserId,
+        points: spec.points,
+        reason: spec.reason,
+        referralUserId: referredId,
+        createdAt: Number(spec.stamp),
+      });
+      if (recorded.recorded) {
+        added += 1;
+      }
+    }
+  }
+  return { added };
+}
+
+function persistReconcileBuilderEvents(builderFile) {
+  const snapshot = loadBuilderStore(builderFile);
+  const preview = reconcileBuilderEventHistory({
+    ...snapshot,
+    builderEvents: { ...(snapshot.builderEvents || {}) },
+    referrals: snapshot.referrals,
+    builders: snapshot.builders,
+  });
+  if (!preview.added) {
+    return preview;
+  }
+  return mutateBuilderStore((store) => reconcileBuilderEventHistory(store), builderFile);
+}
+
+function mutateReconciledStore(mutator, builderFile) {
+  return mutateBuilderStore((store) => {
+    reconcileBuilderEventHistory(store);
+    return mutator(store);
+  }, builderFile);
+}
+
+function loadBuilderStoreWithEvents(builderFile) {
+  const snapshot = loadBuilderStore(builderFile);
+  const result = reconcileBuilderEventHistory(snapshot);
+  if (result.added > 0) {
+    try {
+      persistReconcileBuilderEvents(builderFile);
+    } catch (err) {
+      logError(
+        "[community-builder] history reconcile persist failed:",
+        err && err.message ? err.message : err
+      );
+    }
+  }
+  return snapshot;
+}
+
 function awardBuilderPointsOnce(store, builder, amount, meta) {
   const recorded = putBuilderAwardEvent(store, {
     builderUserId: meta.builderUserId,
@@ -517,7 +614,7 @@ function getBuilderLeaderboard(periodOrOptions, maybeNow) {
   const raw = resolveLeaderboardArgs(periodOrOptions, maybeNow);
   const opts = resolveOptions(raw);
   const period = normalizeBuilderPeriod(raw.period) || BUILDER_PERIOD.ALLTIME;
-  const store = loadBuilderStore(opts.storeFile);
+  const store = loadBuilderStoreWithEvents(opts.storeFile);
   const nowMs = Number.isFinite(opts.now) ? opts.now : Date.now();
   const window = periodWindow(period, nowMs);
   const periodPoints = window
@@ -553,6 +650,31 @@ function getBuilderLeaderboard(periodOrOptions, maybeNow) {
   }));
 }
 
+function periodCaption(period, now) {
+  if (period === BUILDER_PERIOD.WEEKLY) {
+    return "Period:\nThis week";
+  }
+  if (period === BUILDER_PERIOD.MONTHLY) {
+    const d = toUtcDate(now);
+    const months = [
+      "January",
+      "February",
+      "March",
+      "April",
+      "May",
+      "June",
+      "July",
+      "August",
+      "September",
+      "October",
+      "November",
+      "December",
+    ];
+    return `Period:\n${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+  }
+  return "";
+}
+
 function periodLeaderboardTitle(period) {
   if (period === BUILDER_PERIOD.WEEKLY) {
     return "🏆 Weekly Community Builders";
@@ -563,22 +685,29 @@ function periodLeaderboardTitle(period) {
   return "🏆 All-time Community Builders";
 }
 
-function emptyLeaderboardText(period) {
+function emptyLeaderboardText(period, now) {
+  const title = periodLeaderboardTitle(period);
+  const caption = periodCaption(period, now);
+  const head = caption ? `${title}\n\n${caption}\n\n` : `${title}\n\n`;
   if (period === BUILDER_PERIOD.WEEKLY) {
-    return `${periodLeaderboardTitle(period)}\n\nNo Builder Points earned this week yet.`;
+    return `${head}No Builder Points earned this week yet.`;
   }
   if (period === BUILDER_PERIOD.MONTHLY) {
-    return `${periodLeaderboardTitle(period)}\n\nNo Builder Points earned this month yet.`;
+    return `${head}No Builder Points earned this month yet.`;
   }
-  return `${periodLeaderboardTitle(period)}\n\nNo Builder Points yet. Invite real members to start.`;
+  return `${head}No Builder Points yet. Invite real members to start.`;
 }
 
-function formatBuilderLeaderboard(rows, period = BUILDER_PERIOD.ALLTIME, kind = "private") {
+function formatBuilderLeaderboard(rows, period = BUILDER_PERIOD.ALLTIME, kind = "private", now = Date.now()) {
   const normalized = normalizeBuilderPeriod(period) || BUILDER_PERIOD.ALLTIME;
   if (!rows || !rows.length) {
-    return emptyLeaderboardText(normalized);
+    return emptyLeaderboardText(normalized, now);
   }
   const lines = [periodLeaderboardTitle(normalized), ""];
+  const caption = periodCaption(normalized, now);
+  if (caption) {
+    lines.push(caption, "");
+  }
   for (const row of rows) {
     lines.push(`${row.rank}. ${row.displayName} — ${row.points} BP`);
   }
@@ -598,7 +727,7 @@ function formatBuilderLeaderboard(rows, period = BUILDER_PERIOD.ALLTIME, kind = 
 
 function getBuilderPeriodTotals(options = {}) {
   const opts = resolveOptions(options);
-  const store = loadBuilderStore(opts.storeFile);
+  const store = loadBuilderStoreWithEvents(opts.storeFile);
   const nowMs = Number.isFinite(opts.now) ? opts.now : Date.now();
   const week = aggregatePeriodPoints(
     store,
@@ -692,7 +821,7 @@ async function shareBuilderLeaderboard(period, options = {}) {
 
 function getBuilderStats(options = {}) {
   const opts = resolveOptions(options);
-  const store = loadBuilderStore(opts.storeFile);
+  const store = loadBuilderStoreWithEvents(opts.storeFile);
   const referrals = Object.values(store.referrals || {});
   let walletLinked = 0;
   let active = 0;
@@ -791,7 +920,7 @@ async function getOrCreateInviteLink(inviterUser, options = {}) {
     return { ok: false, reason: "invalid-user", message: "Couldn't create your invite link." };
   }
   const displayName = safeDisplayName(inviterUser);
-  const existing = mutateBuilderStore((store) => {
+  const existing = mutateReconciledStore((store) => {
     const builder = ensureBuilder(store, uid, displayName, opts.now);
     const activeId = builder.activeInviteId;
     const link = activeId ? store.inviteLinks[activeId] : null;
@@ -865,7 +994,7 @@ async function getOrCreateInviteLink(inviterUser, options = {}) {
   }
 
   log("[community-builder] invite created");
-  return mutateBuilderStore((store) => {
+  return mutateReconciledStore((store) => {
     const builder = ensureBuilder(store, uid, displayName, opts.now);
     if (builder.activeInviteId && store.inviteLinks[builder.activeInviteId]) {
       store.inviteLinks[builder.activeInviteId].active = false;
@@ -931,7 +1060,7 @@ function applyJoinAttribution(input, options = {}) {
     return { ok: false, reason: JOIN_EVENT.PUBLIC_JOIN };
   }
 
-  const result = mutateBuilderStore((store) => {
+  const result = mutateReconciledStore((store) => {
     const existing = store.referrals[referredId];
     if (existing && existing.inviterUserId) {
       return { ok: false, reason: JOIN_EVENT.ALREADY_REFERRED, frozen: true };
@@ -1052,7 +1181,7 @@ function tryWalletMilestone(referredId, options = {}) {
   if (preview.walletMilestoneAt) {
     return { ok: false, reason: "already-claimed" };
   }
-  const result = mutateBuilderStore((store) => {
+  const result = mutateReconciledStore((store) => {
     const referral = store.referrals[uid];
     if (!referral || !referral.inviterUserId) {
       return { ok: false, reason: "not-referred" };
@@ -1127,7 +1256,7 @@ function tryActiveMilestone(referredId, options = {}) {
   if (preview.activeMilestoneAt) {
     return { ok: false, reason: "already-claimed" };
   }
-  const result = mutateBuilderStore((store) => {
+  const result = mutateReconciledStore((store) => {
     const referral = store.referrals[uid];
     if (!referral || !referral.inviterUserId) {
       return { ok: false, reason: "not-referred" };
@@ -1254,6 +1383,8 @@ module.exports = {
   formatBuilderLeaderboard,
   shareBuilderLeaderboard,
   getBuilderPeriodTotals,
+  reconcileBuilderEventHistory,
+  persistReconcileBuilderEvents,
   inviteIdentity,
   safeDisplayName,
   isJoinTransition,

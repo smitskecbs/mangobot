@@ -7,7 +7,7 @@ const crypto = require("crypto");
 const { Markup } = require("telegraf");
 const { sanitizePvpDisplayName } = require("./pvpSessionManager");
 const { XP_WALLET_GAME_LOCKED_LINE } = require("./xpWalletGate");
-const { log } = require("../utils/logger");
+const { log, error: logError } = require("../utils/logger");
 const { emptyInlineKeyboardExtra } = require("../utils/expiredMessageCleanup");
 
 const STATUS = Object.freeze({
@@ -32,6 +32,13 @@ const XP_SURVIVE = 1;
 const XP_WIN = 5;
 const DAILY_ROUND_CAP = 1;
 const STALE_CALLBACK = "This ManGo Bomb round is over.";
+const RENDER_TIMEOUT_MS = 5_000;
+const INTERNAL_CANCEL_TEXT = [
+  "🥭💣 ManGo Bomb round cancelled.",
+  "",
+  "The game hit an unexpected error.",
+  "Start a new round with /mangobomb.",
+].join("\n");
 
 function defaultRandomInt(n) {
   const max = Number(n);
@@ -170,6 +177,10 @@ function createMangoBombService(options = {}) {
     Number.isFinite(options.betweenRoundsMs) ? options.betweenRoundsMs : BETWEEN_ROUNDS_MS;
   const startCooldownMs =
     Number.isFinite(options.startCooldownMs) ? options.startCooldownMs : START_COOLDOWN_MS;
+  const renderTimeoutMs =
+    Number.isFinite(options.renderTimeoutMs) && options.renderTimeoutMs > 0
+      ? options.renderTimeoutMs
+      : RENDER_TIMEOUT_MS;
 
   const gamesById = new Map();
   const gamesByChat = new Map();
@@ -179,6 +190,8 @@ function createMangoBombService(options = {}) {
   let editMessage = null;
   let awardXpFn = null;
   let walletReminderFn = null;
+  let injectedQueueStage = null;
+  let injectedRenderMode = null;
 
   function wrapTimeout(fn, delay) {
     const handle = setTimeoutFn(() => {
@@ -197,15 +210,92 @@ function createMangoBombService(options = {}) {
     clearTimeoutFn(handle);
   }
 
-  function enqueue(chatId, fn) {
+  function enqueue(chatId, fn, stage = "task") {
     const key = String(chatId);
     const prev = queues.get(key) || Promise.resolve();
-    const next = prev.then(fn, fn);
+    const run = () => runQueuedTask(fn, stage, key);
+    const next = prev.then(run, run);
     queues.set(
       key,
-      next.catch(() => undefined)
+      next.then(
+        () => undefined,
+        () => undefined
+      )
     );
-    return next;
+    return next.then(
+      (value) => value,
+      () => ({ ok: false, reason: "internal-error", toast: STALE_CALLBACK })
+    );
+  }
+
+  async function runQueuedTask(fn, stage, chatKey) {
+    try {
+      if (injectedQueueStage && injectedQueueStage === stage) {
+        injectedQueueStage = null;
+        throw new Error("injected-queue-failure");
+      }
+      return await fn();
+    } catch (err) {
+      logError(`[mango-bomb] queue task failed stage=${stage}`);
+      await recoverAfterQueueError(chatKey, stage);
+      return { ok: false, reason: "internal-error", toast: STALE_CALLBACK };
+    }
+  }
+
+  function invariantsHold(game) {
+    if (!game) {
+      return true;
+    }
+    if (game.status === STATUS.LOBBY) {
+      return game.lobbyTimer != null;
+    }
+    if (game.status === STATUS.RUNNING) {
+      return Boolean(
+        game.currentHolder &&
+          game.alive.has(String(game.currentHolder)) &&
+          Number.isFinite(game.bombDeadline) &&
+          game.bombDeadline > (game.bombStartedAt || 0) &&
+          game.bombTimer != null
+      );
+    }
+    if (game.status === STATUS.BETWEEN_ROUNDS) {
+      return game.pauseTimer != null;
+    }
+    if (game.status === STATUS.FINISHED || game.status === STATUS.CANCELLED) {
+      return (
+        game.lobbyTimer == null &&
+        game.countdownTimer == null &&
+        game.bombTimer == null &&
+        game.pauseTimer == null
+      );
+    }
+    return false;
+  }
+
+  async function cancelDueToInternalError(game, stage) {
+    if (!game || game.status === STATUS.FINISHED || game.status === STATUS.CANCELLED) {
+      return;
+    }
+    logError(`[mango-bomb] invariant failed state=${game.status}`);
+    log("[mango-bomb] round cancelled reason=internal-error");
+    game.status = STATUS.CANCELLED;
+    clearGameTimers(game);
+    await render(game, INTERNAL_CANCEL_TEXT, emptyInlineKeyboardExtra(), stage || "cancel");
+    dropGame(game);
+  }
+
+  async function recoverAfterQueueError(chatKey, stage) {
+    const game = activeGameForChat(chatKey);
+    if (!game) {
+      return;
+    }
+    if (invariantsHold(game)) {
+      if (game.status === STATUS.LOBBY) {
+        scheduleLobbyCountdown(game);
+      }
+      return;
+    }
+    await cancelDueToInternalError(game, stage);
   }
 
   function activeGameForChat(chatId) {
@@ -323,15 +413,47 @@ function createMangoBombService(options = {}) {
     }
   }
 
-  async function render(game, text, extra) {
+  async function render(game, text, extra, stage = "render") {
     if (!game || game.messageId == null || typeof editMessage !== "function") {
       return;
     }
+    if (injectedRenderMode === "throw") {
+      injectedRenderMode = null;
+      logError(`[mango-bomb] render failed stage=${stage}`);
+      return;
+    }
     try {
-      await editMessage(game.chatId, game.messageId, text, extra || emptyInlineKeyboardExtra());
+      const editPromise =
+        injectedRenderMode === "hang"
+          ? new Promise(() => {})
+          : Promise.resolve(
+              editMessage(
+                game.chatId,
+                game.messageId,
+                text,
+                extra || emptyInlineKeyboardExtra()
+              )
+            );
+      if (injectedRenderMode === "hang") {
+        injectedRenderMode = null;
+      }
+      await Promise.race([
+        editPromise,
+        new Promise((_, reject) => {
+          const handle = wrapTimeout(() => {
+            const err = new Error("render-timeout");
+            err.code = "ETIMEDOUT";
+            reject(err);
+          }, renderTimeoutMs);
+          editPromise.then(
+            () => clearHandle(handle),
+            () => clearHandle(handle)
+          );
+        }),
+      ]);
     } catch (err) {
       if (!isMessageNotModifiedError(err)) {
-        /* Telegram edit failure must not stop the game. */
+        logError(`[mango-bomb] render failed stage=${stage}`);
       }
     }
   }
@@ -355,7 +477,8 @@ function createMangoBombService(options = {}) {
     await render(
       game,
       buildLobbyText(game.players.size, lobbyDisplaySeconds(game)),
-      joinKeyboard(game.id)
+      joinKeyboard(game.id),
+      "lobby"
     );
     return true;
   }
@@ -396,7 +519,7 @@ function createMangoBombService(options = {}) {
         }
         await renderLobbyMessage(current);
         scheduleLobbyCountdown(current);
-      });
+      }, "lobby-countdown");
     }, wait);
   }
 
@@ -453,7 +576,11 @@ function createMangoBombService(options = {}) {
     game.status = STATUS.RUNNING;
     clearHandle(game.bombTimer);
     game.bombTimer = wrapTimeout(() => {
-      enqueue(game.chatId, () => explode(game.id, generation));
+      const current = gamesById.get(game.id);
+      if (current && current.bombGeneration === generation) {
+        current.bombTimer = null;
+      }
+      enqueue(game.chatId, () => explode(game.id, generation), "explode");
     }, lifetime);
     return holder;
   }
@@ -476,7 +603,7 @@ function createMangoBombService(options = {}) {
       }
     }
     log("[mango-bomb] winner");
-    await render(game, buildWinnerText(name, xpLine), emptyInlineKeyboardExtra());
+    await render(game, buildWinnerText(name, xpLine), emptyInlineKeyboardExtra(), "winner");
     dropGame(game);
     return { ok: true, status: STATUS.FINISHED, winnerId };
   }
@@ -508,27 +635,31 @@ function createMangoBombService(options = {}) {
 
     if (survivors.length <= 1) {
       if (survivors.length === 1) {
-        await render(game, buildBoomText(name, 1), emptyInlineKeyboardExtra());
+        await render(game, buildBoomText(name, 1), emptyInlineKeyboardExtra(), "explode");
         return finishWinner(game);
       }
       game.status = STATUS.CANCELLED;
-      await render(game, "🥭💣 ManGo Bomb ended.", emptyInlineKeyboardExtra());
+      await render(game, "🥭💣 ManGo Bomb ended.", emptyInlineKeyboardExtra(), "explode");
       dropGame(game);
       return { ok: true, status: STATUS.CANCELLED };
     }
 
     game.status = STATUS.BETWEEN_ROUNDS;
-    await render(game, buildBoomText(name, survivors.length), emptyInlineKeyboardExtra());
+    await render(game, buildBoomText(name, survivors.length), emptyInlineKeyboardExtra(), "explode");
     clearHandle(game.pauseTimer);
     game.pauseTimer = wrapTimeout(() => {
+      const current = gamesById.get(gameId);
+      if (current) {
+        current.pauseTimer = null;
+      }
       enqueue(game.chatId, async () => {
-        const current = gamesById.get(gameId);
-        if (!current || current.status !== STATUS.BETWEEN_ROUNDS) {
+        const live = gamesById.get(gameId);
+        if (!live || live.status !== STATUS.BETWEEN_ROUNDS) {
           return;
         }
-        armBomb(current, null);
-        await render(current, buildBombText(current), passKeyboard(current.id));
-      });
+        armBomb(live, null);
+        await render(live, buildBombText(live), passKeyboard(live.id), "between-rounds");
+      }, "between-rounds");
     }, betweenRoundsMs);
     return { ok: true, status: STATUS.BETWEEN_ROUNDS, eliminated: victimId };
   }
@@ -545,7 +676,7 @@ function createMangoBombService(options = {}) {
     if (game.players.size < MIN_PLAYERS) {
       game.status = STATUS.CANCELLED;
       log("[mango-bomb] cancelled");
-      await render(game, buildCancelledText(), emptyInlineKeyboardExtra());
+      await render(game, buildCancelledText(), emptyInlineKeyboardExtra(), "lobby-close");
       dropGame(game);
       return { ok: true, status: STATUS.CANCELLED };
     }
@@ -558,7 +689,7 @@ function createMangoBombService(options = {}) {
     log(`[mango-bomb] round started players=${game.players.size}`);
     game.roundNumber = 1;
     armBomb(game, null);
-    await render(game, buildBombText(game), passKeyboard(game.id));
+    await render(game, buildBombText(game), passKeyboard(game.id), "lobby-close");
     return { ok: true, status: STATUS.RUNNING, snapshot: snapshot(game, true) };
   }
 
@@ -604,7 +735,11 @@ function createMangoBombService(options = {}) {
     gamesByChat.set(String(chatId), game);
     lastStartByChat.set(String(chatId), now);
     game.lobbyTimer = wrapTimeout(() => {
-      enqueue(chatId, () => closeLobby(id));
+      const current = gamesById.get(id);
+      if (current) {
+        current.lobbyTimer = null;
+      }
+      enqueue(chatId, () => closeLobby(id), "lobby-close");
     }, lobbyMs);
     scheduleLobbyCountdown(game);
     log("[mango-bomb] lobby started");
@@ -716,7 +851,11 @@ function createMangoBombService(options = {}) {
     const remaining = Math.max(1, game.bombDeadline - now);
     clearHandle(game.bombTimer);
     game.bombTimer = wrapTimeout(() => {
-      enqueue(game.chatId, () => explode(game.id, generation));
+      const current = gamesById.get(game.id);
+      if (current && current.bombGeneration === generation) {
+        current.bombTimer = null;
+      }
+      enqueue(game.chatId, () => explode(game.id, generation), "explode");
     }, remaining);
     log("[mango-bomb] pass");
     return {
@@ -732,7 +871,7 @@ function createMangoBombService(options = {}) {
     if (!game) {
       return Promise.resolve({ ok: false, reason: "inactive" });
     }
-    return enqueue(game.chatId, () => closeLobby(gameId));
+    return enqueue(game.chatId, () => closeLobby(gameId), "lobby-close");
   }
 
   function forceExplode(gameId) {
@@ -740,7 +879,7 @@ function createMangoBombService(options = {}) {
     if (!game) {
       return Promise.resolve({ ok: false, reason: "inactive" });
     }
-    return enqueue(game.chatId, () => explode(game.id, game.bombGeneration));
+    return enqueue(game.chatId, () => explode(game.id, game.bombGeneration), "explode");
   }
 
   function cancelAll(_reason = "shutdown") {
@@ -819,14 +958,23 @@ function createMangoBombService(options = {}) {
           result.rendered = await renderLobbyMessage(gamesById.get(input.gameId));
         }
         return result;
-      });
+      }, "join");
     },
     enqueuePass(input) {
       const game = gamesById.get(input && input.gameId);
       if (!game) {
         return Promise.resolve({ ok: false, reason: "stale", toast: STALE_CALLBACK });
       }
-      return enqueue(game.chatId, () => tryPass(input));
+      return enqueue(game.chatId, () => tryPass(input), "pass");
+    },
+    injectQueueThrow(stage) {
+      injectedQueueStage = stage;
+    },
+    injectRenderThrow() {
+      injectedRenderMode = "throw";
+    },
+    injectRenderHang() {
+      injectedRenderMode = "hang";
     },
     reset,
     clearAllTimers,
@@ -855,6 +1003,8 @@ module.exports = {
   XP_WIN,
   DAILY_ROUND_CAP,
   STALE_CALLBACK,
+  RENDER_TIMEOUT_MS,
+  INTERNAL_CANCEL_TEXT,
   parseMangoBombCallbackData,
   joinCallbackData,
   passCallbackData,

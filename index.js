@@ -90,6 +90,19 @@ const runtime = startBotRuntime({
         err && err.message ? err.message : err
       );
     }
+
+    try {
+      const { persistReconcileBuilderEvents } = require("./services/communityBuilder");
+      const reconciled = persistReconcileBuilderEvents();
+      if (reconciled && reconciled.added > 0) {
+        log(`[community-builder] reconciled history events=${reconciled.added}`);
+      }
+    } catch (err) {
+      logError(
+        "[community-builder] history reconcile failed:",
+        err && err.message ? err.message : err
+      );
+    }
   },
 });
 
