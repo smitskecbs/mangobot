@@ -43,6 +43,40 @@ const MEMBER_STATUSES = new Set([
   "creator",
 ]);
 
+const JOIN_EVENT = Object.freeze({
+  ATTRIBUTED: "attributed",
+  ALREADY_REFERRED: "already-referred",
+  SELF_REFERRAL: "self-referral",
+  BOT: "bot",
+  UNKNOWN_INVITE: "unknown-invite",
+  WRONG_CHAT: "wrong-chat",
+  PUBLIC_JOIN: "public-join",
+  NOT_JOIN: "not-join",
+});
+
+/**
+ * Safe referral diagnostics. Never logs user ids or invite URLs.
+ * @param {string} event
+ * @param {{ oldStatus?: string, newStatus?: string }} [detail]
+ */
+function logReferralEvent(event, detail = {}) {
+  if (event === JOIN_EVENT.NOT_JOIN) {
+    const incoming = MEMBER_STATUSES.has(detail.newStatus);
+    const fromOutside =
+      !detail.oldStatus || LEFT_STATUSES.has(detail.oldStatus);
+    if (!incoming || !fromOutside) {
+      return;
+    }
+  }
+  const parts = [`[community-builder] referral event=${event}`];
+  if (event === JOIN_EVENT.NOT_JOIN) {
+    parts.push(
+      `transition=${detail.oldStatus || "unknown"}->${detail.newStatus || "unknown"}`
+    );
+  }
+  log(parts.join(" "));
+}
+
 function normalizeUserId(value) {
   if (value === undefined || value === null) {
     return "";
@@ -153,6 +187,7 @@ function ensureBuilder(store, inviterId, displayName, now) {
 }
 
 function addBuilderPoints(builder, amount) {
+  /* Builder Points are a contribution score: admins/devs are eligible. */
   const previous = builder.points;
   builder.points += amount;
   return {
@@ -319,6 +354,7 @@ function getBuilderLeaderboard(options = {}) {
     if (points <= 0) {
       continue;
     }
+    /* Include ADMIN_USER_ID and group admins. Do not reuse XP competition exclusion. */
     rows.push({
       userId,
       displayName: builder.displayName || "Member",
@@ -548,38 +584,45 @@ function applyJoinAttribution(input, options = {}) {
   const referredId = normalizeUserId(input.userId);
   const chatId = input.chatId;
   if (!opts.chatId || !sameChat(chatId, opts.chatId)) {
-    return { ok: false, reason: "wrong-chat" };
+    logReferralEvent(JOIN_EVENT.WRONG_CHAT);
+    return { ok: false, reason: JOIN_EVENT.WRONG_CHAT };
   }
   if (!referredId) {
     return { ok: false, reason: "invalid-user" };
   }
   if (input.isBot) {
-    return { ok: false, reason: "bot" };
+    logReferralEvent(JOIN_EVENT.BOT);
+    return { ok: false, reason: JOIN_EVENT.BOT };
   }
   if (!isJoinTransition(input.oldStatus, input.newStatus)) {
-    return { ok: false, reason: "not-join" };
+    logReferralEvent(JOIN_EVENT.NOT_JOIN, {
+      oldStatus: input.oldStatus,
+      newStatus: input.newStatus,
+    });
+    return { ok: false, reason: JOIN_EVENT.NOT_JOIN };
   }
   const inviteUrl = extractUsedInviteLink({ invite_link: input.inviteLink });
   const identity = inviteIdentity(inviteUrl);
   if (!identity) {
-    return { ok: false, reason: "public-join" };
+    logReferralEvent(JOIN_EVENT.PUBLIC_JOIN);
+    return { ok: false, reason: JOIN_EVENT.PUBLIC_JOIN };
   }
 
   const result = mutateBuilderStore((store) => {
     const existing = store.referrals[referredId];
     if (existing && existing.inviterUserId) {
-      return { ok: false, reason: "already-attributed", frozen: true };
+      return { ok: false, reason: JOIN_EVENT.ALREADY_REFERRED, frozen: true };
     }
     const link = store.inviteLinks[identity];
     if (!link || !link.inviterUserId) {
-      return { ok: false, reason: "unknown-invite" };
+      return { ok: false, reason: JOIN_EVENT.UNKNOWN_INVITE };
     }
     const inviterId = normalizeUserId(link.inviterUserId);
     if (!inviterId) {
-      return { ok: false, reason: "unknown-invite" };
+      return { ok: false, reason: JOIN_EVENT.UNKNOWN_INVITE };
     }
     if (inviterId === referredId) {
-      return { ok: false, reason: "self-referral" };
+      return { ok: false, reason: JOIN_EVENT.SELF_REFERRAL };
     }
     const displayName = input.displayName || "Member";
     const builder = ensureBuilder(store, inviterId, null, opts.now);
@@ -598,6 +641,7 @@ function applyJoinAttribution(input, options = {}) {
     return {
       ok: true,
       stage: "join",
+      reason: JOIN_EVENT.ATTRIBUTED,
       inviterUserId: inviterId,
       inviterName: builder.displayName,
       builderPointsAwarded: JOIN_BUILDER_POINTS,
@@ -605,6 +649,8 @@ function applyJoinAttribution(input, options = {}) {
       rankCrossed: ranked.crossed,
     };
   }, opts.storeFile);
+
+  logReferralEvent(result.reason || (result.ok ? JOIN_EVENT.ATTRIBUTED : "rejected"));
 
   if (!result.ok) {
     return result;
@@ -839,6 +885,7 @@ module.exports = {
   REFERRALS_PAGE_SIZE,
   LEADERBOARD_LIMIT,
   BUILDER_RANK_THRESHOLDS,
+  JOIN_EVENT,
   inviteIdentity,
   safeDisplayName,
   isJoinTransition,

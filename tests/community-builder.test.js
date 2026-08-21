@@ -28,6 +28,7 @@ const {
   BUILDER_RANK_THRESHOLDS,
   REFERRALS_PAGE_SIZE,
   ACTIVE_LIFETIME_XP,
+  JOIN_EVENT,
 } = require("../services/communityBuilder");
 const {
   setCommunityBuilderFileForTests,
@@ -67,8 +68,10 @@ const {
   mutatePoints,
   loadPoints,
   awardMangoBombXp,
+  awardDailyActivityPoint,
   canEarnXp,
 } = require("../services/points");
+const { isCommunityCompetitionExcluded } = require("../utils/competition");
 const { getLifetimeTop: getLbTop, formatLifetimeLines } = require("../services/leaderboard");
 
 require("../services/xpWalletGate").setXpWalletAutoLinkForTests(false);
@@ -80,6 +83,7 @@ const INVITER = "1001";
 const REFERRED = "2002";
 const OTHER = "3003";
 const ADMIN_ID = "9001";
+const GROUP_ADMIN = "8008";
 
 const originalChat = process.env.TELEGRAM_CHAT_ID;
 const originalAdmin = process.env.ADMIN_USER_ID;
@@ -336,7 +340,7 @@ async function main() {
       h.opts
     );
     assert.strictEqual(result.ok, false);
-    assert.strictEqual(result.reason, "self-referral");
+    assert.strictEqual(result.reason, JOIN_EVENT.SELF_REFERRAL);
     assert.strictEqual(builderSummary(INVITER, h.opts).builderPoints, 0);
   });
 
@@ -389,7 +393,9 @@ async function main() {
     );
     assert.strictEqual(first.ok, true);
     assert.strictEqual(dup.ok, false);
+    assert.strictEqual(dup.reason, JOIN_EVENT.ALREADY_REFERRED);
     assert.strictEqual(rejoin.ok, false);
+    assert.strictEqual(rejoin.reason, JOIN_EVENT.ALREADY_REFERRED);
     assert.strictEqual(builderSummary(INVITER, h.opts).builderPoints, 1);
     assert.strictEqual(pointsOf(h.pointsFile, INVITER), 1);
   });
@@ -410,9 +416,111 @@ async function main() {
       h.opts
     );
     assert.strictEqual(steal.ok, false);
+    assert.strictEqual(steal.reason, JOIN_EVENT.ALREADY_REFERRED);
     const store = loadBuilderStore(h.storeFile);
     assert.strictEqual(store.referrals[REFERRED].inviterUserId, INVITER);
     assert.strictEqual(builderSummary(OTHER, h.opts).builderPoints, 0);
+  });
+
+  await runTest("admin/dev inviter earns BP, 0 XP, appears on leaderboard", async () => {
+    const h = harness();
+    assert.strictEqual(isCommunityCompetitionExcluded(ADMIN_ID), true);
+    registerManualWallet(ADMIN_ID, generateSolanaWallet().address, h.walletFile);
+    const created = await getOrCreateInviteLink(
+      { id: ADMIN_ID, first_name: "Kevin" },
+      h.opts
+    );
+    const joined = handleChatMemberUpdate(
+      joinUpdate({
+        userId: REFERRED,
+        name: "Bob",
+        inviteLink: created.inviteUrl,
+      }),
+      h.opts
+    );
+    assert.strictEqual(joined.ok, true);
+    assert.strictEqual(joined.reason, JOIN_EVENT.ATTRIBUTED);
+    assert.strictEqual(joined.builderPointsAwarded, 1);
+    assert.strictEqual(joined.xpAwarded, false);
+    assert.strictEqual(joined.xpReason, "excluded");
+    assert.strictEqual(builderSummary(ADMIN_ID, h.opts).builderPoints, 1);
+    assert.strictEqual(pointsOf(h.pointsFile, ADMIN_ID), 0);
+    const board = getBuilderLeaderboard(h.opts);
+    assert.ok(board.some((row) => row.displayName === "Kevin" && row.points === 1));
+    assert.ok(!leaderboardText(board).includes(ADMIN_ID));
+  });
+
+  await runTest("Telegram group-admin inviter earns BP", async () => {
+    const h = harness();
+    const created = await getOrCreateInviteLink(
+      { id: GROUP_ADMIN, first_name: "Mod" },
+      h.opts
+    );
+    const joined = handleChatMemberUpdate(
+      joinUpdate({
+        userId: "5005",
+        name: "NewMember",
+        inviteLink: created.inviteUrl,
+      }),
+      h.opts
+    );
+    assert.strictEqual(joined.ok, true);
+    assert.strictEqual(builderSummary(GROUP_ADMIN, h.opts).builderPoints, 1);
+    assert.ok(
+      getBuilderLeaderboard(h.opts).some((row) => row.displayName === "Mod")
+    );
+  });
+
+  await runTest("prior group member never attributed: invite rejoin awards BP", async () => {
+    const h = harness();
+    const created = await seedInvite(h);
+    const firstSeen = handleChatMemberUpdate(
+      joinUpdate({ userId: "6006", name: "Returning", inviteLink: null }),
+      h.opts
+    );
+    assert.strictEqual(firstSeen.reason, JOIN_EVENT.PUBLIC_JOIN);
+    assert.strictEqual(builderSummary(INVITER, h.opts).builderPoints, 0);
+    const viaInvite = handleChatMemberUpdate(
+      joinUpdate({
+        userId: "6006",
+        name: "Returning",
+        oldStatus: "left",
+        inviteLink: created.inviteUrl,
+      }),
+      h.opts
+    );
+    assert.strictEqual(viaInvite.ok, true);
+    assert.strictEqual(viaInvite.reason, JOIN_EVENT.ATTRIBUTED);
+    assert.strictEqual(builderSummary(INVITER, h.opts).builderPoints, 1);
+  });
+
+  await runTest("game XP admin exclusion unchanged", async () => {
+    const h = harness();
+    registerManualWallet(ADMIN_ID, generateSolanaWallet().address, h.walletFile);
+    const bomb = awardMangoBombXp(
+      ADMIN_ID,
+      "Kevin",
+      1,
+      "round-admin",
+      h.pointsFile,
+      h.walletFile
+    );
+    assert.strictEqual(bomb.awarded, false);
+    assert.strictEqual(bomb.reason, "excluded");
+    const daily = awardDailyActivityPoint(
+      ADMIN_ID,
+      "Kevin",
+      h.pointsFile,
+      undefined,
+      h.walletFile
+    );
+    assert.strictEqual(daily.awarded, false);
+    assert.strictEqual(daily.reason, "excluded");
+    const src = fs.readFileSync(
+      path.join(__dirname, "..", "services", "communityBuilder.js"),
+      "utf8"
+    );
+    assert.ok(!src.includes("isCommunityCompetitionExcluded"));
   });
 
   await runTest("15-18. wallet milestone once across manual/verify/reconnect", async () => {

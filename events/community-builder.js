@@ -15,13 +15,15 @@ function registerCommunityBuilderListener(bot, options = {}) {
       return;
     }
     try {
-      handleChatMemberUpdate(update, {
+      const result = handleChatMemberUpdate(update, {
         ...options,
         telegram: ctx.telegram,
         botId: ctx.botInfo && ctx.botInfo.id,
       });
+      return result;
     } catch (_err) {
-      /* Join handling must never crash the bot. */
+      const { error: logError } = require("../utils/logger");
+      logError("[community-builder] join handler failed");
     }
   });
 }
