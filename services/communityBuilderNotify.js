@@ -63,6 +63,23 @@ function buildCommunityBuilderMessage(kind, payload = {}) {
   if (kind === "active") {
     return activeMessage();
   }
+  if (kind === "manual-award") {
+    const points = Number(payload.points) || 0;
+    const note =
+      typeof payload.note === "string" && payload.note.trim()
+        ? payload.note.trim().slice(0, 120)
+        : "Builder contribution";
+    return [
+      "🤝 Community Builder Award!",
+      "",
+      `You received +${points} BP.`,
+      "",
+      "Reason:",
+      note,
+      "",
+      "Your Builder Points help you climb the Community Builder leaderboard. 🥭",
+    ].join("\n");
+  }
   return joinMessage(payload.xpAwarded, payload.walletLocked);
 }
 
@@ -76,7 +93,9 @@ function resolveBotToken(options = {}) {
 }
 
 async function notifyCommunityBuilder(kind, payload, options = {}) {
-  const uid = normalizeUserId(payload && payload.inviterUserId);
+  const uid = normalizeUserId(
+    (payload && (payload.userId || payload.inviterUserId)) || ""
+  );
   const botToken = resolveBotToken(options);
   if (!uid || !botToken) {
     return { sent: false, skipped: true };

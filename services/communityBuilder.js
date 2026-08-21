@@ -11,7 +11,7 @@ const {
   resolveBuilderFile,
 } = require("./communityBuilderStore");
 const { getLinkedWalletForUser } = require("./walletLinks");
-const { loadPoints, getWeekId, isAdmin } = require("./points");
+const { loadPoints, getWeekId, isAdmin, isCommandText } = require("./points");
 const { notifyCommunityBuilder } = require("./communityBuilderNotify");
 const { fetchWithTimeout, TELEGRAM_TIMEOUT_MS } = require("../utils/safeFetch");
 
@@ -32,6 +32,16 @@ const WALLET_XP = 1;
 const ACTIVE_BUILDER_POINTS = 2;
 const ACTIVE_XP = 0;
 const ACTIVE_LIFETIME_XP = 5;
+const FIRST_WELCOME_POINTS = 1;
+const FIRST_WELCOME_WINDOW_MS = 30 * 60 * 1000;
+const FIRST_WELCOME_DAILY_CAP = 3;
+const FIRST_WELCOME_MIN_CHARS = 8;
+const FIRST_WELCOME_MIN_WORDS = 2;
+const FIRST_WELCOME_MIN_LETTERS = 4;
+const MANUAL_AWARD_MIN = 1;
+const MANUAL_AWARD_MAX = 5;
+const MANUAL_AWARD_REASON_MIN = 3;
+const MANUAL_AWARD_REASON_MAX = 120;
 const REFERRALS_PAGE_SIZE = 20;
 const LEADERBOARD_LIMIT = 15;
 const BUILDER_RANK_THRESHOLDS = Object.freeze([5, 10, 25, 50, 100]);
@@ -65,7 +75,15 @@ const BUILDER_EVENT_REASON = Object.freeze({
   JOIN: "referral-join",
   WALLET: "referral-wallet",
   ACTIVE: "referral-active",
+  FIRST_WELCOME: "first-welcome",
+  MANUAL_AWARD: "manual-award",
 });
+
+const FIRST_WELCOME_GROUP_TEXT = [
+  "🤝 Community Builder +1 BP",
+  "",
+  "Thanks for welcoming our new member! 🥭",
+].join("\n");
 
 const BUILDER_EVENT_ID_SUFFIX = Object.freeze({
   [BUILDER_EVENT_REASON.JOIN]: "join",
@@ -230,26 +248,59 @@ function builderEventId(referralUserId, reason) {
   return `${referralUserId}:${suffix}`;
 }
 
+function firstWelcomeEventId(newMemberUserId) {
+  const uid = normalizeUserId(newMemberUserId);
+  return uid ? `welcome:${uid}` : "";
+}
+
+function manualAwardEventId(chatId, messageId) {
+  if (chatId == null || messageId == null || messageId === "") {
+    return "";
+  }
+  return `manual:${String(chatId)}:${String(messageId)}`;
+}
+
 function putBuilderAwardEvent(store, input) {
   const events = ensureBuilderEvents(store);
-  const referralUserId = normalizeUserId(input.referralUserId);
   const builderUserId = normalizeUserId(input.builderUserId);
   const reason = input.reason;
-  if (!referralUserId || !builderUserId || !reason) {
+  if (!builderUserId || !reason) {
     return { recorded: false, duplicate: false };
   }
-  const eventId = builderEventId(referralUserId, reason);
+  const referralUserId = normalizeUserId(input.referralUserId);
+  const explicitId =
+    typeof input.eventId === "string" && input.eventId.trim()
+      ? input.eventId.trim()
+      : "";
+  const eventId = explicitId || (referralUserId ? builderEventId(referralUserId, reason) : "");
+  if (!eventId) {
+    return { recorded: false, duplicate: false };
+  }
   if (events[eventId]) {
     return { recorded: false, duplicate: true, eventId };
   }
-  events[eventId] = {
+  const event = {
     eventId,
     builderUserId,
     points: input.points,
     reason,
-    referralUserId,
     createdAt: input.createdAt,
   };
+  if (referralUserId) {
+    event.referralUserId = referralUserId;
+  }
+  const subjectUserId = normalizeUserId(input.subjectUserId);
+  if (subjectUserId) {
+    event.subjectUserId = subjectUserId;
+  }
+  if (typeof input.note === "string" && input.note.trim()) {
+    event.note = input.note.trim().slice(0, MANUAL_AWARD_REASON_MAX);
+  }
+  const awardedBy = normalizeUserId(input.awardedBy);
+  if (awardedBy) {
+    event.awardedBy = awardedBy;
+  }
+  events[eventId] = event;
   return { recorded: true, duplicate: false, eventId };
 }
 
@@ -356,11 +407,15 @@ function awardBuilderPointsOnce(store, builder, amount, meta) {
     points: amount,
     reason: meta.reason,
     referralUserId: meta.referralUserId,
+    eventId: meta.eventId,
+    subjectUserId: meta.subjectUserId,
+    note: meta.note,
+    awardedBy: meta.awardedBy,
     createdAt: meta.createdAt,
   });
-  if (recorded.duplicate) {
+  if (recorded.duplicate || !recorded.recorded) {
     return {
-      duplicate: true,
+      duplicate: Boolean(recorded.duplicate),
       previous: builder.points,
       next: builder.points,
       crossed: [],
@@ -414,13 +469,24 @@ function awardInviterXp(inviterId, displayName, amount, options) {
 
 function maybeNotify(kind, payload, options) {
   const notify =
-    typeof options.notify === "function" ? options.notify : notifyCommunityBuilder;
-  Promise.resolve(notify(kind, payload, options)).catch((err) => {
+    typeof options.notify === "function"
+      ? options.notify
+      : typeof runtimeConfig.notify === "function"
+        ? runtimeConfig.notify
+        : notifyCommunityBuilder;
+  try {
+    Promise.resolve(notify(kind, payload, options)).catch((err) => {
+      logError(
+        "[community-builder] notify failed:",
+        err && err.message ? err.message : err
+      );
+    });
+  } catch (err) {
     logError(
       "[community-builder] notify failed:",
       err && err.message ? err.message : err
     );
-  });
+  }
 }
 
 function resolveOptions(options = {}) {
@@ -537,6 +603,11 @@ function startOfUtcWeekMs(now) {
 function startOfUtcMonthMs(now) {
   const d = toUtcDate(now);
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1, 0, 0, 0, 0);
+}
+
+function startOfUtcDayMs(now) {
+  const d = toUtcDate(now);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0);
 }
 
 function normalizeBuilderPeriod(value) {
@@ -1146,6 +1217,453 @@ function applyJoinAttribution(input, options = {}) {
   };
 }
 
+function ensureWelcomeOpportunities(store) {
+  if (
+    !store.welcomeOpportunities ||
+    typeof store.welcomeOpportunities !== "object" ||
+    Array.isArray(store.welcomeOpportunities)
+  ) {
+    store.welcomeOpportunities = {};
+  }
+  return store.welcomeOpportunities;
+}
+
+function normalizeStoredUsername(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+  const raw = value.trim().replace(/^@/, "");
+  if (!raw || !/^[A-Za-z0-9_]{5,32}$/.test(raw)) {
+    return "";
+  }
+  return raw.toLowerCase();
+}
+
+function visibleWelcomeText(text) {
+  return String(text)
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isValidWelcomeText(text) {
+  if (typeof text !== "string") {
+    return false;
+  }
+  if (isCommandText(text)) {
+    return false;
+  }
+  const visible = visibleWelcomeText(text);
+  if (visible.length < FIRST_WELCOME_MIN_CHARS) {
+    return false;
+  }
+  const words = visible.split(" ").filter(Boolean);
+  if (words.length < FIRST_WELCOME_MIN_WORDS) {
+    return false;
+  }
+  const letters = visible.replace(/[^\p{L}\p{N}]+/gu, "");
+  return letters.length >= FIRST_WELCOME_MIN_LETTERS;
+}
+
+function messageTargetsNewMember(message, newMemberId, opportunity) {
+  const targetId = normalizeUserId(newMemberId);
+  if (!targetId || !message || typeof message !== "object") {
+    return false;
+  }
+  const reply = message.replyTo || message.reply_to_message;
+  if (reply && typeof reply === "object") {
+    const replyId = Number(reply.message_id);
+    if (
+      Number.isFinite(replyId) &&
+      (replyId === Number(opportunity.joinMessageId) ||
+        replyId === Number(opportunity.botWelcomeMessageId))
+    ) {
+      return true;
+    }
+    const replyFrom = reply.from && reply.from.id != null ? String(reply.from.id) : "";
+    if (replyFrom && replyFrom === targetId) {
+      return true;
+    }
+  }
+  const text = typeof message.text === "string" ? message.text : "";
+  const entities = Array.isArray(message.entities) ? message.entities : [];
+  const username = normalizeStoredUsername(opportunity.username);
+  for (const ent of entities) {
+    if (!ent || typeof ent !== "object") {
+      continue;
+    }
+    if (ent.type === "text_mention" && ent.user && String(ent.user.id) === targetId) {
+      return true;
+    }
+    if (ent.type === "mention" && username && typeof ent.offset === "number") {
+      const slice = text.slice(ent.offset, ent.offset + (ent.length || 0));
+      if (normalizeStoredUsername(slice) === username) {
+        return true;
+      }
+    }
+  }
+  if (username) {
+    const escaped = username.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const mentionRe = new RegExp(`(^|[^A-Za-z0-9_])@${escaped}(?![A-Za-z0-9_])`, "i");
+    if (mentionRe.test(text)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function countFirstWelcomeToday(store, welcomerId, nowMs) {
+  const dayStart = startOfUtcDayMs(nowMs);
+  let n = 0;
+  for (const event of Object.values(store.builderEvents || {})) {
+    if (!event || event.reason !== BUILDER_EVENT_REASON.FIRST_WELCOME) {
+      continue;
+    }
+    if (normalizeUserId(event.builderUserId) !== welcomerId) {
+      continue;
+    }
+    const ts = Number(event.createdAt);
+    if (Number.isFinite(ts) && ts >= dayStart && ts <= nowMs) {
+      n += 1;
+    }
+  }
+  return n;
+}
+
+function registerWelcomeOpportunity(input = {}, options = {}) {
+  const opts = resolveOptions(options);
+  if (input.isBot) {
+    return { ok: false, reason: "bot" };
+  }
+  const uid = normalizeUserId(input.userId);
+  if (!uid) {
+    return { ok: false, reason: "invalid-user" };
+  }
+  if (!opts.chatId || !sameChat(input.chatId, opts.chatId)) {
+    return { ok: false, reason: "wrong-chat" };
+  }
+  if (input.oldStatus != null || input.newStatus != null) {
+    if (!isJoinTransition(input.oldStatus, input.newStatus)) {
+      return { ok: false, reason: "not-join" };
+    }
+  }
+  return mutateBuilderStore((store) => {
+    const map = ensureWelcomeOpportunities(store);
+    const existing = map[uid];
+    const eventId = firstWelcomeEventId(uid);
+    if (existing) {
+      const claimed = Boolean(existing.claimedAt || existing.permanentClaimed);
+      const open = !claimed && Number(existing.expiresAt) > opts.now;
+      if (!open) {
+        return { ok: false, reason: "already-seen" };
+      }
+      if (input.joinMessageId != null) {
+        existing.joinMessageId = Number(input.joinMessageId);
+      }
+      if (input.botWelcomeMessageId != null) {
+        existing.botWelcomeMessageId = Number(input.botWelcomeMessageId);
+      }
+      const username = normalizeStoredUsername(input.username);
+      if (username) {
+        existing.username = username;
+      }
+      return { ok: true, reason: "already-open" };
+    }
+    if (ensureBuilderEvents(store)[eventId]) {
+      map[uid] = {
+        joinedAt: opts.now,
+        expiresAt: opts.now,
+        claimedAt: opts.now,
+        claimedBy: null,
+        permanentClaimed: true,
+      };
+      return { ok: false, reason: "already-claimed" };
+    }
+    map[uid] = {
+      joinedAt: opts.now,
+      expiresAt: opts.now + FIRST_WELCOME_WINDOW_MS,
+      claimedAt: null,
+      claimedBy: null,
+      permanentClaimed: false,
+      username: normalizeStoredUsername(input.username),
+      displayName: input.displayName || "Member",
+      joinMessageId:
+        input.joinMessageId != null && Number.isFinite(Number(input.joinMessageId))
+          ? Number(input.joinMessageId)
+          : null,
+      botWelcomeMessageId:
+        input.botWelcomeMessageId != null &&
+        Number.isFinite(Number(input.botWelcomeMessageId))
+          ? Number(input.botWelcomeMessageId)
+          : null,
+    };
+    return { ok: true, reason: "opened" };
+  }, opts.storeFile);
+}
+
+function noteBotWelcomeMessage(newMemberUserId, messageId, options = {}) {
+  const uid = normalizeUserId(newMemberUserId);
+  const mid = Number(messageId);
+  if (!uid || !Number.isFinite(mid)) {
+    return { ok: false, reason: "invalid" };
+  }
+  const opts = resolveOptions(options);
+  return mutateBuilderStore((store) => {
+    const existing = ensureWelcomeOpportunities(store)[uid];
+    if (!existing) {
+      return { ok: false, reason: "missing" };
+    }
+    if (existing.claimedAt || existing.permanentClaimed) {
+      return { ok: false, reason: "already-claimed" };
+    }
+    if (!(Number(existing.expiresAt) > opts.now)) {
+      return { ok: false, reason: "expired" };
+    }
+    existing.botWelcomeMessageId = mid;
+    return { ok: true };
+  }, opts.storeFile);
+}
+
+function tryClaimFirstWelcome(input = {}, options = {}) {
+  const opts = resolveOptions(options);
+  const from = input.from || {};
+  if (from.is_bot) {
+    return { ok: false, reason: "bot" };
+  }
+  const welcomerId = normalizeUserId(from.id);
+  if (!welcomerId) {
+    return { ok: false, reason: "invalid-user" };
+  }
+  if (!opts.chatId || !sameChat(input.chatId, opts.chatId)) {
+    return { ok: false, reason: "wrong-chat" };
+  }
+  if (input.editDate != null || input.edit_date != null) {
+    return { ok: false, reason: "edited" };
+  }
+  if (input.sticker || input.animation || input.gif) {
+    return { ok: false, reason: "invalid-content" };
+  }
+  const text = typeof input.text === "string" ? input.text : "";
+  if (!isValidWelcomeText(text)) {
+    return { ok: false, reason: "invalid-content" };
+  }
+
+  const preview = loadBuilderStore(opts.storeFile);
+  let anyOpen = false;
+  for (const opportunity of Object.values(preview.welcomeOpportunities || {})) {
+    if (
+      opportunity &&
+      !opportunity.claimedAt &&
+      !opportunity.permanentClaimed &&
+      Number(opportunity.expiresAt) > opts.now
+    ) {
+      anyOpen = true;
+      break;
+    }
+  }
+  if (!anyOpen) {
+    return { ok: false, reason: "none-open" };
+  }
+
+  return mutateBuilderStore((store) => {
+    const map = ensureWelcomeOpportunities(store);
+    const events = ensureBuilderEvents(store);
+    const open = [];
+    for (const [newMemberId, opportunity] of Object.entries(map)) {
+      if (!opportunity || typeof opportunity !== "object") {
+        continue;
+      }
+      if (opportunity.claimedAt || opportunity.permanentClaimed) {
+        continue;
+      }
+      if (!(Number(opportunity.joinedAt) <= opts.now)) {
+        continue;
+      }
+      if (!(Number(opportunity.expiresAt) > opts.now)) {
+        continue;
+      }
+      if (newMemberId === welcomerId) {
+        continue;
+      }
+      if (events[firstWelcomeEventId(newMemberId)]) {
+        continue;
+      }
+      if (
+        !messageTargetsNewMember(
+          {
+            text,
+            entities: input.entities,
+            replyTo: input.replyTo || input.reply_to_message,
+          },
+          newMemberId,
+          opportunity
+        )
+      ) {
+        continue;
+      }
+      open.push(newMemberId);
+    }
+    if (!open.length) {
+      return { ok: false, reason: "not-targeted" };
+    }
+    if (countFirstWelcomeToday(store, welcomerId, opts.now) >= FIRST_WELCOME_DAILY_CAP) {
+      return { ok: false, reason: "daily-cap" };
+    }
+    const newMemberId = open[0];
+    const eventId = firstWelcomeEventId(newMemberId);
+    const builder = ensureBuilder(
+      store,
+      welcomerId,
+      safeDisplayName(from),
+      opts.now
+    );
+    const ranked = awardBuilderPointsOnce(store, builder, FIRST_WELCOME_POINTS, {
+      builderUserId: welcomerId,
+      reason: BUILDER_EVENT_REASON.FIRST_WELCOME,
+      eventId,
+      subjectUserId: newMemberId,
+      createdAt: opts.now,
+    });
+    if (ranked.duplicate) {
+      return { ok: false, reason: "already-claimed" };
+    }
+    if (ranked.next !== ranked.previous + FIRST_WELCOME_POINTS) {
+      return { ok: false, reason: "not-recorded" };
+    }
+    map[newMemberId].claimedAt = opts.now;
+    map[newMemberId].claimedBy = welcomerId;
+    map[newMemberId].permanentClaimed = true;
+    log("[community-builder] first-welcome awarded");
+    return {
+      ok: true,
+      awarded: true,
+      points: FIRST_WELCOME_POINTS,
+      eventId,
+    };
+  }, opts.storeFile);
+}
+
+function tryClaimFirstWelcomeFromMessage(ctx, options = {}) {
+  if (!ctx || !ctx.from || !ctx.chat || !ctx.message) {
+    return { ok: false, reason: "invalid" };
+  }
+  return tryClaimFirstWelcome(
+    {
+      chatId: ctx.chat.id,
+      from: ctx.from,
+      text: ctx.message.text,
+      entities: ctx.message.entities,
+      replyTo: ctx.message.reply_to_message,
+      sticker: ctx.message.sticker,
+      animation: ctx.message.animation,
+      editDate: ctx.message.edit_date,
+    },
+    options
+  );
+}
+
+function parseManualBuilderAwardArgs(raw) {
+  const text = typeof raw === "string" ? raw.trim() : "";
+  if (!text) {
+    return { ok: false, reason: "usage" };
+  }
+  const matched = text.match(/^(\S+)(?:\s+([\s\S]*))?$/);
+  if (!matched) {
+    return { ok: false, reason: "usage" };
+  }
+  const token = matched[1];
+  const reason = typeof matched[2] === "string" ? matched[2].trim() : "";
+  if (token.includes(".") || token.includes("e") || token.includes("E")) {
+    return { ok: false, reason: "points" };
+  }
+  if (!/^-?\d+$/.test(token)) {
+    return { ok: false, reason: "points" };
+  }
+  const points = Number(token);
+  if (
+    !Number.isInteger(points) ||
+    points < MANUAL_AWARD_MIN ||
+    points > MANUAL_AWARD_MAX
+  ) {
+    return { ok: false, reason: "points" };
+  }
+  if (!reason || reason.length < MANUAL_AWARD_REASON_MIN) {
+    return { ok: false, reason: "reason" };
+  }
+  if (reason.length > MANUAL_AWARD_REASON_MAX) {
+    return { ok: false, reason: "reason-length" };
+  }
+  return { ok: true, points, reason };
+}
+
+function grantManualBuilderAward(input = {}, options = {}) {
+  const opts = resolveOptions(options);
+  if (!isAdmin(input.adminUserId)) {
+    return { ok: false, reason: "not-admin" };
+  }
+  const targetId = normalizeUserId(input.targetUserId);
+  if (!targetId) {
+    return { ok: false, reason: "no-target" };
+  }
+  if (input.targetIsBot) {
+    return { ok: false, reason: "no-target" };
+  }
+  const rawArg =
+    typeof input.rawArg === "string"
+      ? input.rawArg
+      : `${input.points} ${input.reason || ""}`.trim();
+  const parsed = parseManualBuilderAwardArgs(rawArg);
+  if (!parsed.ok) {
+    return parsed;
+  }
+  const eventId = manualAwardEventId(input.chatId, input.messageId);
+  if (!eventId) {
+    return { ok: false, reason: "usage" };
+  }
+  const result = mutateBuilderStore((store) => {
+    const builder = ensureBuilder(
+      store,
+      targetId,
+      input.targetDisplayName || "Member",
+      opts.now
+    );
+    const ranked = awardBuilderPointsOnce(store, builder, parsed.points, {
+      builderUserId: targetId,
+      reason: BUILDER_EVENT_REASON.MANUAL_AWARD,
+      eventId,
+      note: parsed.reason,
+      awardedBy: normalizeUserId(input.adminUserId),
+      createdAt: opts.now,
+    });
+    if (ranked.duplicate) {
+      return { ok: false, reason: "duplicate" };
+    }
+    log(`[community-builder] manual award points=${parsed.points}`);
+    return {
+      ok: true,
+      points: parsed.points,
+      reason: parsed.reason,
+      displayName: builder.displayName || "Member",
+      eventId,
+    };
+  }, opts.storeFile);
+
+  if (!result.ok) {
+    return result;
+  }
+
+  maybeNotify(
+    "manual-award",
+    {
+      userId: targetId,
+      points: result.points,
+      note: result.reason,
+    },
+    opts
+  );
+  return result;
+}
+
 function handleChatMemberUpdate(update, options = {}) {
   if (!update || typeof update !== "object") {
     return { ok: false, reason: "invalid-update" };
@@ -1154,7 +1672,7 @@ function handleChatMemberUpdate(update, options = {}) {
   const newMember = update.new_chat_member || {};
   const oldMember = update.old_chat_member || {};
   const user = newMember.user || oldMember.user || {};
-  return applyJoinAttribution(
+  const attribution = applyJoinAttribution(
     {
       chatId,
       userId: user.id,
@@ -1166,6 +1684,26 @@ function handleChatMemberUpdate(update, options = {}) {
     },
     options
   );
+  try {
+    registerWelcomeOpportunity(
+      {
+        chatId,
+        userId: user.id,
+        isBot: Boolean(user.is_bot),
+        oldStatus: oldMember.status,
+        newStatus: newMember.status,
+        username: user.username,
+        displayName: safeDisplayName(user),
+      },
+      options
+    );
+  } catch (err) {
+    logError(
+      "[community-builder] welcome opportunity failed:",
+      err && err.message ? err.message : err
+    );
+  }
+  return attribution;
 }
 
 function tryWalletMilestone(referredId, options = {}) {
@@ -1370,6 +1908,14 @@ module.exports = {
   ACTIVE_BUILDER_POINTS,
   ACTIVE_XP,
   ACTIVE_LIFETIME_XP,
+  FIRST_WELCOME_POINTS,
+  FIRST_WELCOME_WINDOW_MS,
+  FIRST_WELCOME_DAILY_CAP,
+  FIRST_WELCOME_GROUP_TEXT,
+  MANUAL_AWARD_MIN,
+  MANUAL_AWARD_MAX,
+  MANUAL_AWARD_REASON_MIN,
+  MANUAL_AWARD_REASON_MAX,
   REFERRALS_PAGE_SIZE,
   LEADERBOARD_LIMIT,
   BUILDER_RANK_THRESHOLDS,
@@ -1377,8 +1923,10 @@ module.exports = {
   BUILDER_PERIOD,
   BUILDER_EVENT_REASON,
   builderEventId,
+  firstWelcomeEventId,
   startOfUtcWeekMs,
   startOfUtcMonthMs,
+  startOfUtcDayMs,
   normalizeBuilderPeriod,
   formatBuilderLeaderboard,
   shareBuilderLeaderboard,
@@ -1396,6 +1944,13 @@ module.exports = {
   getOrCreateInviteLink,
   applyJoinAttribution,
   handleChatMemberUpdate,
+  registerWelcomeOpportunity,
+  noteBotWelcomeMessage,
+  tryClaimFirstWelcome,
+  tryClaimFirstWelcomeFromMessage,
+  isValidWelcomeText,
+  parseManualBuilderAwardArgs,
+  grantManualBuilderAward,
   tryWalletMilestone,
   tryActiveMilestone,
   onWalletLinked,

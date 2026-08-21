@@ -97,6 +97,7 @@ function emptyStore() {
     referrals: {},
     inviteLinks: {},
     builderEvents: {},
+    welcomeOpportunities: {},
   };
 }
 
@@ -129,6 +130,7 @@ function normalizeStore(raw) {
   store.referrals = asObjectMap(raw.referrals);
   store.inviteLinks = asObjectMap(raw.inviteLinks);
   store.builderEvents = asEventMap(raw.builderEvents);
+  store.welcomeOpportunities = asObjectMap(raw.welcomeOpportunities);
   return store;
 }
 

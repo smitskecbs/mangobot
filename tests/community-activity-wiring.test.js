@@ -24,6 +24,9 @@ const {
   isEligibleCommunityActivityMessage,
   COMMUNITY_ACTIVITY_UPDATES,
 } = require("../events/points-trigger");
+const {
+  registerCommunityBuilderListener,
+} = require("../events/community-builder");
 require("../services/xpWalletGate").setXpWalletAutoLinkForTests(true);
 const { awardDailyActivityPoint } = require("../services/points");
 const registerWalletCommand = require("../commands/wallet");
@@ -80,6 +83,7 @@ function createBot(pointsPath) {
   };
   // Mirror production: commands (incl. wallet text handler) before events.
   registerWalletCommand(bot);
+  registerCommunityBuilderListener(bot);
   registerChatFightListener(bot, { pointsFile: pointsPath });
   registerCommunityActivityListener(bot, { pointsFile: pointsPath });
   return bot;
