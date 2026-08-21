@@ -96,6 +96,7 @@ function emptyStore() {
     builders: {},
     referrals: {},
     inviteLinks: {},
+    builderEvents: {},
   };
 }
 
@@ -106,6 +107,19 @@ function asObjectMap(value) {
   return value;
 }
 
+function asEventMap(value) {
+  if (Array.isArray(value)) {
+    const map = {};
+    for (const event of value) {
+      if (event && typeof event === "object" && event.eventId) {
+        map[String(event.eventId)] = event;
+      }
+    }
+    return map;
+  }
+  return asObjectMap(value);
+}
+
 function normalizeStore(raw) {
   const store = emptyStore();
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
@@ -114,6 +128,7 @@ function normalizeStore(raw) {
   store.builders = asObjectMap(raw.builders);
   store.referrals = asObjectMap(raw.referrals);
   store.inviteLinks = asObjectMap(raw.inviteLinks);
+  store.builderEvents = asEventMap(raw.builderEvents);
   return store;
 }
 

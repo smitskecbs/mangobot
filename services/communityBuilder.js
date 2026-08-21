@@ -11,8 +11,9 @@ const {
   resolveBuilderFile,
 } = require("./communityBuilderStore");
 const { getLinkedWalletForUser } = require("./walletLinks");
-const { loadPoints } = require("./points");
+const { loadPoints, getWeekId, isAdmin } = require("./points");
 const { notifyCommunityBuilder } = require("./communityBuilderNotify");
+const { fetchWithTimeout, TELEGRAM_TIMEOUT_MS } = require("../utils/safeFetch");
 
 let runtimeConfig = {};
 
@@ -52,6 +53,24 @@ const JOIN_EVENT = Object.freeze({
   WRONG_CHAT: "wrong-chat",
   PUBLIC_JOIN: "public-join",
   NOT_JOIN: "not-join",
+});
+
+const BUILDER_PERIOD = Object.freeze({
+  WEEKLY: "weekly",
+  MONTHLY: "monthly",
+  ALLTIME: "alltime",
+});
+
+const BUILDER_EVENT_REASON = Object.freeze({
+  JOIN: "referral-join",
+  WALLET: "referral-wallet",
+  ACTIVE: "referral-active",
+});
+
+const BUILDER_EVENT_ID_SUFFIX = Object.freeze({
+  [BUILDER_EVENT_REASON.JOIN]: "join",
+  [BUILDER_EVENT_REASON.WALLET]: "wallet",
+  [BUILDER_EVENT_REASON.ACTIVE]: "active",
 });
 
 /**
@@ -199,6 +218,61 @@ function addBuilderPoints(builder, amount) {
   };
 }
 
+function ensureBuilderEvents(store) {
+  if (!store.builderEvents || typeof store.builderEvents !== "object" || Array.isArray(store.builderEvents)) {
+    store.builderEvents = {};
+  }
+  return store.builderEvents;
+}
+
+function builderEventId(referralUserId, reason) {
+  const suffix = BUILDER_EVENT_ID_SUFFIX[reason] || String(reason || "");
+  return `${referralUserId}:${suffix}`;
+}
+
+function putBuilderAwardEvent(store, input) {
+  const events = ensureBuilderEvents(store);
+  const referralUserId = normalizeUserId(input.referralUserId);
+  const builderUserId = normalizeUserId(input.builderUserId);
+  const reason = input.reason;
+  if (!referralUserId || !builderUserId || !reason) {
+    return { recorded: false, duplicate: false };
+  }
+  const eventId = builderEventId(referralUserId, reason);
+  if (events[eventId]) {
+    return { recorded: false, duplicate: true, eventId };
+  }
+  events[eventId] = {
+    eventId,
+    builderUserId,
+    points: input.points,
+    reason,
+    referralUserId,
+    createdAt: input.createdAt,
+  };
+  return { recorded: true, duplicate: false, eventId };
+}
+
+function awardBuilderPointsOnce(store, builder, amount, meta) {
+  const recorded = putBuilderAwardEvent(store, {
+    builderUserId: meta.builderUserId,
+    points: amount,
+    reason: meta.reason,
+    referralUserId: meta.referralUserId,
+    createdAt: meta.createdAt,
+  });
+  if (recorded.duplicate) {
+    return {
+      duplicate: true,
+      previous: builder.points,
+      next: builder.points,
+      crossed: [],
+    };
+  }
+  const ranked = addBuilderPoints(builder, amount);
+  return { duplicate: false, ...ranked };
+}
+
 function referralMilestones(referral) {
   return {
     joined: Boolean(referral && referral.joinedAt),
@@ -342,15 +416,123 @@ function compareBuilders(a, b) {
   );
 }
 
-function getBuilderLeaderboard(options = {}) {
-  const opts = resolveOptions(options);
+function toUtcDate(value) {
+  if (value instanceof Date) {
+    return value;
+  }
+  if (Number.isFinite(value)) {
+    return new Date(value);
+  }
+  return new Date();
+}
+
+/**
+ * Monday 00:00 UTC of the ISO-like week used by XP (`getWeekId` in points.js).
+ */
+function startOfUtcWeekMs(now) {
+  const weekId = getWeekId(toUtcDate(now));
+  return Date.parse(`${weekId}T00:00:00.000Z`);
+}
+
+/**
+ * First day of the UTC calendar month, 00:00 UTC.
+ */
+function startOfUtcMonthMs(now) {
+  const d = toUtcDate(now);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1, 0, 0, 0, 0);
+}
+
+function normalizeBuilderPeriod(value) {
+  const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (raw === "weekly" || raw === "week" || raw === "w") {
+    return BUILDER_PERIOD.WEEKLY;
+  }
+  if (raw === "monthly" || raw === "month" || raw === "m") {
+    return BUILDER_PERIOD.MONTHLY;
+  }
+  if (raw === "alltime" || raw === "all-time" || raw === "all" || raw === "a") {
+    return BUILDER_PERIOD.ALLTIME;
+  }
+  return null;
+}
+
+function resolveLeaderboardArgs(periodOrOptions, maybeNow) {
+  if (typeof periodOrOptions === "string") {
+    if (
+      maybeNow instanceof Date ||
+      typeof maybeNow === "number" ||
+      maybeNow == null
+    ) {
+      return { period: periodOrOptions, now: maybeNow };
+    }
+    return { ...(maybeNow || {}), period: periodOrOptions };
+  }
+  return periodOrOptions && typeof periodOrOptions === "object"
+    ? periodOrOptions
+    : {};
+}
+
+function periodWindow(period, nowMs) {
+  if (period === BUILDER_PERIOD.WEEKLY) {
+    return { start: startOfUtcWeekMs(nowMs), end: nowMs };
+  }
+  if (period === BUILDER_PERIOD.MONTHLY) {
+    return { start: startOfUtcMonthMs(nowMs), end: nowMs };
+  }
+  return null;
+}
+
+function aggregatePeriodPoints(store, startMs, endMs) {
+  const byBuilder = new Map();
+  for (const event of Object.values(store.builderEvents || {})) {
+    if (!event || typeof event !== "object") {
+      continue;
+    }
+    const ts = Number(event.createdAt);
+    if (!Number.isFinite(ts) || ts < startMs || ts > endMs) {
+      continue;
+    }
+    const id = normalizeUserId(event.builderUserId);
+    if (!id) {
+      continue;
+    }
+    const pts =
+      typeof event.points === "number" && Number.isFinite(event.points)
+        ? event.points
+        : 0;
+    byBuilder.set(id, (byBuilder.get(id) || 0) + pts);
+  }
+  return byBuilder;
+}
+
+function sumMapValues(map) {
+  let total = 0;
+  for (const value of map.values()) {
+    total += value;
+  }
+  return total;
+}
+
+function getBuilderLeaderboard(periodOrOptions, maybeNow) {
+  const raw = resolveLeaderboardArgs(periodOrOptions, maybeNow);
+  const opts = resolveOptions(raw);
+  const period = normalizeBuilderPeriod(raw.period) || BUILDER_PERIOD.ALLTIME;
   const store = loadBuilderStore(opts.storeFile);
+  const nowMs = Number.isFinite(opts.now) ? opts.now : Date.now();
+  const window = periodWindow(period, nowMs);
+  const periodPoints = window
+    ? aggregatePeriodPoints(store, window.start, window.end)
+    : null;
   const rows = [];
   for (const [userId, builder] of Object.entries(store.builders || {})) {
     if (!builder || typeof builder !== "object") {
       continue;
     }
-    const points = typeof builder.points === "number" ? builder.points : 0;
+    const points = periodPoints
+      ? periodPoints.get(userId) || 0
+      : typeof builder.points === "number"
+        ? builder.points
+        : 0;
     if (points <= 0) {
       continue;
     }
@@ -371,6 +553,143 @@ function getBuilderLeaderboard(options = {}) {
   }));
 }
 
+function periodLeaderboardTitle(period) {
+  if (period === BUILDER_PERIOD.WEEKLY) {
+    return "🏆 Weekly Community Builders";
+  }
+  if (period === BUILDER_PERIOD.MONTHLY) {
+    return "🏆 Monthly Community Builders";
+  }
+  return "🏆 All-time Community Builders";
+}
+
+function emptyLeaderboardText(period) {
+  if (period === BUILDER_PERIOD.WEEKLY) {
+    return `${periodLeaderboardTitle(period)}\n\nNo Builder Points earned this week yet.`;
+  }
+  if (period === BUILDER_PERIOD.MONTHLY) {
+    return `${periodLeaderboardTitle(period)}\n\nNo Builder Points earned this month yet.`;
+  }
+  return `${periodLeaderboardTitle(period)}\n\nNo Builder Points yet. Invite real members to start.`;
+}
+
+function formatBuilderLeaderboard(rows, period = BUILDER_PERIOD.ALLTIME, kind = "private") {
+  const normalized = normalizeBuilderPeriod(period) || BUILDER_PERIOD.ALLTIME;
+  if (!rows || !rows.length) {
+    return emptyLeaderboardText(normalized);
+  }
+  const lines = [periodLeaderboardTitle(normalized), ""];
+  for (const row of rows) {
+    lines.push(`${row.rank}. ${row.displayName} — ${row.points} BP`);
+  }
+  if (kind === "share") {
+    if (normalized === BUILDER_PERIOD.WEEKLY) {
+      lines.push("", "Who will climb the board next week? 🥭");
+    } else if (normalized === BUILDER_PERIOD.MONTHLY) {
+      lines.push("", "Who will climb the board this month? 🥭");
+    } else {
+      lines.push("", "Who will climb the board next? 🥭");
+    }
+  } else if (normalized === BUILDER_PERIOD.WEEKLY) {
+    lines.push("", "Keep building the ManGo community. 🥭");
+  }
+  return lines.join("\n");
+}
+
+function getBuilderPeriodTotals(options = {}) {
+  const opts = resolveOptions(options);
+  const store = loadBuilderStore(opts.storeFile);
+  const nowMs = Number.isFinite(opts.now) ? opts.now : Date.now();
+  const week = aggregatePeriodPoints(
+    store,
+    startOfUtcWeekMs(nowMs),
+    nowMs
+  );
+  const month = aggregatePeriodPoints(
+    store,
+    startOfUtcMonthMs(nowMs),
+    nowMs
+  );
+  let allTime = 0;
+  for (const builder of Object.values(store.builders || {})) {
+    if (builder && typeof builder.points === "number" && builder.points > 0) {
+      allTime += builder.points;
+    }
+  }
+  return {
+    week: sumMapValues(week),
+    month: sumMapValues(month),
+    allTime,
+  };
+}
+
+function isLikelyTestProcess() {
+  for (const arg of process.argv) {
+    if (typeof arg !== "string") {
+      continue;
+    }
+    const norm = arg.replace(/\\/g, "/");
+    if (norm.includes("/tests/") || /\.test\.js$/i.test(norm)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function resolveBotToken(options = {}) {
+  if (Object.prototype.hasOwnProperty.call(options, "botToken")) {
+    return typeof options.botToken === "string" ? options.botToken.trim() : "";
+  }
+  return typeof process.env.BOT_TOKEN === "string" ? process.env.BOT_TOKEN.trim() : "";
+}
+
+async function shareBuilderLeaderboard(period, options = {}) {
+  if (!isAdmin(options.adminUserId)) {
+    return { ok: false, reason: "not-admin" };
+  }
+  const normalized = normalizeBuilderPeriod(period) || BUILDER_PERIOD.ALLTIME;
+  const opts = resolveOptions(options);
+  if (isLikelyTestProcess() && options.shareToGroup !== true) {
+    return { ok: false, skipped: true, reason: "test-process" };
+  }
+  const chatId = opts.chatId;
+  const botToken = resolveBotToken(opts);
+  if (!chatId || !botToken) {
+    return { ok: false, reason: "unconfigured" };
+  }
+  const rows = getBuilderLeaderboard({ ...opts, period: normalized });
+  const text = formatBuilderLeaderboard(rows, normalized, "share");
+  const fetchFn = typeof opts.fetchImpl === "function" ? opts.fetchImpl : fetch;
+  try {
+    const response = await fetchWithTimeout(
+      `https://api.telegram.org/bot${botToken}/sendMessage`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text,
+          disable_web_page_preview: true,
+        }),
+        timeoutMs:
+          Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
+            ? options.timeoutMs
+            : TELEGRAM_TIMEOUT_MS,
+        fetchImpl: fetchFn,
+      }
+    );
+    if (!response || response.ok !== true) {
+      logError("[community-builder] leaderboard share failed");
+      return { ok: false, reason: "telegram_http" };
+    }
+    log(`[community-builder] leaderboard shared period=${normalized}`);
+    return { ok: true, text };
+  } catch (_err) {
+    logError("[community-builder] leaderboard share failed");
+    return { ok: false, reason: "telegram_error" };
+  }
+}
+
 function getBuilderStats(options = {}) {
   const opts = resolveOptions(options);
   const store = loadBuilderStore(opts.storeFile);
@@ -388,12 +707,16 @@ function getBuilderStats(options = {}) {
   const builders = Object.values(store.builders || {}).filter(
     (row) => row && typeof row.points === "number" && row.points > 0
   );
+  const periodTotals = getBuilderPeriodTotals(opts);
   return {
     uniqueReferrals: referrals.length,
     walletLinked,
     active,
     totalBuilders: builders.length,
     top: getBuilderLeaderboard(opts),
+    weekBp: periodTotals.week,
+    monthBp: periodTotals.month,
+    allTimeBp: periodTotals.allTime,
   };
 }
 
@@ -613,6 +936,10 @@ function applyJoinAttribution(input, options = {}) {
     if (existing && existing.inviterUserId) {
       return { ok: false, reason: JOIN_EVENT.ALREADY_REFERRED, frozen: true };
     }
+    ensureBuilderEvents(store);
+    if (store.builderEvents[builderEventId(referredId, BUILDER_EVENT_REASON.JOIN)]) {
+      return { ok: false, reason: JOIN_EVENT.ALREADY_REFERRED, frozen: true };
+    }
     const link = store.inviteLinks[identity];
     if (!link || !link.inviterUserId) {
       return { ok: false, reason: JOIN_EVENT.UNKNOWN_INVITE };
@@ -637,7 +964,15 @@ function applyJoinAttribution(input, options = {}) {
     if (!builder.referralIds.includes(referredId)) {
       builder.referralIds.push(referredId);
     }
-    const ranked = addBuilderPoints(builder, JOIN_BUILDER_POINTS);
+    const ranked = awardBuilderPointsOnce(store, builder, JOIN_BUILDER_POINTS, {
+      builderUserId: inviterId,
+      reason: BUILDER_EVENT_REASON.JOIN,
+      referralUserId: referredId,
+      createdAt: opts.now,
+    });
+    if (ranked.duplicate) {
+      return { ok: false, reason: JOIN_EVENT.ALREADY_REFERRED, frozen: true };
+    }
     return {
       ok: true,
       stage: "join",
@@ -725,9 +1060,21 @@ function tryWalletMilestone(referredId, options = {}) {
     if (referral.walletMilestoneAt) {
       return { ok: false, reason: "already-claimed" };
     }
+    ensureBuilderEvents(store);
+    if (store.builderEvents[builderEventId(uid, BUILDER_EVENT_REASON.WALLET)]) {
+      return { ok: false, reason: "already-claimed" };
+    }
     referral.walletMilestoneAt = opts.now;
     const builder = ensureBuilder(store, referral.inviterUserId, null, opts.now);
-    const ranked = addBuilderPoints(builder, WALLET_BUILDER_POINTS);
+    const ranked = awardBuilderPointsOnce(store, builder, WALLET_BUILDER_POINTS, {
+      builderUserId: referral.inviterUserId,
+      reason: BUILDER_EVENT_REASON.WALLET,
+      referralUserId: uid,
+      createdAt: opts.now,
+    });
+    if (ranked.duplicate) {
+      return { ok: false, reason: "already-claimed" };
+    }
     return {
       ok: true,
       stage: "wallet-linked",
@@ -788,9 +1135,21 @@ function tryActiveMilestone(referredId, options = {}) {
     if (referral.activeMilestoneAt) {
       return { ok: false, reason: "already-claimed" };
     }
+    ensureBuilderEvents(store);
+    if (store.builderEvents[builderEventId(uid, BUILDER_EVENT_REASON.ACTIVE)]) {
+      return { ok: false, reason: "already-claimed" };
+    }
     referral.activeMilestoneAt = opts.now;
     const builder = ensureBuilder(store, referral.inviterUserId, null, opts.now);
-    const ranked = addBuilderPoints(builder, ACTIVE_BUILDER_POINTS);
+    const ranked = awardBuilderPointsOnce(store, builder, ACTIVE_BUILDER_POINTS, {
+      builderUserId: referral.inviterUserId,
+      reason: BUILDER_EVENT_REASON.ACTIVE,
+      referralUserId: uid,
+      createdAt: opts.now,
+    });
+    if (ranked.duplicate) {
+      return { ok: false, reason: "already-claimed" };
+    }
     return {
       ok: true,
       stage: "active-member",
@@ -886,6 +1245,15 @@ module.exports = {
   LEADERBOARD_LIMIT,
   BUILDER_RANK_THRESHOLDS,
   JOIN_EVENT,
+  BUILDER_PERIOD,
+  BUILDER_EVENT_REASON,
+  builderEventId,
+  startOfUtcWeekMs,
+  startOfUtcMonthMs,
+  normalizeBuilderPeriod,
+  formatBuilderLeaderboard,
+  shareBuilderLeaderboard,
+  getBuilderPeriodTotals,
   inviteIdentity,
   safeDisplayName,
   isJoinTransition,

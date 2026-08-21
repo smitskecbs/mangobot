@@ -4,6 +4,7 @@
 
 const { Markup } = require("telegraf");
 const { isAdmin } = require("../services/points");
+const { parseCommandArg } = require("../utils/telegramReplyTarget");
 const {
   isPrivateChat,
   isGroupChat,
@@ -18,6 +19,10 @@ const {
   getBuilderLeaderboard,
   getBuilderStats,
   getOrCreateInviteLink,
+  formatBuilderLeaderboard,
+  shareBuilderLeaderboard,
+  normalizeBuilderPeriod,
+  BUILDER_PERIOD,
   REFERRALS_PAGE_SIZE,
 } = require("../services/communityBuilder");
 
@@ -27,6 +32,13 @@ const BUILDER_CALLBACK = Object.freeze({
   REFS: "cbuild:refs",
   BOARD: "cbuild:board",
   BACK: "cbuild:back",
+  PERIODS: "cb:lb:pick",
+  WEEKLY: "cb:lb:w",
+  MONTHLY: "cb:lb:m",
+  ALLTIME: "cb:lb:a",
+  SHARE_WEEKLY: "cb:share:w",
+  SHARE_MONTHLY: "cb:share:m",
+  SHARE_ALLTIME: "cb:share:a",
 });
 
 const BUILDER_REFS_PREFIX = "cbuild:r:";
@@ -70,6 +82,46 @@ function builderHomeExtra() {
     [Markup.button.callback("🏆 Builder Leaderboard", BUILDER_CALLBACK.BOARD)],
     [Markup.button.callback("⬅️ Back", BUILDER_CALLBACK.BACK)],
   ]);
+}
+
+function periodChooserText() {
+  return [
+    "🏆 Community Builder Leaderboard",
+    "",
+    "Choose a period.",
+  ].join("\n");
+}
+
+function periodChooserExtra() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("📅 Weekly", BUILDER_CALLBACK.WEEKLY)],
+    [Markup.button.callback("🗓 Monthly", BUILDER_CALLBACK.MONTHLY)],
+    [Markup.button.callback("🌍 All-time", BUILDER_CALLBACK.ALLTIME)],
+    [Markup.button.callback("⬅️ Back", BUILDER_CALLBACK.HOME)],
+  ]);
+}
+
+function periodFromCallback(data) {
+  if (data === BUILDER_CALLBACK.WEEKLY || data === BUILDER_CALLBACK.SHARE_WEEKLY) {
+    return BUILDER_PERIOD.WEEKLY;
+  }
+  if (data === BUILDER_CALLBACK.MONTHLY || data === BUILDER_CALLBACK.SHARE_MONTHLY) {
+    return BUILDER_PERIOD.MONTHLY;
+  }
+  if (data === BUILDER_CALLBACK.ALLTIME || data === BUILDER_CALLBACK.SHARE_ALLTIME) {
+    return BUILDER_PERIOD.ALLTIME;
+  }
+  return null;
+}
+
+function shareCallbackForPeriod(period) {
+  if (period === BUILDER_PERIOD.WEEKLY) {
+    return BUILDER_CALLBACK.SHARE_WEEKLY;
+  }
+  if (period === BUILDER_PERIOD.MONTHLY) {
+    return BUILDER_CALLBACK.SHARE_MONTHLY;
+  }
+  return BUILDER_CALLBACK.SHARE_ALLTIME;
 }
 
 function inviteSuccessText(inviteUrl, reused) {
@@ -130,23 +182,19 @@ function referralsExtra(pageData) {
   return Markup.inlineKeyboard(rows);
 }
 
-function leaderboardText(rows) {
-  if (!rows.length) {
-    return "🏆 Community Builder Leaderboard\n\nNo Builder Points yet. Invite real members to start.";
-  }
-  const lines = ["🏆 Community Builder Leaderboard", ""];
-  for (const row of rows) {
-    const prefix =
-      row.rank === 1 ? "🥇" : row.rank === 2 ? "🥈" : row.rank === 3 ? "🥉" : `${row.rank}.`;
-    lines.push(`${prefix} ${row.displayName} — ${row.points} BP`);
-  }
-  return lines.join("\n");
+function leaderboardText(rows, period = BUILDER_PERIOD.ALLTIME) {
+  return formatBuilderLeaderboard(rows, period, "private");
 }
 
-function leaderboardExtra() {
-  return Markup.inlineKeyboard([
-    [Markup.button.callback("⬅️ Back", BUILDER_CALLBACK.HOME)],
-  ]);
+function leaderboardExtra(period = BUILDER_PERIOD.ALLTIME, admin = false) {
+  const rows = [];
+  if (admin) {
+    rows.push([
+      Markup.button.callback("📣 Share in Group", shareCallbackForPeriod(period)),
+    ]);
+  }
+  rows.push([Markup.button.callback("⬅️ Periods", BUILDER_CALLBACK.PERIODS)]);
+  return Markup.inlineKeyboard(rows);
 }
 
 function statsText(stats) {
@@ -157,6 +205,9 @@ function statsText(stats) {
     `Wallet-linked: ${stats.walletLinked}`,
     `Active: ${stats.active}`,
     `Builders: ${stats.totalBuilders}`,
+    `This week BP: ${stats.weekBp || 0}`,
+    `This month BP: ${stats.monthBp || 0}`,
+    `All-time BP: ${stats.allTimeBp || 0}`,
   ];
   if (stats.top && stats.top.length) {
     lines.push("", "Top:");
@@ -185,6 +236,13 @@ function isBuilderCallback(data) {
     data === BUILDER_CALLBACK.REFS ||
     data === BUILDER_CALLBACK.BOARD ||
     data === BUILDER_CALLBACK.BACK ||
+    data === BUILDER_CALLBACK.PERIODS ||
+    data === BUILDER_CALLBACK.WEEKLY ||
+    data === BUILDER_CALLBACK.MONTHLY ||
+    data === BUILDER_CALLBACK.ALLTIME ||
+    data === BUILDER_CALLBACK.SHARE_WEEKLY ||
+    data === BUILDER_CALLBACK.SHARE_MONTHLY ||
+    data === BUILDER_CALLBACK.SHARE_ALLTIME ||
     (typeof data === "string" && data.startsWith(BUILDER_REFS_PREFIX))
   );
 }
@@ -237,8 +295,17 @@ function handleBuilderBoard(ctx, options = {}) {
   if (!isPrivateChat(ctx)) {
     return undefined;
   }
-  const rows = getBuilderLeaderboard(options);
-  return ctx.reply(leaderboardText(rows), getPrivateMenuKeyboard());
+  const arg = parseCommandArg(ctx);
+  const parsed = arg ? normalizeBuilderPeriod(arg) : BUILDER_PERIOD.ALLTIME;
+  if (arg && !parsed) {
+    return ctx.reply("Use /builderboard weekly, monthly, or alltime.");
+  }
+  const chosen = parsed || BUILDER_PERIOD.ALLTIME;
+  const board = getBuilderLeaderboard({ ...options, period: chosen });
+  return ctx.reply(
+    leaderboardText(board, chosen),
+    leaderboardExtra(chosen, isAdmin(ctx.from.id))
+  );
 }
 
 function handleBuilderStats(ctx, options = {}) {
@@ -305,9 +372,43 @@ async function handleBuilderCallback(ctx, options = {}) {
     );
   }
 
-  if (data === BUILDER_CALLBACK.BOARD) {
-    const rows = getBuilderLeaderboard(options);
-    return showMenuView(ctx, leaderboardText(rows), leaderboardExtra());
+  if (data === BUILDER_CALLBACK.BOARD || data === BUILDER_CALLBACK.PERIODS) {
+    return showMenuView(ctx, periodChooserText(), periodChooserExtra());
+  }
+
+  const sharePeriod = periodFromCallback(data);
+  if (
+    data === BUILDER_CALLBACK.SHARE_WEEKLY ||
+    data === BUILDER_CALLBACK.SHARE_MONTHLY ||
+    data === BUILDER_CALLBACK.SHARE_ALLTIME
+  ) {
+    if (!isAdmin(ctx.from.id)) {
+      return ctx.reply("Only admins can share the leaderboard in the group.");
+    }
+    const result = await shareBuilderLeaderboard(sharePeriod, {
+      ...options,
+      adminUserId: ctx.from.id,
+      telegram: ctx.telegram,
+      shareToGroup: true,
+    });
+    if (!result.ok) {
+      return ctx.reply("Couldn't share the leaderboard right now.");
+    }
+    return ctx.reply("Shared in the ManGo group.");
+  }
+
+  if (
+    data === BUILDER_CALLBACK.WEEKLY ||
+    data === BUILDER_CALLBACK.MONTHLY ||
+    data === BUILDER_CALLBACK.ALLTIME
+  ) {
+    const period = periodFromCallback(data);
+    const rows = getBuilderLeaderboard({ ...options, period });
+    return showMenuView(
+      ctx,
+      leaderboardText(rows, period),
+      leaderboardExtra(period, isAdmin(ctx.from.id))
+    );
   }
 
   const page = parseRefsPage(data);
@@ -317,7 +418,8 @@ async function handleBuilderCallback(ctx, options = {}) {
   }
 }
 
-const BUILDER_ACTION_RE = /^(cbuild:(home|invite|refs|board|back)|cbuild:r:\d+)$/;
+const BUILDER_ACTION_RE =
+  /^(cbuild:(home|invite|refs|board|back)|cbuild:r:\d+|cb:lb:(pick|w|m|a)|cb:share:(w|m|a))$/;
 
 module.exports = (bot) => {
   bot.command("communitybuilder", (ctx) => handleCommunityBuilder(ctx));
@@ -337,6 +439,7 @@ module.exports.GROUP_BUILDER_TEXT = GROUP_BUILDER_TEXT;
 module.exports.builderHomeText = builderHomeText;
 module.exports.referralsText = referralsText;
 module.exports.leaderboardText = leaderboardText;
+module.exports.periodChooserText = periodChooserText;
 module.exports.statsText = statsText;
 module.exports.groupBuilderExtra = groupBuilderExtra;
 module.exports.REFERRALS_PAGE_SIZE = REFERRALS_PAGE_SIZE;
