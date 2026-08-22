@@ -3,6 +3,7 @@
  */
 
 const { Markup } = require("telegraf");
+const { isAdmin } = require("../services/points");
 
 const MENU_LABELS = Object.freeze({
   MY_PROFILE: "👤 My Profile",
@@ -10,6 +11,7 @@ const MENU_LABELS = Object.freeze({
   REWARDS: "🎁 Rewards",
   HELP: "ℹ️ Help",
   COMMUNITY_BUILDER: "🤝 Community Builder",
+  PHASE2: "🚀 Phase 2 Control Center",
   SNAKE: "🎮 Play Snake",
   BOUNCH: "🏀 Play Bounch",
   POINTS: "🥭 My Points",
@@ -202,13 +204,29 @@ function appendHighscoreAnnouncementPlayCta(
   return `${baseText}\n\n${cta}`;
 }
 
-function getPrivateMenuKeyboard() {
-  return Markup.keyboard([
+function keyboardUserId(ctxOrUserId) {
+  if (ctxOrUserId === undefined || ctxOrUserId === null) {
+    return null;
+  }
+  if (typeof ctxOrUserId === "object") {
+    return ctxOrUserId.from && ctxOrUserId.from.id !== undefined
+      ? ctxOrUserId.from.id
+      : null;
+  }
+  return ctxOrUserId;
+}
+
+function getPrivateMenuKeyboard(ctxOrUserId) {
+  const rows = [
     [MENU_LABELS.MY_PROFILE, MENU_LABELS.WALLET],
     [MENU_LABELS.REWARDS, MENU_LABELS.HELP],
     [MENU_LABELS.COMMUNITY_BUILDER],
     [MENU_LABELS.SNAKE, MENU_LABELS.BOUNCH],
-  ]).resize();
+  ];
+  if (isAdmin(keyboardUserId(ctxOrUserId))) {
+    rows.push([MENU_LABELS.PHASE2]);
+  }
+  return Markup.keyboard(rows).resize();
 }
 
 function getGroupGameMessage(game) {

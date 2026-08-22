@@ -51,7 +51,7 @@ function handleStart(ctx, options = {}) {
       return handleCommunityBuilder(ctx, options);
     }
 
-    return ctx.reply(WELCOME_MESSAGE, getPrivateMenuKeyboard());
+    return ctx.reply(WELCOME_MESSAGE, getPrivateMenuKeyboard(ctx));
   }
 
   // Groups / other chats: never mint personal signed game tokens or show private points.

@@ -229,6 +229,32 @@ function snapshotFiles(options = {}) {
   };
 }
 
+function startInteractiveDeliver(ctx, rewardId, options = {}) {
+  if (!ctx || !ctx.from) {
+    return undefined;
+  }
+  if (!isAdmin(ctx.from.id)) {
+    if (isPrivateChat(ctx)) {
+      return ctx.reply(ADMIN_ONLY);
+    }
+    return undefined;
+  }
+  if (!isPrivateChat(ctx)) {
+    return ctx.reply(PICKER_PRIVATE_ONLY);
+  }
+  const id = typeof rewardId === "string" ? rewardId.trim() : "";
+  const existing = getReward(id, options.rewardsFile);
+  if (!existing) {
+    return ctx.reply(USAGE_DELIVER);
+  }
+  setPending(ctx.from.id, {
+    kind: "pick",
+    rewardId: id,
+    files: snapshotFiles(options),
+  });
+  return ctx.reply("🎁 Choose Mystery Gift type:", pickerKeyboard(id));
+}
+
 function handleDeliver(ctx, options = {}) {
   if (!ctx || !ctx.from) {
     return undefined;
@@ -271,15 +297,7 @@ function handleDeliver(ctx, options = {}) {
   }
 
   if (!amountHuman) {
-    if (!isPrivateChat(ctx)) {
-      return ctx.reply(PICKER_PRIVATE_ONLY);
-    }
-    setPending(ctx.from.id, {
-      kind: "pick",
-      rewardId,
-      files: snapshotFiles(options),
-    });
-    return ctx.reply("🎁 Choose Mystery Gift type:", pickerKeyboard(rewardId));
+    return startInteractiveDeliver(ctx, rewardId, options);
   }
 
   const result = prepareRewardDelivery({
@@ -603,6 +621,7 @@ module.exports = (bot) => {
 };
 
 module.exports.handleDeliver = handleDeliver;
+module.exports.startInteractiveDeliver = startInteractiveDeliver;
 module.exports.handlePresaleDistribute = handlePresaleDistribute;
 module.exports.handleDeliverCallback = handleDeliverCallback;
 module.exports.handleDeliverText = handleDeliverText;

@@ -681,7 +681,7 @@ function sumMapValues(map) {
   return total;
 }
 
-function getBuilderLeaderboard(periodOrOptions, maybeNow) {
+function getBuilderLeaderboardEntries(periodOrOptions, maybeNow) {
   const raw = resolveLeaderboardArgs(periodOrOptions, maybeNow);
   const opts = resolveOptions(raw);
   const period = normalizeBuilderPeriod(raw.period) || BUILDER_PERIOD.ALLTIME;
@@ -716,9 +716,43 @@ function getBuilderLeaderboard(periodOrOptions, maybeNow) {
   rows.sort(compareBuilders);
   return rows.slice(0, LEADERBOARD_LIMIT).map((row, index) => ({
     rank: index + 1,
+    userId: row.userId,
+    displayName: row.displayName,
+    points: row.points,
+    activeCount: row.activeCount,
+  }));
+}
+
+function getBuilderLeaderboard(periodOrOptions, maybeNow) {
+  return getBuilderLeaderboardEntries(periodOrOptions, maybeNow).map((row) => ({
+    rank: row.rank,
     displayName: row.displayName,
     points: row.points,
   }));
+}
+
+function getBuilderMemberSnapshot(userId, options = {}) {
+  const opts = resolveOptions(options);
+  const id = normalizeUserId(userId);
+  const store = loadBuilderStoreWithEvents(opts.storeFile);
+  const nowMs = Number.isFinite(opts.now) ? opts.now : Date.now();
+  const weekMap = aggregatePeriodPoints(
+    store,
+    startOfUtcWeekMs(nowMs),
+    nowMs
+  );
+  const builder = id && store.builders ? store.builders[id] : null;
+  return {
+    userId: id,
+    displayName:
+      builder && typeof builder.displayName === "string" && builder.displayName.trim()
+        ? builder.displayName.trim()
+        : null,
+    weeklyBp: id ? weekMap.get(id) || 0 : 0,
+    alltimeBp:
+      builder && typeof builder.points === "number" ? builder.points : 0,
+    activeReferrals: id ? countActiveReferrals(store, id) : 0,
+  };
 }
 
 function periodCaption(period, now) {
@@ -1940,6 +1974,8 @@ module.exports = {
   listReferrals,
   paginateReferrals,
   getBuilderLeaderboard,
+  getBuilderLeaderboardEntries,
+  getBuilderMemberSnapshot,
   getBuilderStats,
   getOrCreateInviteLink,
   applyJoinAttribution,

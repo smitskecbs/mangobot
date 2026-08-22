@@ -102,7 +102,7 @@ async function showMenuView(ctx, text, extra) {
  */
 function handleMenu(ctx) {
   if (isPrivateChat(ctx)) {
-    return ctx.reply(PRIVATE_MENU_HINT, getPrivateMenuKeyboard());
+    return ctx.reply(PRIVATE_MENU_HINT, getPrivateMenuKeyboard(ctx));
   }
 
   if (isGroupChat(ctx)) {
@@ -150,7 +150,7 @@ async function handlePrivateHubCallback(ctx, options = {}) {
   }
 
   if (data === PRIVATE_HUB_CALLBACK.PROFILE_BACK) {
-    return ctx.reply(PRIVATE_MENU_HINT, getPrivateMenuKeyboard());
+    return ctx.reply(PRIVATE_MENU_HINT, getPrivateMenuKeyboard(ctx));
   }
   if (data === PRIVATE_HUB_CALLBACK.POINTS) {
     return handlePoints(ctx, options);

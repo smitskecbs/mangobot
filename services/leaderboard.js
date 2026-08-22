@@ -30,20 +30,29 @@ function getLifetimeTop(users, limit = 10) {
 }
 
 /**
+ * Weekly XP standings. Owner excluded before sort. No slice.
+ * @param {Record<string, object>} users
+ * @param {(user: object) => number} getEffectiveWeeklyPoints
+ */
+function getWeeklyRanked(users, getEffectiveWeeklyPoints) {
+  return competitionEntries(users)
+    .map(([userId, user]) => ({
+      ...user,
+      userId: String(userId),
+      weeklyPoints: getEffectiveWeeklyPoints(user),
+    }))
+    .filter((user) => user.weeklyPoints > 0)
+    .sort((a, b) => b.weeklyPoints - a.weeklyPoints);
+}
+
+/**
  * Top weekly leaders. Owner excluded before sort/slice.
  * @param {Record<string, object>} users
  * @param {(user: object) => number} getEffectiveWeeklyPoints
  * @param {number} [limit]
  */
 function getWeeklyTop(users, getEffectiveWeeklyPoints, limit = 10) {
-  return competitionEntries(users)
-    .map(([, user]) => ({
-      ...user,
-      weeklyPoints: getEffectiveWeeklyPoints(user),
-    }))
-    .filter((user) => user.weeklyPoints > 0)
-    .sort((a, b) => b.weeklyPoints - a.weeklyPoints)
-    .slice(0, limit);
+  return getWeeklyRanked(users, getEffectiveWeeklyPoints).slice(0, limit);
 }
 
 function withStreakFields(user) {
@@ -123,6 +132,7 @@ function formatLongestStreakLines(top) {
 
 module.exports = {
   getLifetimeTop,
+  getWeeklyRanked,
   getWeeklyTop,
   getCurrentStreakTop,
   getLongestStreakTop,
