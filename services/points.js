@@ -728,6 +728,21 @@ function getCombinedRankUpReply(
   return getAutomaticTriggerReply(activityResult, userName);
 }
 
+function finalizeXpAward(userId, userName, result) {
+  try {
+    const { queueRankUpAnnouncement } = require("./rankUpAnnounce");
+    queueRankUpAnnouncement({
+      telegramUserId: userId,
+      displayName: userName,
+      userName,
+      result,
+    });
+  } catch (_err) {
+    logError("[rank-up] queue failed");
+  }
+  return result;
+}
+
 function ensureUserRecord(data, id, userName) {
   if (!data.users[id]) {
     data.users[id] = {
@@ -837,10 +852,13 @@ function buildGameXpResult(pointsBefore, pointsAfter, dailyPlay, unlock) {
  */
 function awardSnakeGameXp(userId, userName, pointsFile = POINTS_FILE, walletFile) {
   if (!canEarnXp(userId, walletFile)) {
-    return walletLockedSnapshot(userId, pointsFile);
+    return finalizeXpAward(userId, userName, walletLockedSnapshot(userId, pointsFile));
   }
 
-  return mutatePoints((data) => {
+  return finalizeXpAward(
+    userId,
+    userName,
+    mutatePoints((data) => {
     const id = String(userId);
     const user = ensureUserRecord(data, id, userName);
     user.name = userName;
@@ -859,7 +877,8 @@ function awardSnakeGameXp(userId, userName, pointsFile = POINTS_FILE, walletFile
     }
 
     return buildGameXpResult(pointsBefore, user.points, dailyPlay, 0);
-  }, pointsFile);
+  }, pointsFile)
+  );
 }
 
 /**
@@ -868,21 +887,24 @@ function awardSnakeGameXp(userId, userName, pointsFile = POINTS_FILE, walletFile
  */
 function awardBounchGameXp(userId, userName, level, pointsFile = POINTS_FILE, walletFile) {
   if (typeof level !== "number" || !Number.isInteger(level) || level < 1 || level > 7) {
-    return {
+    return finalizeXpAward(userId, userName, {
       awarded: false,
       points: 0,
       pointsToAdd: 0,
       xp: emptyGameXpPayload(),
       rankUp: false,
       rank: getRank(0),
-    };
+    });
   }
 
   if (!canEarnXp(userId, walletFile)) {
-    return walletLockedSnapshot(userId, pointsFile);
+    return finalizeXpAward(userId, userName, walletLockedSnapshot(userId, pointsFile));
   }
 
-  return mutatePoints((data) => {
+  return finalizeXpAward(
+    userId,
+    userName,
+    mutatePoints((data) => {
     const id = String(userId);
     const user = ensureUserRecord(data, id, userName);
     user.name = userName;
@@ -911,7 +933,8 @@ function awardBounchGameXp(userId, userName, level, pointsFile = POINTS_FILE, wa
     }
 
     return buildGameXpResult(pointsBefore, user.points, dailyPlay, unlock);
-  }, pointsFile);
+  }, pointsFile)
+  );
 }
 
 /**
@@ -920,12 +943,15 @@ function awardBounchGameXp(userId, userName, level, pointsFile = POINTS_FILE, wa
  */
 function awardDailyActivityPoint(userId, userName, pointsFile = POINTS_FILE, todayDate, walletFile) {
   if (isCommunityCompetitionExcluded(userId)) {
-    return excludedAwardResult(userId, pointsFile);
+    return finalizeXpAward(userId, userName, excludedAwardResult(userId, pointsFile));
   }
 
   const today = todayDate || getTodayDate();
 
-  return mutatePoints((data) => {
+  return finalizeXpAward(
+    userId,
+    userName,
+    mutatePoints((data) => {
     const id = String(userId);
     const user = ensureUserRecord(data, id, userName);
 
@@ -983,27 +1009,35 @@ function awardDailyActivityPoint(userId, userName, pointsFile = POINTS_FILE, tod
       previousRank,
       streak,
     };
-  }, pointsFile);
+  }, pointsFile)
+  );
 }
 
 function awardTriggerPoints(userId, userName, trigger, pointsFile = POINTS_FILE, walletFile) {
   const pointsToAdd = TRIGGERS[trigger];
 
   if (pointsToAdd === undefined) {
-    return {
+    return finalizeXpAward(userId, userName, {
       awarded: false,
       points: 0,
       pointsToAdd: 0,
       rankUp: false,
       rank: getRank(0),
-    };
+    });
   }
 
   if (isCommunityCompetitionExcluded(userId)) {
-    return excludedAwardResult(userId, pointsFile, { pointsToAdd: 0 });
+    return finalizeXpAward(
+      userId,
+      userName,
+      excludedAwardResult(userId, pointsFile, { pointsToAdd: 0 })
+    );
   }
 
-  return mutatePoints((data) => {
+  return finalizeXpAward(
+    userId,
+    userName,
+    mutatePoints((data) => {
     const id = String(userId);
     const user = ensureUserRecord(data, id, userName);
     user.name = userName;
@@ -1050,7 +1084,8 @@ function awardTriggerPoints(userId, userName, trigger, pointsFile = POINTS_FILE,
       rank,
       previousRank,
     };
-  }, pointsFile);
+  }, pointsFile)
+  );
 }
 
 /**
@@ -1061,14 +1096,25 @@ function awardChatFightXp(userId, userName, pointsFile = POINTS_FILE, walletFile
   const pointsToAdd = 2;
 
   if (isCommunityCompetitionExcluded(userId)) {
-    return excludedAwardResult(userId, pointsFile, { pointsToAdd: 0 });
+    return finalizeXpAward(
+      userId,
+      userName,
+      excludedAwardResult(userId, pointsFile, { pointsToAdd: 0 })
+    );
   }
 
   if (!canEarnXp(userId, walletFile)) {
-    return walletLockedSnapshot(userId, pointsFile, { pointsToAdd: 0 });
+    return finalizeXpAward(
+      userId,
+      userName,
+      walletLockedSnapshot(userId, pointsFile, { pointsToAdd: 0 })
+    );
   }
 
-  return mutatePoints((data) => {
+  return finalizeXpAward(
+    userId,
+    userName,
+    mutatePoints((data) => {
     const id = String(userId);
     const user = ensureUserRecord(data, id, userName);
     user.name = userName;
@@ -1091,7 +1137,8 @@ function awardChatFightXp(userId, userName, pointsFile = POINTS_FILE, walletFile
       rank,
       previousRank,
     };
-  }, pointsFile);
+  }, pointsFile)
+  );
 }
 
 /** Trivia sole-winner round XP. */
@@ -1167,22 +1214,33 @@ function awardTriviaRoundXp(
       : TRIVIA_ROUND_WIN_XP;
 
   if (isCommunityCompetitionExcluded(userId)) {
-    return excludedAwardResult(userId, pointsFile, {
-      pointsToAdd: 0,
-      rewardedRoundsToday: 0,
-      dailyCap: TRIVIA_DAILY_REWARD_CAP,
-    });
+    return finalizeXpAward(
+      userId,
+      userName,
+      excludedAwardResult(userId, pointsFile, {
+        pointsToAdd: 0,
+        rewardedRoundsToday: 0,
+        dailyCap: TRIVIA_DAILY_REWARD_CAP,
+      })
+    );
   }
 
   if (!canEarnXp(userId, walletFile)) {
-    return walletLockedSnapshot(userId, pointsFile, {
-      pointsToAdd: 0,
-      rewardedRoundsToday: 0,
-      dailyCap: TRIVIA_DAILY_REWARD_CAP,
-    });
+    return finalizeXpAward(
+      userId,
+      userName,
+      walletLockedSnapshot(userId, pointsFile, {
+        pointsToAdd: 0,
+        rewardedRoundsToday: 0,
+        dailyCap: TRIVIA_DAILY_REWARD_CAP,
+      })
+    );
   }
 
-  return mutatePoints((data) => {
+  return finalizeXpAward(
+    userId,
+    userName,
+    mutatePoints((data) => {
     const id = String(userId);
     const user = ensureUserRecord(data, id, userName);
     user.name = userName;
@@ -1222,7 +1280,8 @@ function awardTriviaRoundXp(
       rank,
       previousRank,
     };
-  }, pointsFile);
+  }, pointsFile)
+  );
 }
 
 /** @deprecated Use awardTriviaRoundXp — kept name alias for clarity in older call sites. */
@@ -1315,7 +1374,7 @@ function awardMangoBombXp(
     const data = readPointsSnapshot(pointsFile);
     const user = data.users[String(userId)];
     const points = user && typeof user.points === "number" ? user.points : 0;
-    return {
+    return finalizeXpAward(userId, userName, {
       awarded: false,
       reason: "invalid",
       points,
@@ -1325,26 +1384,37 @@ function awardMangoBombXp(
       previousRank: getRank(points),
       rewardedRoundsToday: 0,
       dailyCap: MANGO_BOMB_DAILY_ROUND_CAP,
-    };
+    });
   }
 
   if (isCommunityCompetitionExcluded(userId)) {
-    return excludedAwardResult(userId, pointsFile, {
-      pointsToAdd: 0,
-      rewardedRoundsToday: 0,
-      dailyCap: MANGO_BOMB_DAILY_ROUND_CAP,
-    });
+    return finalizeXpAward(
+      userId,
+      userName,
+      excludedAwardResult(userId, pointsFile, {
+        pointsToAdd: 0,
+        rewardedRoundsToday: 0,
+        dailyCap: MANGO_BOMB_DAILY_ROUND_CAP,
+      })
+    );
   }
 
   if (!canEarnXp(userId, walletFile)) {
-    return walletLockedSnapshot(userId, pointsFile, {
-      pointsToAdd: 0,
-      rewardedRoundsToday: 0,
-      dailyCap: MANGO_BOMB_DAILY_ROUND_CAP,
-    });
+    return finalizeXpAward(
+      userId,
+      userName,
+      walletLockedSnapshot(userId, pointsFile, {
+        pointsToAdd: 0,
+        rewardedRoundsToday: 0,
+        dailyCap: MANGO_BOMB_DAILY_ROUND_CAP,
+      })
+    );
   }
 
-  return mutatePoints((data) => {
+  return finalizeXpAward(
+    userId,
+    userName,
+    mutatePoints((data) => {
     const id = String(userId);
     const user = ensureUserRecord(data, id, userName);
     user.name = userName;
@@ -1392,7 +1462,8 @@ function awardMangoBombXp(
       rank,
       previousRank,
     };
-  }, pointsFile);
+  }, pointsFile)
+  );
 }
 
 /** PvP board-game win XP (Tic-Tac-Toe, later Connect Four). */
@@ -1456,22 +1527,33 @@ function awardPvpWinXp(userId, userName, pointsFile = POINTS_FILE, walletFile) {
   const pointsToAdd = PVP_WIN_XP;
 
   if (isCommunityCompetitionExcluded(userId)) {
-    return excludedAwardResult(userId, pointsFile, {
-      pointsToAdd: 0,
-      rewardedWinsToday: 0,
-      dailyCap: PVP_DAILY_WIN_CAP,
-    });
+    return finalizeXpAward(
+      userId,
+      userName,
+      excludedAwardResult(userId, pointsFile, {
+        pointsToAdd: 0,
+        rewardedWinsToday: 0,
+        dailyCap: PVP_DAILY_WIN_CAP,
+      })
+    );
   }
 
   if (!canEarnXp(userId, walletFile)) {
-    return walletLockedSnapshot(userId, pointsFile, {
-      pointsToAdd: 0,
-      rewardedWinsToday: 0,
-      dailyCap: PVP_DAILY_WIN_CAP,
-    });
+    return finalizeXpAward(
+      userId,
+      userName,
+      walletLockedSnapshot(userId, pointsFile, {
+        pointsToAdd: 0,
+        rewardedWinsToday: 0,
+        dailyCap: PVP_DAILY_WIN_CAP,
+      })
+    );
   }
 
-  return mutatePoints((data) => {
+  return finalizeXpAward(
+    userId,
+    userName,
+    mutatePoints((data) => {
     const id = String(userId);
     const user = ensureUserRecord(data, id, userName);
     user.name = userName;
@@ -1511,7 +1593,8 @@ function awardPvpWinXp(userId, userName, pointsFile = POINTS_FILE, walletFile) {
       rank,
       previousRank,
     };
-  }, pointsFile);
+  }, pointsFile)
+  );
 }
 
 /**
@@ -1530,25 +1613,36 @@ function awardCommunityBuilderXp(
       ? pointsToAdd
       : 0;
   if (!amount) {
-    return {
+    return finalizeXpAward(userId, userName, {
       awarded: false,
       reason: "invalid",
       points: 0,
       pointsToAdd: 0,
       rankUp: false,
       rank: getRank(0),
-    };
+    });
   }
 
   if (isCommunityCompetitionExcluded(userId)) {
-    return excludedAwardResult(userId, pointsFile, { pointsToAdd: 0 });
+    return finalizeXpAward(
+      userId,
+      userName,
+      excludedAwardResult(userId, pointsFile, { pointsToAdd: 0 })
+    );
   }
 
   if (!canEarnXp(userId, walletFile)) {
-    return walletLockedSnapshot(userId, pointsFile, { pointsToAdd: 0 });
+    return finalizeXpAward(
+      userId,
+      userName,
+      walletLockedSnapshot(userId, pointsFile, { pointsToAdd: 0 })
+    );
   }
 
-  return mutatePoints((data) => {
+  return finalizeXpAward(
+    userId,
+    userName,
+    mutatePoints((data) => {
     const id = String(userId);
     const user = ensureUserRecord(data, id, userName);
     user.name = userName;
@@ -1569,7 +1663,8 @@ function awardCommunityBuilderXp(
       rank,
       previousRank,
     };
-  }, pointsFile);
+  }, pointsFile)
+  );
 }
 
 function resetWeeklyForAll(pointsFile = POINTS_FILE) {

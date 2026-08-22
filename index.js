@@ -12,11 +12,15 @@ const { startBotRuntime } = require("./utils/botLifecycle");
 const { repairCurrentDayStreaks } = require("./services/points");
 const { installProcessGuards } = require("./utils/processGuards");
 const { noteRuntimeEvent } = require("./utils/runtimeHealth");
+const { noteRankUpIdentity } = require("./services/rankUpAnnounce");
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
 bot.use((ctx, next) => {
   noteRuntimeEvent("telegramUpdate");
+  if (ctx && ctx.from) {
+    noteRankUpIdentity(ctx.from);
+  }
   return next();
 });
 
