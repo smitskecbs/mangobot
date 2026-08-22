@@ -1,6 +1,7 @@
 /**
  * ManGo Bomb — join-only group hot-potato. In-memory; restart cancels.
  * Callbacks: mb:join:<id> / mb:pass:<id>. Server uses ctx.from.id.
+ * Telegram rendering is output-only and never owns game progression.
  */
 
 const crypto = require("crypto");
@@ -19,6 +20,12 @@ const STATUS = Object.freeze({
   CANCELLED: "cancelled",
 });
 
+const PENDING = Object.freeze({
+  EXPLODE: "explode",
+  CLOSE_LOBBY: "close-lobby",
+  NEXT_ROUND: "next-round",
+});
+
 const LOBBY_MS = 60 * 1000;
 const LOBBY_COUNTDOWN_MS = 5 * 1000;
 const BOMB_MIN_MS = 8 * 1000;
@@ -33,6 +40,9 @@ const XP_WIN = 5;
 const DAILY_ROUND_CAP = 1;
 const STALE_CALLBACK = "This ManGo Bomb round is over.";
 const RENDER_TIMEOUT_MS = 5_000;
+const QUEUE_TIMEOUT_MS = 5_000;
+const WATCHDOG_MS = 5_000;
+const WATCHDOG_GRACE_MS = 1_500;
 const INTERNAL_CANCEL_TEXT = [
   "🥭💣 ManGo Bomb round cancelled.",
   "",
@@ -152,6 +162,10 @@ function buildCancelledText() {
   ].join("\n");
 }
 
+function yn(value) {
+  return value ? "yes" : "no";
+}
+
 function createMangoBombService(options = {}) {
   const nowFn = typeof options.now === "function" ? options.now : () => Date.now();
   const setTimeoutFn =
@@ -181,39 +195,217 @@ function createMangoBombService(options = {}) {
     Number.isFinite(options.renderTimeoutMs) && options.renderTimeoutMs > 0
       ? options.renderTimeoutMs
       : RENDER_TIMEOUT_MS;
+  const queueTimeoutMs =
+    Number.isFinite(options.queueTimeoutMs) && options.queueTimeoutMs > 0
+      ? options.queueTimeoutMs
+      : QUEUE_TIMEOUT_MS;
+  const watchdogMs =
+    Number.isFinite(options.watchdogMs) && options.watchdogMs > 0
+      ? options.watchdogMs
+      : WATCHDOG_MS;
+  const watchdogGraceMs =
+    Number.isFinite(options.watchdogGraceMs) && options.watchdogGraceMs >= 0
+      ? options.watchdogGraceMs
+      : WATCHDOG_GRACE_MS;
 
   const gamesById = new Map();
   const gamesByChat = new Map();
   const lastStartByChat = new Map();
   const queues = new Map();
-  const timerHandles = new Set();
+  const queueMeta = new Map();
+  const timedOutTokens = new Set();
+  const gameplayHandles = new Set();
+  const utilityHandles = new Set();
+  let queueSeq = 0;
+  let instanceSeq = 0;
+  let renderWait = Promise.resolve();
+  let watchdogHandle = null;
   let editMessage = null;
   let awardXpFn = null;
   let walletReminderFn = null;
   let injectedQueueStage = null;
+  let injectedQueueHangStage = null;
+  let queueHang = null;
   let injectedRenderMode = null;
+  let hungRender = null;
+  const retiredGames = new Map();
 
-  function wrapTimeout(fn, delay) {
+  function utilityTimeout(fn, delay) {
     const handle = setTimeoutFn(() => {
-      timerHandles.delete(handle);
+      utilityHandles.delete(handle);
       fn();
     }, delay);
-    timerHandles.add(handle);
+    utilityHandles.add(handle);
     return handle;
   }
 
-  function clearHandle(handle) {
+  function clearUtility(handle) {
     if (handle == null) {
       return;
     }
-    timerHandles.delete(handle);
+    utilityHandles.delete(handle);
     clearTimeoutFn(handle);
+  }
+
+  function hasGameplayHandle(handle) {
+    return handle != null && gameplayHandles.has(handle);
+  }
+
+  function hasActiveLobbyTimer(game) {
+    return Boolean(game && hasGameplayHandle(game.timers && game.timers.lobby));
+  }
+
+  function hasActiveCountdownTimer(game) {
+    return Boolean(game && hasGameplayHandle(game.timers && game.timers.countdown));
+  }
+
+  function hasActiveBombTimer(game) {
+    return Boolean(game && hasGameplayHandle(game.timers && game.timers.bomb));
+  }
+
+  function hasActivePauseTimer(game) {
+    return Boolean(game && hasGameplayHandle(game.timers && game.timers.pause));
+  }
+
+  function clearGameplayHandle(handle) {
+    if (handle == null) {
+      return;
+    }
+    gameplayHandles.delete(handle);
+    clearTimeoutFn(handle);
+  }
+
+  function clearGameTimer(game, type) {
+    if (!game || !game.timers) {
+      return;
+    }
+    clearGameplayHandle(game.timers[type]);
+    game.timers[type] = null;
+  }
+
+  function setGameTimer(game, type, delay, onFire) {
+    clearGameTimer(game, type);
+    const gameId = game.id;
+    const scheduledGeneration = game.bombGeneration;
+    const scheduledInstance = game.instanceSeq;
+    log(
+      `[mango-bomb] timer scheduled type=${type} generation=${scheduledGeneration}`
+    );
+    const handle = setTimeoutFn(() => {
+      gameplayHandles.delete(handle);
+      const current = gamesById.get(gameId);
+      if (
+        !current ||
+        current.instanceSeq !== scheduledInstance ||
+        !current.timers ||
+        current.timers[type] !== handle
+      ) {
+        return;
+      }
+      current.timers[type] = null;
+      log(
+        `[mango-bomb] timer fired type=${type} generation=${scheduledGeneration}`
+      );
+      onFire(current);
+    }, delay);
+    gameplayHandles.add(handle);
+    game.timers[type] = handle;
+    return handle;
+  }
+
+  function noteProgress(game, stage) {
+    if (!game) {
+      return;
+    }
+    game.lastStage = stage;
+    game.lastProgressAt = nowFn();
+  }
+
+  function setStatus(game, next, stage) {
+    if (!game) {
+      return;
+    }
+    if (game.status !== next) {
+      log(
+        `[mango-bomb] state from=${game.status} to=${next} round=${game.roundNumber || 0}`
+      );
+    }
+    game.status = next;
+    noteProgress(game, stage || next);
+  }
+
+  function bumpRevision(game) {
+    if (!game) {
+      return 0;
+    }
+    game.renderRevision = (game.renderRevision || 0) + 1;
+    return game.renderRevision;
+  }
+
+  function setPending(game, type, generation) {
+    if (!game) {
+      return;
+    }
+    game.pendingTransition = {
+      type,
+      generation: generation == null ? game.bombGeneration : generation,
+      queuedAt: nowFn(),
+    };
+    noteProgress(game, `pending-${type}`);
+  }
+
+  function clearPending(game, type) {
+    if (!game || !game.pendingTransition) {
+      return;
+    }
+    if (!type || game.pendingTransition.type === type) {
+      game.pendingTransition = null;
+    }
+  }
+
+  function pendingType(game) {
+    return game && game.pendingTransition && game.pendingTransition.type
+      ? game.pendingTransition.type
+      : null;
+  }
+
+  function pendingMatches(game, type, generation) {
+    const pending = game && game.pendingTransition;
+    if (!pending || pending.type !== type) {
+      return false;
+    }
+    if (generation != null && pending.generation !== generation) {
+      return false;
+    }
+    return true;
+  }
+
+  function trackRender(promise) {
+    const settled = Promise.resolve(promise).then(
+      () => undefined,
+      () => undefined
+    );
+    renderWait = renderWait.then(
+      () => settled,
+      () => settled
+    );
+    return settled;
+  }
+
+  function isRevisionCurrent(gameId, revision) {
+    const game = gamesById.get(gameId);
+    if (game) {
+      return game.renderRevision === revision;
+    }
+    const retired = retiredGames.get(gameId);
+    return Boolean(retired && retired.renderRevision === revision);
   }
 
   function enqueue(chatId, fn, stage = "task") {
     const key = String(chatId);
+    const token = (queueSeq += 1);
     const prev = queues.get(key) || Promise.resolve();
-    const run = () => runQueuedTask(fn, stage, key);
+    const run = () => runQueuedTask(fn, stage, key, token);
     const next = prev.then(run, run);
     queues.set(
       key,
@@ -228,17 +420,76 @@ function createMangoBombService(options = {}) {
     );
   }
 
-  async function runQueuedTask(fn, stage, chatKey) {
-    try {
+  function isLiveTask(token) {
+    return !timedOutTokens.has(token);
+  }
+
+  async function runQueuedTask(fn, stage, chatKey, token) {
+    const startedAt = nowFn();
+    queueMeta.set(chatKey, { stage, startedAt, token });
+    log(`[mango-bomb] queue start stage=${stage}`);
+    let timeoutHandle = null;
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutHandle = utilityTimeout(() => {
+        timedOutTokens.add(token);
+        const err = new Error("queue-timeout");
+        err.code = "QUEUE_TIMEOUT";
+        reject(err);
+      }, queueTimeoutMs);
+    });
+    const executeTask = async () => {
+      if (injectedQueueHangStage && injectedQueueHangStage === stage) {
+        injectedQueueHangStage = null;
+        if (!queueHang) {
+          queueHang = {};
+          queueHang.promise = new Promise((resolve) => {
+            queueHang.resolve = resolve;
+          });
+        }
+        await queueHang.promise;
+      }
+      if (!isLiveTask(token)) {
+        return { ok: false, reason: "queue-timeout", toast: STALE_CALLBACK };
+      }
       if (injectedQueueStage && injectedQueueStage === stage) {
         injectedQueueStage = null;
         throw new Error("injected-queue-failure");
       }
-      return await fn();
+      return fn(token);
+    };
+    try {
+      const result = await Promise.race([
+        Promise.resolve().then(() => executeTask()),
+        timeoutPromise,
+      ]);
+      if (!isLiveTask(token)) {
+        return { ok: false, reason: "queue-timeout", toast: STALE_CALLBACK };
+      }
+      log(
+        `[mango-bomb] queue finish stage=${stage} durationMs=${Math.max(0, nowFn() - startedAt)}`
+      );
+      return result;
     } catch (err) {
-      logError(`[mango-bomb] queue task failed stage=${stage}`);
+      const timedOut = err && err.code === "QUEUE_TIMEOUT";
+      if (timedOut) {
+        log(
+          `[mango-bomb] queue timeout stage=${stage} ageMs=${Math.max(0, nowFn() - startedAt)}`
+        );
+      } else {
+        logError(`[mango-bomb] queue task failed stage=${stage}`);
+      }
       await recoverAfterQueueError(chatKey, stage);
-      return { ok: false, reason: "internal-error", toast: STALE_CALLBACK };
+      return {
+        ok: false,
+        reason: timedOut ? "queue-timeout" : "internal-error",
+        toast: STALE_CALLBACK,
+      };
+    } finally {
+      clearUtility(timeoutHandle);
+      const meta = queueMeta.get(chatKey);
+      if (meta && meta.token === token) {
+        queueMeta.delete(chatKey);
+      }
     }
   }
 
@@ -247,40 +498,50 @@ function createMangoBombService(options = {}) {
       return true;
     }
     if (game.status === STATUS.LOBBY) {
-      return game.lobbyTimer != null;
+      return hasActiveLobbyTimer(game) || pendingMatches(game, PENDING.CLOSE_LOBBY);
     }
     if (game.status === STATUS.RUNNING) {
-      return Boolean(
-        game.currentHolder &&
-          game.alive.has(String(game.currentHolder)) &&
-          Number.isFinite(game.bombDeadline) &&
-          game.bombDeadline > (game.bombStartedAt || 0) &&
-          game.bombTimer != null
+      const holderOk = Boolean(
+        game.currentHolder && game.alive.has(String(game.currentHolder))
       );
+      const deadlineOk =
+        Number.isFinite(game.bombDeadline) &&
+        game.bombDeadline > (game.bombStartedAt || 0);
+      const progressOk =
+        hasActiveBombTimer(game) ||
+        pendingMatches(game, PENDING.EXPLODE, game.bombGeneration);
+      return holderOk && deadlineOk && progressOk;
     }
     if (game.status === STATUS.BETWEEN_ROUNDS) {
-      return game.pauseTimer != null;
+      return (
+        hasActivePauseTimer(game) || pendingMatches(game, PENDING.NEXT_ROUND)
+      );
     }
     if (game.status === STATUS.FINISHED || game.status === STATUS.CANCELLED) {
       return (
-        game.lobbyTimer == null &&
-        game.countdownTimer == null &&
-        game.bombTimer == null &&
-        game.pauseTimer == null
+        !hasActiveLobbyTimer(game) &&
+        !hasActiveCountdownTimer(game) &&
+        !hasActiveBombTimer(game) &&
+        !hasActivePauseTimer(game) &&
+        !game.pendingTransition
       );
     }
     return false;
   }
 
-  async function cancelDueToInternalError(game, stage) {
+  async function cancelDueToInternalError(game, stage, reason) {
     if (!game || game.status === STATUS.FINISHED || game.status === STATUS.CANCELLED) {
       return;
     }
-    logError(`[mango-bomb] invariant failed state=${game.status}`);
-    log("[mango-bomb] round cancelled reason=internal-error");
-    game.status = STATUS.CANCELLED;
+    logError(
+      `[mango-bomb] invariant fail status=${game.status} reason=${reason || stage || "unknown"}`
+    );
+    log("[mango-bomb] recovery action=cancel");
+    setStatus(game, STATUS.CANCELLED, "recovery");
+    clearPending(game);
     clearGameTimers(game);
-    await render(game, INTERNAL_CANCEL_TEXT, emptyInlineKeyboardExtra(), stage || "cancel");
+    bumpRevision(game);
+    queueRender(game, INTERNAL_CANCEL_TEXT, emptyInlineKeyboardExtra(), "cancel");
     dropGame(game);
   }
 
@@ -289,13 +550,20 @@ function createMangoBombService(options = {}) {
     if (!game) {
       return;
     }
+    if (stage === "explode") {
+      clearPending(game, PENDING.EXPLODE);
+    } else if (stage === "lobby-close") {
+      clearPending(game, PENDING.CLOSE_LOBBY);
+    } else if (stage === "between-rounds") {
+      clearPending(game, PENDING.NEXT_ROUND);
+    }
     if (invariantsHold(game)) {
       if (game.status === STATUS.LOBBY) {
         scheduleLobbyCountdown(game);
       }
       return;
     }
-    await cancelDueToInternalError(game, stage);
+    await cancelDueToInternalError(game, stage, "queue-recovery");
   }
 
   function activeGameForChat(chatId) {
@@ -327,13 +595,13 @@ function createMangoBombService(options = {}) {
   }
 
   function getPendingTimerCount() {
-    return timerHandles.size;
+    return gameplayHandles.size;
   }
 
   function getActiveBombTimerCount() {
     let n = 0;
     for (const game of gamesById.values()) {
-      if (game.bombTimer != null) {
+      if (hasActiveBombTimer(game)) {
         n += 1;
       }
     }
@@ -343,18 +611,22 @@ function createMangoBombService(options = {}) {
   function getActiveCountdownTimerCount() {
     let n = 0;
     for (const game of gamesById.values()) {
-      if (game.countdownTimer != null) {
+      if (hasActiveCountdownTimer(game)) {
         n += 1;
       }
     }
     return n;
   }
 
-  function whenIdle(chatId) {
+  function whenQueueIdle(chatId) {
     if (chatId != null) {
       return queues.get(String(chatId)) || Promise.resolve();
     }
     return Promise.all(Array.from(queues.values()));
+  }
+
+  function whenIdle(chatId) {
+    return Promise.all([whenQueueIdle(chatId), renderWait]);
   }
 
   function snapshot(game, includeInternal = false) {
@@ -365,7 +637,7 @@ function createMangoBombService(options = {}) {
     for (const [userId, row] of game.players.entries()) {
       players.push({ userId, displayName: row.displayName });
     }
-    const base = {
+    return {
       id: game.id,
       chatId: game.chatId,
       threadId: game.threadId,
@@ -380,25 +652,23 @@ function createMangoBombService(options = {}) {
       currentHolder: includeInternal ? game.currentHolder : undefined,
       bombStartedAt: game.bombStartedAt,
       bombDeadline: includeInternal ? game.bombDeadline : undefined,
+      bombGeneration: game.bombGeneration,
+      renderRevision: game.renderRevision,
+      pendingTransition: pendingType(game),
       players,
       alivePlayers: Array.from(game.alive),
       eliminatedPlayers: game.eliminated.slice(),
     };
-    return base;
   }
 
   function clearGameTimers(game) {
     if (!game) {
       return;
     }
-    clearHandle(game.lobbyTimer);
-    clearHandle(game.countdownTimer);
-    clearHandle(game.bombTimer);
-    clearHandle(game.pauseTimer);
-    game.lobbyTimer = null;
-    game.countdownTimer = null;
-    game.bombTimer = null;
-    game.pauseTimer = null;
+    clearGameTimer(game, "lobby");
+    clearGameTimer(game, "countdown");
+    clearGameTimer(game, "bomb");
+    clearGameTimer(game, "pause");
   }
 
   function dropGame(game) {
@@ -406,15 +676,39 @@ function createMangoBombService(options = {}) {
       return;
     }
     clearGameTimers(game);
+    clearPending(game);
+    retiredGames.set(game.id, {
+      renderRevision: game.renderRevision,
+      instanceSeq: game.instanceSeq,
+      status: game.status,
+    });
     gamesById.delete(game.id);
     const current = gamesByChat.get(String(game.chatId));
     if (current && current.id === game.id) {
       gamesByChat.delete(String(game.chatId));
     }
+    stopWatchdogIfIdle();
   }
 
-  async function render(game, text, extra, stage = "render") {
+  function queueRender(game, text, extra, stage) {
+    if (!game) {
+      return Promise.resolve();
+    }
+    const revision = game.renderRevision;
+    const promise = renderRevision(game, text, extra, stage, revision);
+    trackRender(promise);
+    return promise;
+  }
+
+  async function renderRevision(game, text, extra, stage, revision) {
     if (!game || game.messageId == null || typeof editMessage !== "function") {
+      return;
+    }
+    const gameId = game.id;
+    const chatId = game.chatId;
+    const messageId = game.messageId;
+    if (!isRevisionCurrent(gameId, revision)) {
+      log(`[mango-bomb] stale render skipped revision=${revision}`);
       return;
     }
     if (injectedRenderMode === "throw") {
@@ -422,36 +716,59 @@ function createMangoBombService(options = {}) {
       logError(`[mango-bomb] render failed stage=${stage}`);
       return;
     }
-    try {
-      const editPromise =
-        injectedRenderMode === "hang"
-          ? new Promise(() => {})
-          : Promise.resolve(
-              editMessage(
-                game.chatId,
-                game.messageId,
-                text,
-                extra || emptyInlineKeyboardExtra()
-              )
-            );
-      if (injectedRenderMode === "hang") {
-        injectedRenderMode = null;
+    const shouldHang = injectedRenderMode === "hang";
+    if (shouldHang) {
+      injectedRenderMode = null;
+    }
+    const work = Promise.resolve().then(async () => {
+      if (shouldHang) {
+        if (!hungRender) {
+          hungRender = {};
+          hungRender.promise = new Promise((resolve) => {
+            hungRender.resolve = resolve;
+          });
+        }
+        await hungRender.promise;
       }
-      await Promise.race([
-        editPromise,
-        new Promise((_, reject) => {
-          const handle = wrapTimeout(() => {
-            const err = new Error("render-timeout");
-            err.code = "ETIMEDOUT";
-            reject(err);
-          }, renderTimeoutMs);
-          editPromise.then(
-            () => clearHandle(handle),
-            () => clearHandle(handle)
-          );
-        }),
-      ]);
+      if (!isRevisionCurrent(gameId, revision)) {
+        log(`[mango-bomb] stale render skipped revision=${revision}`);
+        return { stale: true };
+      }
+      return editMessage(
+        chatId,
+        messageId,
+        text,
+        extra || emptyInlineKeyboardExtra()
+      );
+    });
+    try {
+      const timeout = new Promise((_, reject) => {
+        const handle = utilityTimeout(() => {
+          const err = new Error("render-timeout");
+          err.code = "ETIMEDOUT";
+          reject(err);
+        }, renderTimeoutMs);
+        work.then(
+          () => clearUtility(handle),
+          () => clearUtility(handle)
+        );
+      });
+      const result = await Promise.race([work, timeout]);
+      if (result && result.stale) {
+        return;
+      }
+      if (!isRevisionCurrent(gameId, revision)) {
+        log(`[mango-bomb] stale render skipped revision=${revision}`);
+      }
     } catch (err) {
+      if (err && err.code === "ETIMEDOUT") {
+        log(`[mango-bomb] render timeout stage=${stage}`);
+        work.then(
+          () => undefined,
+          () => undefined
+        );
+        return;
+      }
       if (!isMessageNotModifiedError(err)) {
         logError(`[mango-bomb] render failed stage=${stage}`);
       }
@@ -467,20 +784,18 @@ function createMangoBombService(options = {}) {
     return Math.max(1, lobbyRemainingSeconds(game));
   }
 
-  async function renderLobbyMessage(game) {
+  function renderLobbyMessage(game) {
     if (!game || game.status !== STATUS.LOBBY) {
-      return false;
+      return Promise.resolve(false);
     }
-    if (game.messageId == null || typeof editMessage !== "function") {
-      return false;
-    }
-    await render(
+    bumpRevision(game);
+    queueRender(
       game,
       buildLobbyText(game.players.size, lobbyDisplaySeconds(game)),
       joinKeyboard(game.id),
       "lobby"
     );
-    return true;
+    return Promise.resolve(true);
   }
 
   function msUntilNextCountdown(game) {
@@ -498,29 +813,34 @@ function createMangoBombService(options = {}) {
   }
 
   function scheduleLobbyCountdown(game) {
-    if (!game) {
-      return;
-    }
-    clearHandle(game.countdownTimer);
-    game.countdownTimer = null;
-    if (game.status !== STATUS.LOBBY) {
+    if (!game || game.status !== STATUS.LOBBY) {
+      clearGameTimer(game, "countdown");
       return;
     }
     const wait = msUntilNextCountdown(game);
     if (wait == null) {
+      clearGameTimer(game, "countdown");
       return;
     }
-    const gameId = game.id;
-    game.countdownTimer = wrapTimeout(() => {
-      enqueue(game.chatId, async () => {
-        const current = gamesById.get(gameId);
-        if (!current || current.status !== STATUS.LOBBY) {
+    const countdownGameId = game.id;
+    const countdownInstance = game.instanceSeq;
+    setGameTimer(game, "countdown", wait, () => {
+      enqueue(game.chatId, (token) => {
+        if (!isLiveTask(token)) {
           return;
         }
-        await renderLobbyMessage(current);
+        const current = gamesById.get(countdownGameId);
+        if (
+          !current ||
+          current.instanceSeq !== countdownInstance ||
+          current.status !== STATUS.LOBBY
+        ) {
+          return;
+        }
+        renderLobbyMessage(current);
         scheduleLobbyCountdown(current);
       }, "lobby-countdown");
-    }, wait);
+    });
   }
 
   function award(userId, displayName, amount, roundId) {
@@ -573,24 +893,35 @@ function createMangoBombService(options = {}) {
     game.bombStartedAt = now;
     game.bombDeadline = now + lifetime;
     game.lastPassAt = 0;
-    game.status = STATUS.RUNNING;
-    clearHandle(game.bombTimer);
-    game.bombTimer = wrapTimeout(() => {
+    setStatus(game, STATUS.RUNNING, "arm");
+    clearPending(game);
+    const instance = game.instanceSeq;
+    setGameTimer(game, "bomb", lifetime, () => {
       const current = gamesById.get(game.id);
-      if (current && current.bombGeneration === generation) {
-        current.bombTimer = null;
+      if (
+        !current ||
+        current.instanceSeq !== instance ||
+        current.bombGeneration !== generation
+      ) {
+        return;
       }
-      enqueue(game.chatId, () => explode(game.id, generation), "explode");
-    }, lifetime);
+      setPending(current, PENDING.EXPLODE, generation);
+      enqueue(
+        current.chatId,
+        (token) => explode(current.id, generation, token, instance),
+        "explode"
+      );
+    });
     return holder;
   }
 
-  async function finishWinner(game) {
+  function finishWinner(game) {
     const winnerId = Array.from(game.alive)[0];
     const winner = winnerId ? game.players.get(winnerId) : null;
     const name = (winner && winner.displayName) || "Player";
-    game.status = STATUS.FINISHED;
+    setStatus(game, STATUS.FINISHED, "winner");
     game.currentHolder = winnerId || null;
+    clearPending(game);
     clearGameTimers(game);
     let xpLine = "";
     if (winnerId) {
@@ -603,17 +934,29 @@ function createMangoBombService(options = {}) {
       }
     }
     log("[mango-bomb] winner");
-    await render(game, buildWinnerText(name, xpLine), emptyInlineKeyboardExtra(), "winner");
+    bumpRevision(game);
+    queueRender(game, buildWinnerText(name, xpLine), emptyInlineKeyboardExtra(), "winner");
+    const winnerRef = winnerId;
     dropGame(game);
-    return { ok: true, status: STATUS.FINISHED, winnerId };
+    return { ok: true, status: STATUS.FINISHED, winnerId: winnerRef };
   }
 
-  async function explode(gameId, generation) {
+  function explode(gameId, generation, token, instanceSeqExpected) {
+    if (token != null && !isLiveTask(token)) {
+      return { ok: false, reason: "queue-timeout" };
+    }
     const game = gamesById.get(gameId);
-    if (!game || game.status !== STATUS.RUNNING) {
+    if (
+      !game ||
+      game.status !== STATUS.RUNNING ||
+      (instanceSeqExpected != null && game.instanceSeq !== instanceSeqExpected)
+    ) {
       return { ok: false, reason: "inactive" };
     }
     if (generation != null && generation !== game.bombGeneration) {
+      if (pendingMatches(game, PENDING.EXPLODE, generation)) {
+        clearPending(game, PENDING.EXPLODE);
+      }
       return { ok: false, reason: "stale-timer" };
     }
     const victimId = game.currentHolder;
@@ -623,8 +966,8 @@ function createMangoBombService(options = {}) {
     game.eliminated.push(victimId);
     game.currentHolder = null;
     game.roundNumber += 1;
-    clearHandle(game.bombTimer);
-    game.bombTimer = null;
+    clearGameTimer(game, "bomb");
+    clearPending(game, PENDING.EXPLODE);
 
     const survivors = Array.from(game.alive);
     for (const uid of survivors) {
@@ -635,48 +978,86 @@ function createMangoBombService(options = {}) {
 
     if (survivors.length <= 1) {
       if (survivors.length === 1) {
-        await render(game, buildBoomText(name, 1), emptyInlineKeyboardExtra(), "explode");
         return finishWinner(game);
       }
-      game.status = STATUS.CANCELLED;
-      await render(game, "🥭💣 ManGo Bomb ended.", emptyInlineKeyboardExtra(), "explode");
+      setStatus(game, STATUS.CANCELLED, "empty");
+      bumpRevision(game);
+      queueRender(game, "🥭💣 ManGo Bomb ended.", emptyInlineKeyboardExtra(), "explode");
       dropGame(game);
       return { ok: true, status: STATUS.CANCELLED };
     }
 
-    game.status = STATUS.BETWEEN_ROUNDS;
-    await render(game, buildBoomText(name, survivors.length), emptyInlineKeyboardExtra(), "explode");
-    clearHandle(game.pauseTimer);
-    game.pauseTimer = wrapTimeout(() => {
+    setStatus(game, STATUS.BETWEEN_ROUNDS, "explode");
+    const pauseInstance = game.instanceSeq;
+    setGameTimer(game, "pause", betweenRoundsMs, () => {
       const current = gamesById.get(gameId);
-      if (current) {
-        current.pauseTimer = null;
+      if (
+        !current ||
+        current.instanceSeq !== pauseInstance ||
+        current.status !== STATUS.BETWEEN_ROUNDS
+      ) {
+        return;
       }
-      enqueue(game.chatId, async () => {
-        const live = gamesById.get(gameId);
-        if (!live || live.status !== STATUS.BETWEEN_ROUNDS) {
-          return;
-        }
-        armBomb(live, null);
-        await render(live, buildBombText(live), passKeyboard(live.id), "between-rounds");
-      }, "between-rounds");
-    }, betweenRoundsMs);
+      setPending(current, PENDING.NEXT_ROUND);
+      enqueue(
+        current.chatId,
+        (taskToken) => startNextRound(gameId, taskToken, pauseInstance),
+        "between-rounds"
+      );
+    });
+    bumpRevision(game);
+    queueRender(
+      game,
+      buildBoomText(name, survivors.length),
+      emptyInlineKeyboardExtra(),
+      "explode"
+    );
     return { ok: true, status: STATUS.BETWEEN_ROUNDS, eliminated: victimId };
   }
 
-  async function closeLobby(gameId) {
-    const game = gamesById.get(gameId);
-    if (!game || game.status !== STATUS.LOBBY) {
+  function startNextRound(gameId, token, instanceSeqExpected) {
+    if (token != null && !isLiveTask(token)) {
+      return { ok: false, reason: "queue-timeout" };
+    }
+    const live = gamesById.get(gameId);
+    if (
+      !live ||
+      live.status !== STATUS.BETWEEN_ROUNDS ||
+      (instanceSeqExpected != null && live.instanceSeq !== instanceSeqExpected)
+    ) {
       return { ok: false, reason: "inactive" };
     }
-    clearHandle(game.lobbyTimer);
-    clearHandle(game.countdownTimer);
-    game.lobbyTimer = null;
-    game.countdownTimer = null;
+    clearPending(live, PENDING.NEXT_ROUND);
+    const holder = armBomb(live, null);
+    if (!holder) {
+      cancelDueToInternalError(live, "between-rounds", "no-holder");
+      return { ok: false, reason: "no-holder" };
+    }
+    bumpRevision(live);
+    queueRender(live, buildBombText(live), passKeyboard(live.id), "between-rounds");
+    return { ok: true, status: STATUS.RUNNING };
+  }
+
+  function closeLobby(gameId, token, instanceSeqExpected) {
+    if (token != null && !isLiveTask(token)) {
+      return { ok: false, reason: "queue-timeout" };
+    }
+    const game = gamesById.get(gameId);
+    if (
+      !game ||
+      game.status !== STATUS.LOBBY ||
+      (instanceSeqExpected != null && game.instanceSeq !== instanceSeqExpected)
+    ) {
+      return { ok: false, reason: "inactive" };
+    }
+    clearGameTimer(game, "lobby");
+    clearGameTimer(game, "countdown");
+    clearPending(game, PENDING.CLOSE_LOBBY);
     if (game.players.size < MIN_PLAYERS) {
-      game.status = STATUS.CANCELLED;
+      setStatus(game, STATUS.CANCELLED, "lobby-cancel");
       log("[mango-bomb] cancelled");
-      await render(game, buildCancelledText(), emptyInlineKeyboardExtra(), "lobby-close");
+      bumpRevision(game);
+      queueRender(game, buildCancelledText(), emptyInlineKeyboardExtra(), "lobby-close");
       dropGame(game);
       return { ok: true, status: STATUS.CANCELLED };
     }
@@ -686,11 +1067,88 @@ function createMangoBombService(options = {}) {
         maybeRemind(userId, result, game);
       }
     }
-    log(`[mango-bomb] round started players=${game.players.size}`);
+    log("[mango-bomb] round started");
     game.roundNumber = 1;
     armBomb(game, null);
-    await render(game, buildBombText(game), passKeyboard(game.id), "lobby-close");
+    bumpRevision(game);
+    queueRender(game, buildBombText(game), passKeyboard(game.id), "lobby-close");
     return { ok: true, status: STATUS.RUNNING, snapshot: snapshot(game, true) };
+  }
+
+  function startWatchdog() {
+    if (watchdogHandle != null) {
+      return;
+    }
+    const tick = () => {
+      watchdogHandle = null;
+      runWatchdog();
+      if (hasActiveGames()) {
+        watchdogHandle = utilityTimeout(tick, watchdogMs);
+      }
+    };
+    watchdogHandle = utilityTimeout(tick, watchdogMs);
+  }
+
+  function stopWatchdogIfIdle() {
+    if (hasActiveGames()) {
+      return;
+    }
+    clearUtility(watchdogHandle);
+    watchdogHandle = null;
+  }
+
+  function hasActiveGames() {
+    for (const game of gamesById.values()) {
+      if (game.status !== STATUS.FINISHED && game.status !== STATUS.CANCELLED) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function runWatchdog() {
+    for (const game of Array.from(gamesById.values())) {
+      if (game.status === STATUS.FINISHED || game.status === STATUS.CANCELLED) {
+        continue;
+      }
+      const meta = queueMeta.get(String(game.chatId));
+      if (meta && nowFn() - meta.startedAt > queueTimeoutMs + watchdogGraceMs) {
+        cancelDueToInternalError(game, "watchdog", "queue-stalled");
+        continue;
+      }
+      if (invariantsHold(game) && !watchdogBroken(game)) {
+        continue;
+      }
+      if (watchdogBroken(game) || !invariantsHold(game)) {
+        cancelDueToInternalError(game, "watchdog", "invariant");
+      }
+    }
+  }
+
+  function watchdogBroken(game) {
+    const now = nowFn();
+    if (game.status === STATUS.RUNNING) {
+      const expired =
+        Number.isFinite(game.bombDeadline) &&
+        now >= game.bombDeadline + watchdogGraceMs;
+      return (
+        expired &&
+        !hasActiveBombTimer(game) &&
+        !pendingMatches(game, PENDING.EXPLODE, game.bombGeneration)
+      );
+    }
+    if (game.status === STATUS.BETWEEN_ROUNDS) {
+      return !hasActivePauseTimer(game) && !pendingMatches(game, PENDING.NEXT_ROUND);
+    }
+    if (game.status === STATUS.LOBBY) {
+      const expired = now >= game.lobbyEndsAt + watchdogGraceMs;
+      return (
+        expired &&
+        !hasActiveLobbyTimer(game) &&
+        !pendingMatches(game, PENDING.CLOSE_LOBBY)
+      );
+    }
+    return false;
   }
 
   function startLobby({ chatId, threadId = null, source = "manual" } = {}) {
@@ -706,7 +1164,9 @@ function createMangoBombService(options = {}) {
     if (now - last < startCooldownMs) {
       return { ok: false, reason: "cooldown" };
     }
-    const id = String(randomIdFn()).replace(/[^a-f0-9]/gi, "").slice(0, 16) || crypto.randomBytes(4).toString("hex");
+    const id =
+      String(randomIdFn()).replace(/[^a-f0-9]/gi, "").slice(0, 16) ||
+      crypto.randomBytes(4).toString("hex");
     const game = {
       id,
       chatId,
@@ -722,26 +1182,39 @@ function createMangoBombService(options = {}) {
       bombStartedAt: null,
       bombDeadline: null,
       bombGeneration: 0,
+      renderRevision: 1,
+      pendingTransition: null,
       lastPassAt: 0,
       lastPassUser: null,
+      lastStage: "lobby",
+      lastProgressAt: now,
       roundNumber: 0,
+      instanceSeq: (instanceSeq += 1),
       source,
-      lobbyTimer: null,
-      countdownTimer: null,
-      bombTimer: null,
-      pauseTimer: null,
+      timers: { lobby: null, countdown: null, bomb: null, pause: null },
     };
     gamesById.set(id, game);
     gamesByChat.set(String(chatId), game);
     lastStartByChat.set(String(chatId), now);
-    game.lobbyTimer = wrapTimeout(() => {
+    const lobbyInstance = game.instanceSeq;
+    setGameTimer(game, "lobby", lobbyMs, () => {
       const current = gamesById.get(id);
-      if (current) {
-        current.lobbyTimer = null;
+      if (
+        !current ||
+        current.instanceSeq !== lobbyInstance ||
+        current.status !== STATUS.LOBBY
+      ) {
+        return;
       }
-      enqueue(chatId, () => closeLobby(id), "lobby-close");
-    }, lobbyMs);
+      setPending(current, PENDING.CLOSE_LOBBY);
+      enqueue(
+        current.chatId,
+        (token) => closeLobby(id, token, lobbyInstance),
+        "lobby-close"
+      );
+    });
     scheduleLobbyCountdown(game);
+    startWatchdog();
     log("[mango-bomb] lobby started");
     const lobbySeconds = Math.max(1, Math.round(lobbyMs / 1000));
     return {
@@ -759,7 +1232,7 @@ function createMangoBombService(options = {}) {
       return false;
     }
     game.messageId = messageId;
-    if (game.status === STATUS.LOBBY && game.countdownTimer == null) {
+    if (game.status === STATUS.LOBBY && !hasActiveCountdownTimer(game)) {
       scheduleLobbyCountdown(game);
     }
     return true;
@@ -792,6 +1265,7 @@ function createMangoBombService(options = {}) {
     const name = sanitizePvpDisplayName(displayName);
     game.players.set(uid, { displayName: name });
     game.alive.add(uid);
+    noteProgress(game, "join");
     log("[mango-bomb] player joined");
     const lobbySeconds = lobbyDisplaySeconds(game);
     return {
@@ -833,10 +1307,7 @@ function createMangoBombService(options = {}) {
     if (game.bombDeadline != null && now >= game.bombDeadline) {
       return { ok: false, reason: "exploded", toast: STALE_CALLBACK };
     }
-    if (
-      game.lastPassUser === uid &&
-      now - game.lastPassAt < passCooldownMs
-    ) {
+    if (game.lastPassUser === uid && now - game.lastPassAt < passCooldownMs) {
       return { ok: false, reason: "cooldown", toast: "Easy..." };
     }
     const next = pickHolder(Array.from(game.alive), uid);
@@ -849,20 +1320,32 @@ function createMangoBombService(options = {}) {
     game.bombGeneration += 1;
     const generation = game.bombGeneration;
     const remaining = Math.max(1, game.bombDeadline - now);
-    clearHandle(game.bombTimer);
-    game.bombTimer = wrapTimeout(() => {
+    noteProgress(game, "pass");
+    const instance = game.instanceSeq;
+    setGameTimer(game, "bomb", remaining, () => {
       const current = gamesById.get(game.id);
-      if (current && current.bombGeneration === generation) {
-        current.bombTimer = null;
+      if (
+        !current ||
+        current.instanceSeq !== instance ||
+        current.bombGeneration !== generation
+      ) {
+        return;
       }
-      enqueue(game.chatId, () => explode(game.id, generation), "explode");
-    }, remaining);
+      setPending(current, PENDING.EXPLODE, generation);
+      enqueue(
+        current.chatId,
+        (taskToken) => explode(current.id, generation, taskToken, instance),
+        "explode"
+      );
+    });
     log("[mango-bomb] pass");
+    bumpRevision(game);
     return {
       ok: true,
       text: buildBombText(game),
       extra: passKeyboard(game.id),
       snapshot: snapshot(game, true),
+      renderRevision: game.renderRevision,
     };
   }
 
@@ -871,7 +1354,13 @@ function createMangoBombService(options = {}) {
     if (!game) {
       return Promise.resolve({ ok: false, reason: "inactive" });
     }
-    return enqueue(game.chatId, () => closeLobby(gameId), "lobby-close");
+    setPending(game, PENDING.CLOSE_LOBBY);
+    const instance = game.instanceSeq;
+    return enqueue(
+      game.chatId,
+      (token) => closeLobby(gameId, token, instance),
+      "lobby-close"
+    );
   }
 
   function forceExplode(gameId) {
@@ -879,18 +1368,29 @@ function createMangoBombService(options = {}) {
     if (!game) {
       return Promise.resolve({ ok: false, reason: "inactive" });
     }
-    return enqueue(game.chatId, () => explode(game.id, game.bombGeneration), "explode");
+    setPending(game, PENDING.EXPLODE, game.bombGeneration);
+    const instance = game.instanceSeq;
+    const generation = game.bombGeneration;
+    return enqueue(
+      game.chatId,
+      (token) => explode(game.id, generation, token, instance),
+      "explode"
+    );
   }
 
   function cancelAll(_reason = "shutdown") {
     const had = gamesById.size > 0;
     for (const game of Array.from(gamesById.values())) {
-      game.status = STATUS.CANCELLED;
+      setStatus(game, STATUS.CANCELLED, "shutdown");
       dropGame(game);
     }
-    for (const handle of Array.from(timerHandles)) {
-      clearHandle(handle);
+    for (const handle of Array.from(gameplayHandles)) {
+      clearGameplayHandle(handle);
     }
+    for (const handle of Array.from(utilityHandles)) {
+      clearUtility(handle);
+    }
+    watchdogHandle = null;
     if (had) {
       log("[mango-bomb] cancelled");
     }
@@ -904,13 +1404,118 @@ function createMangoBombService(options = {}) {
     cancelAll("reset");
     lastStartByChat.clear();
     queues.clear();
+    queueMeta.clear();
+    timedOutTokens.clear();
+    retiredGames.clear();
+    renderWait = Promise.resolve();
+    hungRender = null;
+    queueHang = null;
+    injectedQueueStage = null;
+    injectedQueueHangStage = null;
+    injectedRenderMode = null;
     editMessage = null;
     awardXpFn = null;
     walletReminderFn = null;
   }
 
+  function deadlineLabel(game) {
+    if (!game || !Number.isFinite(game.bombDeadline)) {
+      return "none";
+    }
+    return nowFn() >= game.bombDeadline ? "expired" : "future";
+  }
+
+  function holderLabel(game) {
+    if (!game || game.status !== STATUS.RUNNING) {
+      return "ABSENT";
+    }
+    return game.currentHolder && game.alive.has(String(game.currentHolder))
+      ? "PRESENT"
+      : "ABSENT";
+  }
+
+  function getDebugSnapshot(chatId) {
+    const game =
+      chatId != null
+        ? activeGameForChat(chatId)
+        : Array.from(gamesByChat.values()).find(
+            (row) =>
+              row.status !== STATUS.FINISHED && row.status !== STATUS.CANCELLED
+          ) || null;
+    const meta = game ? queueMeta.get(String(game.chatId)) : null;
+    const now = nowFn();
+    if (!game) {
+      return {
+        status: STATUS.IDLE,
+        communityBusy: isMangoBombOpen(),
+      };
+    }
+    return {
+      status: game.status,
+      round: game.roundNumber,
+      players: game.players.size,
+      alive: game.alive.size,
+      holder: holderLabel(game),
+      deadline: deadlineLabel(game),
+      lobbyTimer: hasActiveLobbyTimer(game),
+      countdownTimer: hasActiveCountdownTimer(game),
+      bombTimer: hasActiveBombTimer(game),
+      pauseTimer: hasActivePauseTimer(game),
+      pendingTransition: pendingType(game) || "none",
+      queuePending: Boolean(meta),
+      queueStage: meta ? meta.stage : "none",
+      queueAgeMs: meta ? Math.max(0, now - meta.startedAt) : 0,
+      generation: game.bombGeneration,
+      renderRevision: game.renderRevision,
+      lastStage: game.lastStage || "none",
+      lastProgressMsAgo: Math.max(0, now - (game.lastProgressAt || now)),
+      communityBusy: true,
+    };
+  }
+
+  function formatBombDebug(snapshot) {
+    if (!snapshot || snapshot.status === STATUS.IDLE) {
+      return [
+        "🥭💣 Bomb debug",
+        "",
+        "status: idle",
+        `communityBusy: ${yn(Boolean(snapshot && snapshot.communityBusy))}`,
+      ].join("\n");
+    }
+    return [
+      "🥭💣 Bomb debug",
+      "",
+      `status: ${snapshot.status}`,
+      `round: ${snapshot.round}`,
+      `players: ${snapshot.players}`,
+      `alive: ${snapshot.alive}`,
+      `holder: ${snapshot.holder}`,
+      `deadline: ${snapshot.deadline}`,
+      "",
+      `lobbyTimer: ${yn(snapshot.lobbyTimer)}`,
+      `countdownTimer: ${yn(snapshot.countdownTimer)}`,
+      `bombTimer: ${yn(snapshot.bombTimer)}`,
+      `pauseTimer: ${yn(snapshot.pauseTimer)}`,
+      "",
+      `pendingTransition: ${snapshot.pendingTransition}`,
+      "",
+      `queuePending: ${yn(snapshot.queuePending)}`,
+      `queueStage: ${snapshot.queueStage}`,
+      `queueAgeMs: ${snapshot.queueAgeMs}`,
+      "",
+      `generation: ${snapshot.generation}`,
+      `renderRevision: ${snapshot.renderRevision}`,
+      "",
+      `lastStage: ${snapshot.lastStage}`,
+      `lastProgressMsAgo: ${snapshot.lastProgressMsAgo}`,
+      "",
+      `communityBusy: ${yn(snapshot.communityBusy)}`,
+    ].join("\n");
+  }
+
   return {
     STATUS,
+    PENDING,
     LOBBY_MS: lobbyMs,
     LOBBY_COUNTDOWN_MS: countdownMs,
     BOMB_MIN_MS: bombMinMs,
@@ -924,6 +1529,9 @@ function createMangoBombService(options = {}) {
     XP_WIN,
     DAILY_ROUND_CAP,
     STALE_CALLBACK,
+    RENDER_TIMEOUT_MS: renderTimeoutMs,
+    QUEUE_TIMEOUT_MS: queueTimeoutMs,
+    WATCHDOG_MS: watchdogMs,
     startLobby,
     tryJoin,
     tryPass,
@@ -937,7 +1545,15 @@ function createMangoBombService(options = {}) {
     getPendingTimerCount,
     getActiveBombTimerCount,
     getActiveCountdownTimerCount,
+    hasActiveLobbyTimer: (gameId) => hasActiveLobbyTimer(gamesById.get(gameId)),
+    hasActiveCountdownTimer: (gameId) =>
+      hasActiveCountdownTimer(gamesById.get(gameId)),
+    hasActiveBombTimer: (gameId) => hasActiveBombTimer(gamesById.get(gameId)),
+    hasActivePauseTimer: (gameId) => hasActivePauseTimer(gamesById.get(gameId)),
     whenIdle,
+    whenQueueIdle,
+    getDebugSnapshot,
+    formatBombDebug,
     setEditMessageHandler(fn) {
       editMessage = typeof fn === "function" ? fn : null;
     },
@@ -952,10 +1568,17 @@ function createMangoBombService(options = {}) {
       if (!game) {
         return Promise.resolve({ ok: false, reason: "stale", toast: STALE_CALLBACK });
       }
-      return enqueue(game.chatId, async () => {
+      return enqueue(game.chatId, (token) => {
+        if (!isLiveTask(token)) {
+          return { ok: false, reason: "queue-timeout", toast: STALE_CALLBACK };
+        }
         const result = tryJoin(input);
         if (result.ok) {
-          result.rendered = await renderLobbyMessage(gamesById.get(input.gameId));
+          const live = gamesById.get(input.gameId);
+          result.rendered = Boolean(live && live.messageId != null);
+          if (live) {
+            renderLobbyMessage(live);
+          }
         }
         return result;
       }, "join");
@@ -965,16 +1588,67 @@ function createMangoBombService(options = {}) {
       if (!game) {
         return Promise.resolve({ ok: false, reason: "stale", toast: STALE_CALLBACK });
       }
-      return enqueue(game.chatId, () => tryPass(input), "pass");
+      return enqueue(game.chatId, (token) => {
+        if (!isLiveTask(token)) {
+          return { ok: false, reason: "queue-timeout", toast: STALE_CALLBACK };
+        }
+        const result = tryPass(input);
+        if (result.ok) {
+          const live = gamesById.get(input.gameId);
+          if (live) {
+            queueRender(live, result.text, result.extra, "pass");
+          }
+        }
+        return result;
+      }, "pass");
     },
     injectQueueThrow(stage) {
       injectedQueueStage = stage;
+    },
+    injectQueueHang(stage) {
+      injectedQueueHangStage = stage;
+      queueHang = null;
+    },
+    resolveQueueHang() {
+      if (queueHang && typeof queueHang.resolve === "function") {
+        queueHang.resolve();
+      }
+      queueHang = null;
+      injectedQueueHangStage = null;
     },
     injectRenderThrow() {
       injectedRenderMode = "throw";
     },
     injectRenderHang() {
       injectedRenderMode = "hang";
+      hungRender = null;
+    },
+    resolveHungRenders() {
+      if (hungRender && typeof hungRender.resolve === "function") {
+        hungRender.resolve();
+      }
+      hungRender = null;
+      injectedRenderMode = null;
+    },
+    clearGameplayTimersForTests(gameId) {
+      const game = gamesById.get(gameId);
+      if (!game) {
+        return false;
+      }
+      clearGameTimers(game);
+      clearPending(game);
+      return true;
+    },
+    masqueradeStaleTimerFieldForTests(gameId, type = "bomb") {
+      const game = gamesById.get(gameId);
+      if (!game || !game.timers) {
+        return false;
+      }
+      game.timers[type] = { fake: true };
+      return true;
+    },
+    invariantsHoldForTests(gameId) {
+      return invariantsHold(gamesById.get(gameId));
     },
     reset,
     clearAllTimers,
@@ -990,6 +1664,11 @@ const defaultService = createMangoBombService();
 
 module.exports = {
   STATUS,
+  PENDING: {
+    EXPLODE: "explode",
+    CLOSE_LOBBY: "close-lobby",
+    NEXT_ROUND: "next-round",
+  },
   LOBBY_MS,
   LOBBY_COUNTDOWN_MS,
   BOMB_MIN_MS,
@@ -1004,6 +1683,9 @@ module.exports = {
   DAILY_ROUND_CAP,
   STALE_CALLBACK,
   RENDER_TIMEOUT_MS,
+  QUEUE_TIMEOUT_MS,
+  WATCHDOG_MS,
+  WATCHDOG_GRACE_MS,
   INTERNAL_CANCEL_TEXT,
   parseMangoBombCallbackData,
   joinCallbackData,

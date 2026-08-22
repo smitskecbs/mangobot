@@ -6,6 +6,10 @@
 const { Markup } = require("telegraf");
 const { isPrivateChat, isGroupChat } = require("../utils/botMenu");
 const {
+  isAdmin,
+  awardMangoBombXp,
+} = require("../services/points");
+const {
   isCommunityChallengeBusy,
   getCommunityBusyReason,
 } = require("../services/communityGameState");
@@ -15,7 +19,6 @@ const {
   parseMangoBombCallbackData,
   STALE_CALLBACK,
 } = require("../services/mangoBomb");
-const { awardMangoBombXp } = require("../services/points");
 const { reminderForBlockedXp } = require("../services/xpWalletGate");
 const { logError } = require("../utils/logger");
 const {
@@ -243,27 +246,32 @@ async function handleMangoBombCallback(ctx, options = {}) {
   }
 
   await answer(parsed.action === "join" ? "Joined!" : "Passed!");
+}
 
-  const shouldEdit =
-    result.text &&
-    typeof ctx.editMessageText === "function" &&
-    !(parsed.action === "join" && result.rendered);
-  if (shouldEdit) {
-    try {
-      await ctx.editMessageText(
-        result.text,
-        result.extra || emptyInlineKeyboardExtra()
-      );
-    } catch (err) {
-      const desc = err && (err.description || err.message || "");
-      if (!String(desc).toLowerCase().includes("message is not modified")) {
-        logError(
-          "[mango-bomb] render failed stage=callback",
-          err && err.message ? err.message : err
-        );
-      }
-    }
+async function handleBombDebug(ctx, options = {}) {
+  if (!ctx || !ctx.from) {
+    return;
   }
+  if (!isPrivateChat(ctx)) {
+    return;
+  }
+  if (!isAdmin(ctx.from.id)) {
+    return;
+  }
+  const runtime =
+    options.runtime ||
+    (typeof options.getRuntimeFn === "function"
+      ? options.getRuntimeFn()
+      : getMangoBombRuntime());
+  const snapshot =
+    typeof runtime.getDebugSnapshot === "function"
+      ? runtime.getDebugSnapshot()
+      : { status: "idle", communityBusy: false };
+  const text =
+    typeof runtime.formatBombDebug === "function"
+      ? runtime.formatBombDebug(snapshot)
+      : "🥭💣 Bomb debug\n\nstatus: idle\ncommunityBusy: no";
+  return ctx.reply(text);
 }
 
 module.exports = (bot) => {
@@ -273,6 +281,14 @@ module.exports = (bot) => {
     Promise.resolve(handleMangoBomb(ctx)).catch((err) => {
       logError(
         "[mango-bomb] internal error stage=start",
+        err && err.message ? err.message : err
+      );
+    })
+  );
+  bot.command("bombdebug", (ctx) =>
+    Promise.resolve(handleBombDebug(ctx)).catch((err) => {
+      logError(
+        "[mango-bomb] internal error stage=debug",
         err && err.message ? err.message : err
       );
     })
@@ -293,6 +309,7 @@ module.exports = (bot) => {
 
 module.exports.handleMangoBomb = handleMangoBomb;
 module.exports.handleMangoBombCallback = handleMangoBombCallback;
+module.exports.handleBombDebug = handleBombDebug;
 module.exports.wireMangoBombRuntime = wireMangoBombRuntime;
 module.exports.PRIVATE_MANGO_BOMB_TEXT = PRIVATE_MANGO_BOMB_TEXT;
 module.exports.MANGO_BOMB_TOPIC_REQUIRED_TEXT = MANGO_BOMB_TOPIC_REQUIRED_TEXT;
