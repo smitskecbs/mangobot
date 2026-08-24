@@ -12,6 +12,12 @@ const {
   DEFAULT_PAIR_COOLDOWN_MS,
 } = require("./pvpSessionManager");
 const { isAllowedChatFightChat } = require("./chatFight");
+const {
+  GAME_TYPE,
+  FINAL_STATE,
+  buildFinalGameText,
+  logGameCleanup,
+} = require("../utils/gameCleanup");
 
 const GAME_ID = "tictactoe";
 
@@ -219,10 +225,12 @@ ${x.displayName} ${MARK_X} vs ${o.displayName} ${MARK_O}
 Good game! 🥭`;
 }
 
-function buildExpiredText() {
-  return `⏱ TIC-TAC-TOE EXPIRED
-
-No opponent joined in time.`;
+function buildExpiredText(session) {
+  const joined = Boolean(session && session.players && session.players.X);
+  return buildFinalGameText(
+    GAME_TYPE.TICTACTOE,
+    joined ? FINAL_STATE.NOT_ENOUGH : FINAL_STATE.EMPTY
+  );
 }
 
 function renderMessage(session, xpResult) {
@@ -252,7 +260,7 @@ function renderMessage(session, xpResult) {
     };
   }
   if (session.status === STATUS.EXPIRED) {
-    return { text: buildExpiredText(), extra: emptyInlineKeyboardExtra() };
+    return { text: buildExpiredText(session), extra: emptyInlineKeyboardExtra() };
   }
   return { text: "🎮 TIC-TAC-TOE", extra: emptyInlineKeyboardExtra() };
 }
@@ -378,6 +386,11 @@ function createTicTacToeService(options = {}) {
       session.endReason = "join-timeout";
       manager.clearTimers(session);
       manager.clearActiveIndex(session);
+      const joined = Boolean(session.players && session.players.X);
+      logGameCleanup(
+        GAME_TYPE.TICTACTOE,
+        joined ? FINAL_STATE.NOT_ENOUGH : FINAL_STATE.EMPTY
+      );
       return { ok: true, session: snapshot(session), rendered: renderMessage(session) };
     });
     if (locked.ok && onSessionEnded) {

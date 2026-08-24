@@ -18,12 +18,17 @@ const {
   getMangoBombRuntime,
   parseMangoBombCallbackData,
   STALE_CALLBACK,
+  STATUS,
 } = require("../services/mangoBomb");
 const { reminderForBlockedXp } = require("../services/xpWalletGate");
 const { logError } = require("../utils/logger");
 const {
   emptyInlineKeyboardExtra,
 } = require("../utils/expiredMessageCleanup");
+const {
+  GAME_TYPE,
+  stripStaleCallbackButtons,
+} = require("../utils/gameCleanup");
 const {
   assertCanStartInteractiveGame,
   withCtxThreadExtra,
@@ -93,6 +98,11 @@ function wireMangoBombRuntime(runtime, botOrTelegram, options = {}) {
   }
 
   if (telegram && typeof telegram.sendMessage === "function") {
+    if (typeof runtime.setSendMessageHandler === "function") {
+      runtime.setSendMessageHandler((chatId, text, extra) =>
+        telegram.sendMessage(chatId, text, extra || emptyInlineKeyboardExtra())
+      );
+    }
     runtime.setWalletReminderHandler((userId, result, chatId, threadId) => {
       const text = reminderForBlockedXp(userId, result);
       if (!text) {
@@ -242,6 +252,37 @@ async function handleMangoBombCallback(ctx, options = {}) {
 
   if (!result || !result.ok) {
     await answer((result && result.toast) || STALE_CALLBACK);
+    const live =
+      parsed.gameId && runtime && typeof runtime.getGame === "function"
+        ? runtime.getGame(parsed.gameId)
+        : null;
+    const over =
+      !live ||
+      live.status === STATUS.FINISHED ||
+      live.status === STATUS.CANCELLED;
+    if (!over) {
+      return;
+    }
+    const finalUi =
+      parsed.gameId && runtime && typeof runtime.getFinalUi === "function"
+        ? runtime.getFinalUi(parsed.gameId)
+        : null;
+    const cbMessage =
+      ctx.callbackQuery && ctx.callbackQuery.message
+        ? ctx.callbackQuery.message
+        : null;
+    const sameEndedMessage =
+      !finalUi ||
+      finalUi.messageId == null ||
+      !cbMessage ||
+      cbMessage.message_id == null ||
+      String(cbMessage.message_id) === String(finalUi.messageId);
+    if (sameEndedMessage) {
+      await stripStaleCallbackButtons(ctx, {
+        gameType: GAME_TYPE.MANGOBOMB,
+        text: finalUi && finalUi.text,
+      });
+    }
     return;
   }
 

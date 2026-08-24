@@ -10,6 +10,15 @@ const { sanitizePvpDisplayName } = require("./pvpSessionManager");
 const { XP_WALLET_GAME_LOCKED_LINE } = require("./xpWalletGate");
 const { log, error: logError } = require("../utils/logger");
 const { emptyInlineKeyboardExtra } = require("../utils/expiredMessageCleanup");
+const {
+  GAME_OVER_TOAST,
+  FINAL_STATE,
+  GAME_TYPE,
+  buildFinalGameText,
+  logGameCleanup,
+  logCleanupRenderFailed,
+  emptyGameKeyboardExtra,
+} = require("../utils/gameCleanup");
 
 const STATUS = Object.freeze({
   IDLE: "idle",
@@ -38,7 +47,7 @@ const XP_PARTICIPATE = 1;
 const XP_SURVIVE = 1;
 const XP_WIN = 5;
 const DAILY_ROUND_CAP = 1;
-const STALE_CALLBACK = "This ManGo Bomb round is over.";
+const STALE_CALLBACK = GAME_OVER_TOAST;
 const RENDER_TIMEOUT_MS = 5_000;
 const QUEUE_TIMEOUT_MS = 5_000;
 const WATCHDOG_MS = 5_000;
@@ -155,11 +164,15 @@ function buildWinnerText(name, xpLine) {
 }
 
 function buildCancelledText() {
-  return [
-    "🥭💣 ManGo Bomb cancelled.",
-    "",
-    "Need at least 2 players to start.",
-  ].join("\n");
+  return buildFinalGameText(GAME_TYPE.MANGOBOMB, FINAL_STATE.NOT_ENOUGH);
+}
+
+function buildEmptyLobbyText() {
+  return buildFinalGameText(GAME_TYPE.MANGOBOMB, FINAL_STATE.EMPTY);
+}
+
+function buildNotEnoughPlayersText() {
+  return buildFinalGameText(GAME_TYPE.MANGOBOMB, FINAL_STATE.NOT_ENOUGH);
 }
 
 function yn(value) {
@@ -229,6 +242,10 @@ function createMangoBombService(options = {}) {
   let injectedRenderMode = null;
   let hungRender = null;
   const retiredGames = new Map();
+  const finalUiByGameId = new Map();
+  let sendMessage = null;
+  let winnerUiWait = Promise.resolve();
+  let injectedSendMode = null;
 
   function utilityTimeout(fn, delay) {
     const handle = setTimeoutFn(() => {
@@ -537,11 +554,17 @@ function createMangoBombService(options = {}) {
       `[mango-bomb] invariant fail status=${game.status} reason=${reason || stage || "unknown"}`
     );
     log("[mango-bomb] recovery action=cancel");
+    logGameCleanup(GAME_TYPE.MANGOBOMB, FINAL_STATE.CANCELLED);
     setStatus(game, STATUS.CANCELLED, "recovery");
     clearPending(game);
     clearGameTimers(game);
     bumpRevision(game);
-    queueRender(game, INTERNAL_CANCEL_TEXT, emptyInlineKeyboardExtra(), "cancel");
+    retainFinalUi(game, {
+      kind: "cancel",
+      text: INTERNAL_CANCEL_TEXT,
+      extra: emptyGameKeyboardExtra(),
+    });
+    queueRender(game, INTERNAL_CANCEL_TEXT, emptyGameKeyboardExtra(), "cancel");
     dropGame(game);
   }
 
@@ -626,7 +649,11 @@ function createMangoBombService(options = {}) {
   }
 
   function whenIdle(chatId) {
-    return Promise.all([whenQueueIdle(chatId), renderWait]);
+    return Promise.all([whenQueueIdle(chatId), renderWait, winnerUiWait]);
+  }
+
+  function whenWinnerUiIdle() {
+    return winnerUiWait;
   }
 
   function snapshot(game, includeInternal = false) {
@@ -690,6 +717,49 @@ function createMangoBombService(options = {}) {
     stopWatchdogIfIdle();
   }
 
+  function retainFinalUi(game, payload) {
+    const ui = {
+      gameId: game.id,
+      instanceSeq: game.instanceSeq,
+      chatId: game.chatId,
+      threadId: game.threadId,
+      messageId: game.messageId,
+      text: payload.text,
+      extra: payload.extra || emptyGameKeyboardExtra(),
+      renderRevision: game.renderRevision,
+      kind: payload.kind || "cancel",
+      winnerUiState: "pending",
+      fallbackSent: false,
+    };
+    finalUiByGameId.set(game.id, ui);
+    return ui;
+  }
+
+  function trackWinnerUi(promise) {
+    const settled = Promise.resolve(promise).then(
+      () => undefined,
+      () => undefined
+    );
+    winnerUiWait = winnerUiWait.then(
+      () => settled,
+      () => settled
+    );
+    return settled;
+  }
+
+  function shouldApplyLateWinnerEdit(ui, revision) {
+    if (!ui || ui.renderRevision !== revision) {
+      return false;
+    }
+    if (ui.winnerUiState === "visible") {
+      return false;
+    }
+    if (ui.fallbackSent && ui.winnerUiState !== "failed") {
+      return false;
+    }
+    return true;
+  }
+
   function queueRender(game, text, extra, stage) {
     if (!game) {
       return Promise.resolve();
@@ -701,20 +771,50 @@ function createMangoBombService(options = {}) {
   }
 
   async function renderRevision(game, text, extra, stage, revision) {
-    if (!game || game.messageId == null || typeof editMessage !== "function") {
-      return;
+    const result = await attemptBoundedEdit({
+      gameId: game && game.id,
+      chatId: game && game.chatId,
+      messageId: game && game.messageId,
+      text,
+      extra,
+      stage,
+      revision,
+    });
+    if (
+      !result.ok &&
+      !result.stale &&
+      !result.skipped &&
+      (stage === "lobby-close" || stage === "cancel")
+    ) {
+      logCleanupRenderFailed(GAME_TYPE.MANGOBOMB);
     }
-    const gameId = game.id;
-    const chatId = game.chatId;
-    const messageId = game.messageId;
+    return result;
+  }
+
+  async function attemptBoundedEdit({
+    gameId,
+    chatId,
+    messageId,
+    text,
+    extra,
+    stage,
+    revision,
+  }) {
+    if (gameId == null || messageId == null || typeof editMessage !== "function") {
+      return { ok: false, skipped: true };
+    }
     if (!isRevisionCurrent(gameId, revision)) {
       log(`[mango-bomb] stale render skipped revision=${revision}`);
-      return;
+      return { ok: false, stale: true };
     }
     if (injectedRenderMode === "throw") {
       injectedRenderMode = null;
-      logError(`[mango-bomb] render failed stage=${stage}`);
-      return;
+      if (stage === "winner") {
+        logError("[mango-bomb] render failed stage=winner");
+      } else {
+        logError(`[mango-bomb] render failed stage=${stage}`);
+      }
+      return { ok: false, thrown: true };
     }
     const shouldHang = injectedRenderMode === "hang";
     if (shouldHang) {
@@ -730,7 +830,13 @@ function createMangoBombService(options = {}) {
         }
         await hungRender.promise;
       }
-      if (!isRevisionCurrent(gameId, revision)) {
+      if (stage === "winner") {
+        const ui = finalUiByGameId.get(gameId);
+        if (!shouldApplyLateWinnerEdit(ui, revision)) {
+          log(`[mango-bomb] stale render skipped revision=${revision}`);
+          return { stale: true };
+        }
+      } else if (!isRevisionCurrent(gameId, revision)) {
         log(`[mango-bomb] stale render skipped revision=${revision}`);
         return { stale: true };
       }
@@ -738,7 +844,7 @@ function createMangoBombService(options = {}) {
         chatId,
         messageId,
         text,
-        extra || emptyInlineKeyboardExtra()
+        extra || emptyGameKeyboardExtra()
       );
     });
     try {
@@ -755,11 +861,18 @@ function createMangoBombService(options = {}) {
       });
       const result = await Promise.race([work, timeout]);
       if (result && result.stale) {
-        return;
+        return { ok: false, stale: true };
       }
-      if (!isRevisionCurrent(gameId, revision)) {
+      if (stage === "winner") {
+        const ui = finalUiByGameId.get(gameId);
+        if (!shouldApplyLateWinnerEdit(ui, revision) && ui && ui.winnerUiState === "visible") {
+          return { ok: true, duplicate: true };
+        }
+      } else if (!isRevisionCurrent(gameId, revision)) {
         log(`[mango-bomb] stale render skipped revision=${revision}`);
+        return { ok: false, stale: true };
       }
+      return { ok: true };
     } catch (err) {
       if (err && err.code === "ETIMEDOUT") {
         log(`[mango-bomb] render timeout stage=${stage}`);
@@ -767,12 +880,69 @@ function createMangoBombService(options = {}) {
           () => undefined,
           () => undefined
         );
-        return;
+        return { ok: false, timedOut: true };
       }
       if (!isMessageNotModifiedError(err)) {
         logError(`[mango-bomb] render failed stage=${stage}`);
+        return { ok: false, thrown: true };
       }
+      return { ok: true };
     }
+  }
+
+  async function sendWinnerFallback(ui) {
+    if (!ui || ui.fallbackSent) {
+      return;
+    }
+    ui.fallbackSent = true;
+    ui.winnerUiState = "fallback-sending";
+    log("[mango-bomb] winner edit failed fallback=send");
+    if (typeof sendMessage !== "function") {
+      ui.winnerUiState = "failed";
+      log("[mango-bomb] winner fallback failed");
+      return;
+    }
+    try {
+      if (injectedSendMode === "throw") {
+        injectedSendMode = null;
+        throw new Error("winner-fallback-failed");
+      }
+      const extra = emptyGameKeyboardExtra();
+      if (ui.threadId != null) {
+        extra.message_thread_id = ui.threadId;
+      }
+      await sendMessage(ui.chatId, ui.text, extra);
+      ui.winnerUiState = "visible";
+      log("[mango-bomb] winner fallback sent");
+    } catch (_err) {
+      ui.winnerUiState = "failed";
+      log("[mango-bomb] winner fallback failed");
+    }
+  }
+
+  async function deliverWinnerUi(ui) {
+    if (!ui || ui.kind !== "winner") {
+      return;
+    }
+    ui.winnerUiState = "edit-attempt";
+    const editResult = await attemptBoundedEdit({
+      gameId: ui.gameId,
+      chatId: ui.chatId,
+      messageId: ui.messageId,
+      text: ui.text,
+      extra: ui.extra,
+      stage: "winner",
+      revision: ui.renderRevision,
+    });
+    if (editResult.ok) {
+      ui.winnerUiState = "visible";
+      log("[mango-bomb] winner edit succeeded");
+      return;
+    }
+    if (ui.winnerUiState === "visible" || ui.fallbackSent) {
+      return;
+    }
+    await sendWinnerFallback(ui);
   }
 
   function lobbyRemainingSeconds(game) {
@@ -935,9 +1105,12 @@ function createMangoBombService(options = {}) {
     }
     log("[mango-bomb] winner");
     bumpRevision(game);
-    queueRender(game, buildWinnerText(name, xpLine), emptyInlineKeyboardExtra(), "winner");
+    const text = buildWinnerText(name, xpLine);
+    const extra = emptyGameKeyboardExtra();
+    const ui = retainFinalUi(game, { kind: "winner", text, extra });
     const winnerRef = winnerId;
     dropGame(game);
+    trackWinnerUi(deliverWinnerUi(ui));
     return { ok: true, status: STATUS.FINISHED, winnerId: winnerRef };
   }
 
@@ -982,7 +1155,13 @@ function createMangoBombService(options = {}) {
       }
       setStatus(game, STATUS.CANCELLED, "empty");
       bumpRevision(game);
-      queueRender(game, "🥭💣 ManGo Bomb ended.", emptyInlineKeyboardExtra(), "explode");
+      const endedText = "🥭💣 ManGo Bomb ended.";
+      retainFinalUi(game, {
+        kind: "cancel",
+        text: endedText,
+        extra: emptyGameKeyboardExtra(),
+      });
+      queueRender(game, endedText, emptyGameKeyboardExtra(), "explode");
       dropGame(game);
       return { ok: true, status: STATUS.CANCELLED };
     }
@@ -1054,12 +1233,17 @@ function createMangoBombService(options = {}) {
     clearGameTimer(game, "countdown");
     clearPending(game, PENDING.CLOSE_LOBBY);
     if (game.players.size < MIN_PLAYERS) {
+      const empty = game.players.size === 0;
+      const state = empty ? FINAL_STATE.EMPTY : FINAL_STATE.NOT_ENOUGH;
+      const text = empty ? buildEmptyLobbyText() : buildNotEnoughPlayersText();
       setStatus(game, STATUS.CANCELLED, "lobby-cancel");
       log("[mango-bomb] cancelled");
+      logGameCleanup(GAME_TYPE.MANGOBOMB, state);
       bumpRevision(game);
-      queueRender(game, buildCancelledText(), emptyInlineKeyboardExtra(), "lobby-close");
+      retainFinalUi(game, { kind: "cancel", text, extra: emptyGameKeyboardExtra() });
+      queueRender(game, text, emptyGameKeyboardExtra(), "lobby-close");
       dropGame(game);
-      return { ok: true, status: STATUS.CANCELLED };
+      return { ok: true, status: STATUS.CANCELLED, empty };
     }
     for (const [userId, row] of game.players.entries()) {
       const result = award(userId, row.displayName, XP_PARTICIPATE, game.id);
@@ -1164,9 +1348,23 @@ function createMangoBombService(options = {}) {
     if (now - last < startCooldownMs) {
       return { ok: false, reason: "cooldown" };
     }
-    const id =
-      String(randomIdFn()).replace(/[^a-f0-9]/gi, "").slice(0, 16) ||
-      crypto.randomBytes(4).toString("hex");
+    let id = "";
+    for (let i = 0; i < 8; i += 1) {
+      const raw = i === 0 ? randomIdFn() : crypto.randomBytes(4).toString("hex");
+      const candidate = String(raw).replace(/[^a-f0-9]/gi, "").slice(0, 16);
+      if (
+        candidate &&
+        !gamesById.has(candidate) &&
+        !retiredGames.has(candidate) &&
+        !finalUiByGameId.has(candidate)
+      ) {
+        id = candidate;
+        break;
+      }
+    }
+    if (!id) {
+      id = crypto.randomBytes(8).toString("hex");
+    }
     const game = {
       id,
       chatId,
@@ -1407,13 +1605,17 @@ function createMangoBombService(options = {}) {
     queueMeta.clear();
     timedOutTokens.clear();
     retiredGames.clear();
+    finalUiByGameId.clear();
     renderWait = Promise.resolve();
+    winnerUiWait = Promise.resolve();
     hungRender = null;
     queueHang = null;
     injectedQueueStage = null;
     injectedQueueHangStage = null;
     injectedRenderMode = null;
+    injectedSendMode = null;
     editMessage = null;
+    sendMessage = null;
     awardXpFn = null;
     walletReminderFn = null;
   }
@@ -1552,10 +1754,30 @@ function createMangoBombService(options = {}) {
     hasActivePauseTimer: (gameId) => hasActivePauseTimer(gamesById.get(gameId)),
     whenIdle,
     whenQueueIdle,
+    whenWinnerUiIdle,
     getDebugSnapshot,
     formatBombDebug,
+    getFinalUi(gameId) {
+      const ui = finalUiByGameId.get(gameId);
+      if (!ui) {
+        return null;
+      }
+      return {
+        kind: ui.kind,
+        text: ui.text,
+        extra: ui.extra,
+        winnerUiState: ui.winnerUiState,
+        fallbackSent: ui.fallbackSent,
+        renderRevision: ui.renderRevision,
+        threadId: ui.threadId,
+        messageId: ui.messageId,
+      };
+    },
     setEditMessageHandler(fn) {
       editMessage = typeof fn === "function" ? fn : null;
+    },
+    setSendMessageHandler(fn) {
+      sendMessage = typeof fn === "function" ? fn : null;
     },
     setAwardXpHandler(fn) {
       awardXpFn = typeof fn === "function" ? fn : null;
@@ -1622,6 +1844,9 @@ function createMangoBombService(options = {}) {
     injectRenderHang() {
       injectedRenderMode = "hang";
       hungRender = null;
+    },
+    injectSendThrow() {
+      injectedSendMode = "throw";
     },
     resolveHungRenders() {
       if (hungRender && typeof hungRender.resolve === "function") {
@@ -1694,6 +1919,8 @@ module.exports = {
   passKeyboard,
   buildLobbyText,
   buildCancelledText,
+  buildEmptyLobbyText,
+  buildNotEnoughPlayersText,
   createMangoBombService,
   getMangoBombRuntime: () => defaultService,
   startLobby: (input) => defaultService.startLobby(input),

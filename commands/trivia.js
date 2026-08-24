@@ -21,6 +21,11 @@ const {
   emptyInlineKeyboardExtra,
 } = require("../utils/expiredMessageCleanup");
 const {
+  GAME_OVER_TOAST,
+  GAME_TYPE,
+  stripStaleCallbackButtons,
+} = require("../utils/gameCleanup");
+const {
   GAMES_TOPIC_REQUIRED_MESSAGE,
   assertCanStartInteractiveGame,
   withCtxThreadExtra,
@@ -214,18 +219,19 @@ async function handleTriviaAnswer(ctx, options = {}) {
   if (!result.ok) {
     if (result.reason === "already-answered") {
       await answer("You already answered.");
+    } else if (result.reason === "question-closed") {
+      await answer("This question is over.");
     } else if (
       result.reason === "finished" ||
       result.reason === "inactive" ||
-      result.reason === "question-closed"
+      result.reason === "invalid-session"
     ) {
-      await answer("This question is over.");
+      await answer(GAME_OVER_TOAST);
+      await stripStaleCallbackButtons(ctx, { gameType: GAME_TYPE.TRIVIA });
     } else if (result.reason === "wrong-chat") {
       await answer("Wrong chat.");
     } else if (result.reason === "bot") {
       await answer("Bots cannot play.");
-    } else if (result.reason === "invalid-session") {
-      await answer("This trivia is no longer available.");
     } else {
       await answer();
     }

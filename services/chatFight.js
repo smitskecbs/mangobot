@@ -5,10 +5,13 @@
  */
 
 const { Markup } = require("telegraf");
+const { scheduleExpiredMessageCleanup } = require("../utils/expiredMessageCleanup");
 const {
-  emptyInlineKeyboardExtra,
-  scheduleExpiredMessageCleanup,
-} = require("../utils/expiredMessageCleanup");
+  GAME_TYPE,
+  FINAL_STATE,
+  logGameCleanup,
+  emptyGameKeyboardExtra,
+} = require("../utils/gameCleanup");
 
 const CHAT_FIGHT_DURATION_MS = 60 * 1000;
 const CHAT_FIGHT_REVEAL_WAIT_MS = 5 * 60 * 1000;
@@ -492,9 +495,10 @@ function createChatFightService(options = {}) {
     if (!fight) {
       return;
     }
-    const extra = emptyInlineKeyboardExtra();
+    const extra = emptyGameKeyboardExtra();
     const chatId = fight.chatId;
     const messageId = fight.messageId;
+    logGameCleanup(GAME_TYPE.CHATFIGHT, FINAL_STATE.EXPIRED);
 
     const afterEdit = () => {
       if (messageId != null) {
@@ -722,7 +726,7 @@ function createChatFightService(options = {}) {
       ) {
         return { ok: false, reason: "already-revealed", fight: snapshotFight() };
       }
-      return { ok: false, reason: "inactive" };
+      return { ok: false, reason: "inactive", fight: snapshotFight() };
     }
     if (chatId != null && String(fight.chatId) !== String(chatId)) {
       return { ok: false, reason: "wrong-chat" };
@@ -761,9 +765,9 @@ function createChatFightService(options = {}) {
             ? editMessage
             : null;
         if (edit && fight.messageId != null) {
-          Promise.resolve(edit(fight.chatId, fight.messageId, text)).catch(
-            () => {}
-          );
+          Promise.resolve(
+            edit(fight.chatId, fight.messageId, text, emptyGameKeyboardExtra())
+          ).catch(() => {});
         } else if (typeof fight.sendMessage === "function") {
           Promise.resolve(fight.sendMessage(fight.chatId, text)).catch(() => {});
         }

@@ -17,12 +17,39 @@ const {
 const {
   scheduleExpiredMessageCleanup,
 } = require("../utils/expiredMessageCleanup");
+const {
+  GAME_OVER_TOAST,
+  GAME_TYPE,
+  stripStaleCallbackButtons,
+} = require("../utils/gameCleanup");
+
+function pvpGameType(parsed) {
+  return parsed && parsed.game === "connect4"
+    ? GAME_TYPE.CONNECT4
+    : GAME_TYPE.TICTACTOE;
+}
 
 function cbAnswer(ctx, text) {
   if (ctx && typeof ctx.answerCbQuery === "function") {
     return ctx.answerCbQuery(text || "").catch(() => {});
   }
   return Promise.resolve();
+}
+
+async function rejectStalePvp(ctx, runtime, parsed) {
+  await cbAnswer(ctx, GAME_OVER_TOAST);
+  let text;
+  if (runtime && parsed && typeof runtime.getSession === "function") {
+    const session = runtime.getSession(parsed.sessionId);
+    if (session && typeof runtime.renderMessage === "function") {
+      const rendered = runtime.renderMessage(session);
+      text = rendered && rendered.text;
+    }
+  }
+  await stripStaleCallbackButtons(ctx, {
+    gameType: pvpGameType(parsed),
+    text,
+  });
 }
 
 async function safeEdit(ctx, text, extra) {
@@ -190,12 +217,10 @@ async function handlePvpCallback(ctx, options = {}) {
         await cbAnswer(ctx, "This challenge is already full.");
       } else if (result.reason === "bot") {
         await cbAnswer(ctx, "Bots cannot play.");
-      } else if (result.reason === "invalid-session") {
-        await cbAnswer(ctx, "This challenge is no longer available.");
+      } else if (result.reason === "invalid-session" || result.reason === "not-waiting") {
+        await rejectStalePvp(ctx, runtime, parsed);
       } else if (result.reason === "wrong-chat") {
         await cbAnswer(ctx, "Wrong chat.");
-      } else if (result.reason === "not-waiting") {
-        await cbAnswer(ctx, "This challenge is no longer open.");
       } else {
         await cbAnswer(ctx, "Could not join.");
       }
@@ -229,11 +254,10 @@ async function handlePvpCallback(ctx, options = {}) {
         await cbAnswer(ctx, "That column is full.");
       } else if (
         result.reason === "already-ended" ||
-        result.reason === "not-active"
+        result.reason === "not-active" ||
+        result.reason === "invalid-session"
       ) {
-        await cbAnswer(ctx, "This game is already over.");
-      } else if (result.reason === "invalid-session") {
-        await cbAnswer(ctx, "This game is no longer available.");
+        await rejectStalePvp(ctx, runtime, parsed);
       } else if (result.reason === "wrong-chat") {
         await cbAnswer(ctx, "Wrong chat.");
       } else {

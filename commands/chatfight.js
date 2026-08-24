@@ -13,11 +13,19 @@ const {
   revealFight,
   setFightMessageId,
   REVEAL_CALLBACK_DATA,
+  buildRevealTimeoutMessage,
+  buildTimeoutMessage,
 } = require("../services/chatFight");
 const {
   isCommunityChallengeBusy,
   getCommunityBusyReason,
 } = require("../services/communityGameState");
+const {
+  GAME_OVER_TOAST,
+  GAME_TYPE,
+  stripStaleCallbackButtons,
+  emptyGameKeyboardExtra,
+} = require("../utils/gameCleanup");
 
 /**
  * @param {object} ctx
@@ -198,8 +206,17 @@ async function handleChatFightReveal(ctx, options = {}) {
 
   if (!result.ok) {
     if (typeof ctx.answerCbQuery === "function") {
-      await ctx.answerCbQuery("No challenge to reveal.").catch(() => undefined);
+      await ctx.answerCbQuery(GAME_OVER_TOAST).catch(() => undefined);
     }
+    const snap = result.fight;
+    const text =
+      snap && snap.status === "expired" && snap.revealedAt
+        ? buildTimeoutMessage(snap)
+        : buildRevealTimeoutMessage();
+    await stripStaleCallbackButtons(ctx, {
+      gameType: GAME_TYPE.CHATFIGHT,
+      text,
+    });
     return;
   }
 
@@ -209,12 +226,12 @@ async function handleChatFightReveal(ctx, options = {}) {
 
   try {
     if (typeof ctx.editMessageText === "function") {
-      await ctx.editMessageText(result.prompt);
+      await ctx.editMessageText(result.prompt, emptyGameKeyboardExtra());
     }
   } catch (_err) {
     // Fallback: post challenge if edit fails (e.g. message too old).
     if (typeof ctx.reply === "function") {
-      await ctx.reply(result.prompt);
+      await ctx.reply(result.prompt, emptyGameKeyboardExtra());
     }
   }
 }

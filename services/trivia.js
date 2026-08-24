@@ -22,6 +22,14 @@ const {
 const {
   emptyInlineKeyboardExtra,
 } = require("../utils/expiredMessageCleanup");
+const {
+  GAME_TYPE,
+  FINAL_STATE,
+  buildFinalGameText,
+  logGameCleanup,
+  logCleanupRenderFailed,
+  emptyGameKeyboardExtra,
+} = require("../utils/gameCleanup");
 
 const TRIVIA_ROUND_QUESTIONS = 5;
 const TRIVIA_QUESTION_TIMEOUT_MS = 60 * 1000;
@@ -541,6 +549,7 @@ function createTriviaService(options = {}) {
     };
     session.lastXpSummary = xpSummary;
     const text = buildFinalScoreboardText(session, xpSummary);
+    logGameCleanup(GAME_TYPE.TRIVIA, FINAL_STATE.FINISHED);
 
     const payload = {
       session: snapshot(true),
@@ -592,6 +601,11 @@ function createTriviaService(options = {}) {
     if (session) {
       session.status = STATUS.ABORTED;
       session.abortReason = reason || "aborted";
+      logGameCleanup(GAME_TYPE.TRIVIA, FINAL_STATE.CANCELLED);
+      const text = buildFinalGameText(GAME_TYPE.TRIVIA, FINAL_STATE.CANCELLED);
+      Promise.resolve(safeEdit(text, emptyGameKeyboardExtra())).catch(() => {
+        logCleanupRenderFailed(GAME_TYPE.TRIVIA);
+      });
     }
     return { ok: false, reason: reason || "aborted", session: snapshot(true) };
   }

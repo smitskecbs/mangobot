@@ -188,7 +188,11 @@ function createService(overrides = {}) {
   service.setEditMessageHandler(async (chatId, messageId, text, extra) => {
     edits.push({ chatId, messageId, text, extra });
   });
-  return { service, timers, edits };
+  const sends = [];
+  service.setSendMessageHandler(async (chatId, text, extra) => {
+    sends.push({ chatId, text, extra });
+  });
+  return { service, timers, edits, sends };
 }
 
 function join(service, gameId, userId, name, extra = {}) {
@@ -1649,6 +1653,7 @@ async function main() {
     });
     await service.forceExplode(gameId);
     await service.whenQueueIdle(COMMUNITY_CHAT);
+    await service.whenWinnerUiIdle();
     assert.strictEqual(service.getStatus(COMMUNITY_CHAT), STATUS.IDLE);
     assert.ok(edits.some((row) => row.text.includes("WINNER")));
     service.resolveHungRenders();
@@ -1843,7 +1848,7 @@ async function main() {
     const gameId = await startWithPlayers(service, ["Kevin", "Lojay"]);
     await service.forceLobbyEnd(gameId);
     await service.forceExplode(gameId);
-    await service.whenQueueIdle(COMMUNITY_CHAT);
+    await service.whenIdle(COMMUNITY_CHAT);
     assert.strictEqual(service.getStatus(COMMUNITY_CHAT), STATUS.IDLE);
     assert.strictEqual(edits.filter((row) => row.text.includes("WINNER")).length, 1);
     assert.strictEqual(pointsOf(pFile, USER_A), 1);
@@ -1853,6 +1858,96 @@ async function main() {
     assert.strictEqual(pointsOf(pFile, USER_A), 1);
     assert.strictEqual(pointsOf(pFile, USER_B), 7);
     assert.strictEqual(rankUpBlocked, true);
+  });
+
+  await runTest("cleanup. zero players empty copy; one player not-enough; 2+ starts", async () => {
+    const { service: emptySvc, timers: emptyTimers, edits: emptyEdits } = createService({
+      lobbyMs: 400,
+      watchdogMs: 10_000,
+    });
+    const emptyId = emptySvc.startLobby({ chatId: COMMUNITY_CHAT, threadId: 123 }).gameId;
+    emptySvc.setMessageId(emptyId, 9001);
+    emptyTimers.advance(400);
+    await emptySvc.whenIdle(COMMUNITY_CHAT);
+    assert.strictEqual(emptySvc.getStatus(COMMUNITY_CHAT), STATUS.IDLE);
+    assert.ok(emptyEdits.some((row) => row.text.includes("No one joined this round.")));
+    assert.ok(
+      emptyEdits.some(
+        (row) =>
+          row.extra &&
+          row.extra.reply_markup &&
+          row.extra.reply_markup.inline_keyboard.length === 0
+      )
+    );
+    assert.strictEqual(emptySvc.isMangoBombOpen(), false);
+    assert.strictEqual(emptySvc.startLobby({ chatId: COMMUNITY_CHAT, threadId: 123 }).ok, true);
+
+    const { service: oneSvc, timers: oneTimers, edits: oneEdits } = createService({
+      lobbyMs: 400,
+      watchdogMs: 10_000,
+    });
+    const oneId = oneSvc.startLobby({ chatId: COMMUNITY_CHAT, threadId: 123 }).gameId;
+    oneSvc.setMessageId(oneId, 9001);
+    join(oneSvc, oneId, USER_A, "Kevin");
+    oneTimers.advance(400);
+    await oneSvc.whenIdle(COMMUNITY_CHAT);
+    assert.ok(oneEdits.some((row) => row.text.includes("Not enough players joined.")));
+    assert.strictEqual(oneSvc.isMangoBombOpen(), false);
+
+    const { service: twoSvc } = createService({ watchdogMs: 10_000 });
+    const twoId = await startWithPlayers(twoSvc, ["Kevin", "Lojay"]);
+    const closed = await twoSvc.forceLobbyEnd(twoId);
+    assert.strictEqual(closed.status, STATUS.RUNNING);
+  });
+
+  await runTest("winner. edit success skips fallback; timeout/throw send once", async () => {
+    const { service, edits, sends } = createService({ watchdogMs: 10_000 });
+    const gameId = await startWithPlayers(service, ["Kevin", "Lojay"]);
+    await service.forceLobbyEnd(gameId);
+    await service.forceExplode(gameId);
+    await service.whenIdle(COMMUNITY_CHAT);
+    assert.ok(edits.some((row) => row.text.includes("WINNER")));
+    assert.strictEqual(sends.length, 0);
+    const ui = service.getFinalUi(gameId);
+    assert.strictEqual(ui.winnerUiState, "visible");
+    assert.strictEqual(ui.fallbackSent, false);
+
+    const hang = createService({ renderTimeoutMs: 20, watchdogMs: 10_000 });
+    const hangId = await startWithPlayers(hang.service, ["Kevin", "Lojay"]);
+    await hang.service.forceLobbyEnd(hangId);
+    assert.strictEqual(hang.service.isMangoBombOpen(), true);
+    hang.service.injectRenderHang();
+    await hang.service.forceExplode(hangId);
+    assert.strictEqual(hang.service.getStatus(COMMUNITY_CHAT), STATUS.IDLE);
+    assert.strictEqual(hang.service.isMangoBombOpen(), false);
+    hang.timers.advance(20);
+    await hang.service.whenWinnerUiIdle();
+    assert.strictEqual(hang.sends.length, 1);
+    assert.ok(hang.sends[0].text.includes("WINNER"));
+    assert.strictEqual(hang.sends[0].extra.message_thread_id, 123);
+    hang.service.resolveHungRenders();
+    await Promise.resolve();
+    assert.strictEqual(hang.sends.length, 1);
+
+    const thrown = createService({ watchdogMs: 10_000 });
+    const throwId = await startWithPlayers(thrown.service, ["Kevin", "Lojay"]);
+    await thrown.service.forceLobbyEnd(throwId);
+    thrown.service.injectRenderThrow();
+    await thrown.service.forceExplode(throwId);
+    await thrown.service.whenWinnerUiIdle();
+    assert.strictEqual(thrown.sends.length, 1);
+    assert.ok(thrown.sends[0].text.includes("WINNER"));
+
+    const fail = createService({ watchdogMs: 10_000 });
+    const failId = await startWithPlayers(fail.service, ["Kevin", "Lojay"]);
+    await fail.service.forceLobbyEnd(failId);
+    fail.service.injectRenderThrow();
+    fail.service.injectSendThrow();
+    await fail.service.forceExplode(failId);
+    await fail.service.whenWinnerUiIdle();
+    assert.strictEqual(fail.service.getStatus(COMMUNITY_CHAT), STATUS.IDLE);
+    assert.strictEqual(fail.service.getFinalUi(failId).winnerUiState, "failed");
+    assert.strictEqual(fail.service.startLobby({ chatId: COMMUNITY_CHAT, threadId: 123 }).ok, true);
   });
 
   for (const file of prodRoots) {

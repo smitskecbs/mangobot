@@ -154,12 +154,12 @@ async function main() {
     assert.ok(
       require("../services/ticTacToe")
         .renderMessage({ status: "expired" })
-        .text.includes("TIC-TAC-TOE EXPIRED")
+        .text.includes("Tic-Tac-Toe cancelled")
     );
     assert.ok(
       require("../services/connectFour")
         .renderMessage({ status: "expired" })
-        .text.includes("CONNECT FOUR EXPIRED")
+        .text.includes("Connect Four cancelled")
     );
   });
 
@@ -179,7 +179,8 @@ async function main() {
     assert.strictEqual(started.ok, true);
     const expired = ttt.expireJoin(started.session.id);
     assert.strictEqual(expired.ok, true);
-    assert.ok(expired.rendered.text.includes("TIC-TAC-TOE EXPIRED"));
+    assert.ok(expired.rendered.text.includes("Tic-Tac-Toe cancelled"));
+    assert.ok(expired.rendered.text.includes("No one joined this round."));
     assert.deepStrictEqual(
       expired.rendered.extra.reply_markup.inline_keyboard,
       []
@@ -202,7 +203,8 @@ async function main() {
     assert.strictEqual(started.ok, true);
     const expired = c4.expireJoin(started.session.id);
     assert.strictEqual(expired.ok, true);
-    assert.ok(expired.rendered.text.includes("CONNECT FOUR EXPIRED"));
+    assert.ok(expired.rendered.text.includes("Connect Four cancelled"));
+    assert.ok(expired.rendered.text.includes("No one joined this round."));
     assert.deepStrictEqual(
       expired.rendered.extra.reply_markup.inline_keyboard,
       []
