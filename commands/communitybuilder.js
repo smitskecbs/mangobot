@@ -26,6 +26,7 @@ const {
   BUILDER_PERIOD,
   REFERRALS_PAGE_SIZE,
 } = require("../services/communityBuilder");
+const { getActiveTitle, formatTitleLabel } = require("../services/mangoShop");
 
 const BUILDER_CALLBACK = Object.freeze({
   HOME: "cbuild:home",
@@ -113,6 +114,15 @@ function milestoneIcon(row) {
   return "▫️";
 }
 
+function communityTitleLabel(userId, options = {}) {
+  try {
+    const title = getActiveTitle(userId, options.shopFile);
+    return title ? formatTitleLabel(title) : "None";
+  } catch (_err) {
+    return "None";
+  }
+}
+
 function builderHomeText(summary) {
   return [
     "🤝 Community Builder",
@@ -120,6 +130,7 @@ function builderHomeText(summary) {
     "Grow the ManGo community by inviting real members. 🥭",
     "",
     `Builder Points: ${summary.builderPoints}`,
+    `Community Title: ${summary.activeTitleLabel || "None"}`,
     `Valid referrals: ${summary.validReferrals}`,
   ].join("\n");
 }
@@ -380,6 +391,7 @@ function handleCommunityBuilder(ctx, options = {}) {
     return undefined;
   }
   const summary = builderSummary(ctx.from.id, options);
+  summary.activeTitleLabel = communityTitleLabel(ctx.from.id, options);
   return ctx.reply(builderHomeText(summary), builderHomeExtra());
 }
 
@@ -510,6 +522,7 @@ async function handleBuilderCallback(ctx, options = {}) {
 
   if (data === BUILDER_CALLBACK.HOME) {
     const summary = builderSummary(ctx.from.id, options);
+    summary.activeTitleLabel = communityTitleLabel(ctx.from.id, options);
     return showMenuView(ctx, builderHomeText(summary), builderHomeExtra());
   }
 

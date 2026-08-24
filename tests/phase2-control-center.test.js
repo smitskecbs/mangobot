@@ -78,6 +78,7 @@ const prodRoots = [
   path.join(__dirname, "..", "data", "wallet-links.json"),
   path.join(__dirname, "..", "data", "community-builders.json"),
   path.join(__dirname, "..", "data", "member-rewards.json"),
+  path.join(__dirname, "..", "data", "mango-shop.json"),
 ];
 const prodMtimes = {};
 for (const file of prodRoots) {
@@ -233,6 +234,7 @@ function harness() {
   const walletFile = path.join(tempDir, `wallet-${n}.json`);
   const rewardsFile = path.join(tempDir, `rewards-${n}.json`);
   const storeFile = path.join(tempDir, `builder-${n}.json`);
+  const shopFile = path.join(tempDir, `shop-${n}.json`);
   fs.writeFileSync(pointsFile, JSON.stringify({ users: {} }, null, 2), "utf8");
   fs.writeFileSync(walletFile, JSON.stringify({ users: {} }, null, 2), "utf8");
   fs.writeFileSync(rewardsFile, JSON.stringify({ rewards: {}, byUser: {} }, null, 2), "utf8");
@@ -319,6 +321,7 @@ function harness() {
     walletFile,
     rewardsFile,
     storeFile,
+    shopFile,
     now: NOW,
   };
 
@@ -328,6 +331,7 @@ function harness() {
     walletFile,
     rewardsFile,
     storeFile,
+    shopFile,
     wallets: [aliceWallet, bobWallet, lojayWallet],
   };
 }
@@ -523,6 +527,9 @@ async function main() {
   assert.ok(text.includes("Rank: Tree"));
   assert.ok(text.includes("Builder BP this week: 8"));
   assert.ok(text.includes("Builder BP all-time: 14"));
+  assert.ok(text.includes("ManGo Loot: 0"));
+  assert.ok(text.includes("Active title: None"));
+  assert.ok(text.includes("Owned titles: 0"));
   assert.ok(text.includes("Active days this week: 5"));
   assert.ok(text.includes("Wallet: 🟡 Registered") || text.includes("Wallet: 🟢 Verified"));
   assert.ok(text.includes("Pending Mystery Gifts: 0"));

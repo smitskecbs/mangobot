@@ -336,6 +336,7 @@ runTest("menu bevat private opties zonder PvP", () => {
     MENU_LABELS.REWARDS,
     MENU_LABELS.HELP,
     MENU_LABELS.COMMUNITY_BUILDER,
+    MENU_LABELS.SHOP,
     MENU_LABELS.PHASE2,
     MENU_LABELS.SNAKE,
     MENU_LABELS.BOUNCH,
@@ -351,7 +352,7 @@ runTest("menu bevat private opties zonder PvP", () => {
   assert.deepStrictEqual(rows, [
     [MENU_LABELS.MY_PROFILE, MENU_LABELS.WALLET],
     [MENU_LABELS.REWARDS, MENU_LABELS.HELP],
-    [MENU_LABELS.COMMUNITY_BUILDER],
+    [MENU_LABELS.COMMUNITY_BUILDER, MENU_LABELS.SHOP],
     [MENU_LABELS.SNAKE, MENU_LABELS.BOUNCH],
   ]);
   assert.ok(rows.every((row) => row.length <= 2));
@@ -599,6 +600,7 @@ runTest("/menu group toont Wallet en Rewards op hoofdmenu", () => {
     "🎁 Rewards",
     "ℹ️ Help",
     "🤝 Community Builder",
+    "🏪 ManGo Shop",
   ]);
   const streakLabels = labels.filter((t) => /streak/i.test(t));
   assert.strictEqual(streakLabels.length, 0);
@@ -705,7 +707,7 @@ runTest("/menu private toont reply-keyboard hint", () => {
   assert.deepStrictEqual(rows, [
     [MENU_LABELS.MY_PROFILE, MENU_LABELS.WALLET],
     [MENU_LABELS.REWARDS, MENU_LABELS.HELP],
-    [MENU_LABELS.COMMUNITY_BUILDER],
+    [MENU_LABELS.COMMUNITY_BUILDER, MENU_LABELS.SHOP],
     [MENU_LABELS.SNAKE, MENU_LABELS.BOUNCH],
   ]);
   assert.ok(rows.every((row) => row.length <= 2));
@@ -865,6 +867,7 @@ runTest("Rankings / Games / Profile / Back navigation edits menu", async () => {
       "🎁 Rewards",
       "ℹ️ Help",
       "🤝 Community Builder",
+      "🏪 ManGo Shop",
     ]
   );
 });
@@ -1046,7 +1049,9 @@ runTest("/menu command skips daily activity", () => {
 runTest("private My Profile submenu layout and Back", async () => {
   const ctx = createMockCtx({ chatType: "private" });
   handlePrivateProfile(ctx);
-  assert.strictEqual(ctx.replies[0].text, GROUP_PROFILE_TEXT);
+  assert.ok(ctx.replies[0].text.includes(GROUP_PROFILE_TEXT));
+  assert.ok(ctx.replies[0].text.includes("Community Title:"));
+  assert.ok(ctx.replies[0].text.includes("ManGo Loot:"));
   const rows = getInlineRows(ctx.replies[0].extra);
   assert.ok(rows.every((row) => row.length <= 2));
   assert.deepStrictEqual(

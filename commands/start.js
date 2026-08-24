@@ -10,6 +10,7 @@ const { handleWallet } = require("./wallet");
 const { handleRewards } = require("./rewards");
 const { handlePresale } = require("./presale");
 const { handleCommunityBuilder } = require("./communitybuilder");
+const { handleShop } = require("./shop");
 const {
   isPrivateChat,
   getPrivateMenuKeyboard,
@@ -49,6 +50,9 @@ function handleStart(ctx, options = {}) {
     }
     if (payload === "builder") {
       return handleCommunityBuilder(ctx, options);
+    }
+    if (payload === "shop") {
+      return handleShop(ctx, options);
     }
 
     return ctx.reply(WELCOME_MESSAGE, getPrivateMenuKeyboard(ctx));

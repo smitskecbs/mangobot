@@ -19,6 +19,8 @@ const { handleWallet } = require("./wallet");
 const { handleRewards } = require("./rewards");
 const { handlePresale } = require("./presale");
 const { handleCommunityBuilder } = require("./communitybuilder");
+const { handleShop } = require("./shop");
+const { formatShopProgressBlock } = require("../services/mangoShop");
 const {
   handleStreak,
   handleStreakRecord,
@@ -67,6 +69,7 @@ const GROUP_MENU_ACTION_RE = new RegExp(
     GROUP_MENU_CALLBACK.TRIVIA,
     GROUP_MENU_CALLBACK.MANGOBOMB,
     GROUP_MENU_CALLBACK.BUILDER,
+    GROUP_MENU_CALLBACK.SHOP,
   ].join("|")})$`
 );
 
@@ -116,11 +119,16 @@ function handleMenu(ctx) {
  * Private My Profile submenu.
  * @param {object} ctx
  */
-function handlePrivateProfile(ctx) {
+function handlePrivateProfile(ctx, options = {}) {
   if (!isPrivateChat(ctx)) {
     return undefined;
   }
-  return ctx.reply(GROUP_PROFILE_TEXT, getPrivateProfileMenuExtra());
+  const block =
+    ctx.from && typeof formatShopProgressBlock === "function"
+      ? formatShopProgressBlock(ctx.from.id, options)
+      : "";
+  const text = block ? `${GROUP_PROFILE_TEXT}\n\n${block}` : GROUP_PROFILE_TEXT;
+  return ctx.reply(text, getPrivateProfileMenuExtra());
 }
 
 /**
@@ -252,6 +260,9 @@ async function handleGroupMenuCallback(ctx, options = {}) {
   if (data === GROUP_MENU_CALLBACK.BUILDER) {
     return handleCommunityBuilder(ctx, options);
   }
+  if (data === GROUP_MENU_CALLBACK.SHOP) {
+    return handleShop(ctx, options);
+  }
 }
 
 module.exports = (bot) => {
@@ -342,6 +353,13 @@ module.exports = (bot) => {
       return;
     }
     return handleCommunityBuilder(ctx);
+  });
+
+  bot.hears(MENU_LABELS.SHOP, (ctx) => {
+    if (!isPrivateChat(ctx)) {
+      return;
+    }
+    return handleShop(ctx);
   });
 };
 

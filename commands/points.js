@@ -12,13 +12,19 @@ const {
   isPrivateChat,
   getPrivateMenuKeyboard,
 } = require("../utils/botMenu");
+const { formatShopProgressBlock } = require("../services/mangoShop");
 
 function handlePoints(ctx, options = {}) {
   const data = loadPoints(options.pointsFile);
   const user = getUserRecord(data, ctx.from.id);
   const walletVerified = isWalletVerified(ctx.from.id, options.walletFile);
   const walletRegistered = isWalletRegistered(ctx.from.id, options.walletFile);
-  const text = formatPointsCard(user, { walletVerified, walletRegistered });
+  let text = formatPointsCard(user, { walletVerified, walletRegistered });
+  try {
+    text = `${text}\n\n${formatShopProgressBlock(ctx.from.id, options)}`;
+  } catch (_err) {
+    // Shop store unavailable: still show XP/rank.
+  }
 
   if (isPrivateChat(ctx)) {
     return ctx.reply(text, getPrivateMenuKeyboard());

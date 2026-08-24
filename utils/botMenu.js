@@ -11,6 +11,7 @@ const MENU_LABELS = Object.freeze({
   REWARDS: "🎁 Rewards",
   HELP: "ℹ️ Help",
   COMMUNITY_BUILDER: "🤝 Community Builder",
+  SHOP: "🏪 ManGo Shop",
   PHASE2: "🚀 Phase 2 Control Center",
   SNAKE: "🎮 Play Snake",
   BOUNCH: "🏀 Play Bounch",
@@ -42,7 +43,7 @@ Check your XP, streak, wallet status and rewards.`;
 const GROUP_PROGRESS_TEXT = GROUP_PROFILE_TEXT;
 
 const PRIVATE_MENU_HINT =
-  "🥭 Use the menu below to open your profile, wallet, rewards, community builder, or play.";
+  "🥭 Use the menu below to open your profile, wallet, rewards, community builder, shop, or play.";
 
 const GROUP_MENU_CALLBACK = Object.freeze({
   RANKINGS: "gmenu:rankings",
@@ -64,6 +65,7 @@ const GROUP_MENU_CALLBACK = Object.freeze({
   TRIVIA: "gmenu:trivia",
   MANGOBOMB: "gmenu:mangobomb",
   BUILDER: "gmenu:builder",
+  SHOP: "gmenu:shop",
 });
 
 const PRIVATE_HUB_CALLBACK = Object.freeze({
@@ -220,7 +222,7 @@ function getPrivateMenuKeyboard(ctxOrUserId) {
   const rows = [
     [MENU_LABELS.MY_PROFILE, MENU_LABELS.WALLET],
     [MENU_LABELS.REWARDS, MENU_LABELS.HELP],
-    [MENU_LABELS.COMMUNITY_BUILDER],
+    [MENU_LABELS.COMMUNITY_BUILDER, MENU_LABELS.SHOP],
     [MENU_LABELS.SNAKE, MENU_LABELS.BOUNCH],
   ];
   if (isAdmin(keyboardUserId(ctxOrUserId))) {
@@ -294,6 +296,12 @@ function getGroupMenuExtra(ctx) {
         "🤝 Community Builder",
         "builder",
         GROUP_MENU_CALLBACK.BUILDER
+      ),
+      privateDeepLinkButton(
+        ctx,
+        "🏪 ManGo Shop",
+        "shop",
+        GROUP_MENU_CALLBACK.SHOP
       ),
     ],
   ]);
@@ -456,7 +464,8 @@ function isGroupMenuCallback(data) {
     data === GROUP_MENU_CALLBACK.CONNECT4 ||
     data === GROUP_MENU_CALLBACK.TRIVIA ||
     data === GROUP_MENU_CALLBACK.MANGOBOMB ||
-    data === GROUP_MENU_CALLBACK.BUILDER
+    data === GROUP_MENU_CALLBACK.BUILDER ||
+    data === GROUP_MENU_CALLBACK.SHOP
   );
 }
 

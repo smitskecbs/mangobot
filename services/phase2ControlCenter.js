@@ -26,6 +26,14 @@ const {
   BUILDER_PERIOD,
 } = require("./communityBuilder");
 const {
+  getLootAccount,
+} = require("./mangoLoot");
+const {
+  getActiveTitle,
+  getOwnedTitleIds,
+  formatTitleLabel,
+} = require("./mangoShop");
+const {
   createReward,
   loadRewardsStore,
   listRewardsForUser,
@@ -348,6 +356,7 @@ function fileOptions(options = {}) {
     walletFile: options.walletFile,
     rewardsFile: options.rewardsFile,
     storeFile: options.storeFile,
+    shopFile: options.shopFile,
     deliveryFile: options.deliveryFile,
     now,
   };
@@ -870,6 +879,19 @@ function loadMemberDetail(userId, options = {}) {
   const builder = getBuilderMemberSnapshot(userId, builderOpts(files));
   const wallet = getMemberWalletProfile(userId, files);
   const rewards = countRewardsForUser(userId, files.rewardsFile);
+  let mangoLoot = 0;
+  let activeTitleLabel = "None";
+  let ownedTitleCount = 0;
+  try {
+    mangoLoot = getLootAccount(userId, files.shopFile).balance;
+    ownedTitleCount = getOwnedTitleIds(userId, files.shopFile).length;
+    const activeTitle = getActiveTitle(userId, files.shopFile);
+    activeTitleLabel = activeTitle ? formatTitleLabel(activeTitle) : "None";
+  } catch (_err) {
+    mangoLoot = 0;
+    activeTitleLabel = "None";
+    ownedTitleCount = 0;
+  }
   return {
     userId: String(userId),
     displayName: sanitizeDisplayName(
@@ -880,6 +902,9 @@ function loadMemberDetail(userId, options = {}) {
     rank,
     weeklyBp: builder.weeklyBp,
     alltimeBp: builder.alltimeBp,
+    mangoLoot,
+    activeTitleLabel,
+    ownedTitleCount,
     activeDays: consecutiveActiveDaysThisWeek(user, files.now),
     referralsActive: builder.activeReferrals,
     walletStatus: walletStatusLabel(wallet),
@@ -901,6 +926,9 @@ function buildMemberView(detail, now = Date.now()) {
     `Rank: ${detail.rank.title}`,
     `Builder BP this week: ${detail.weeklyBp}`,
     `Builder BP all-time: ${detail.alltimeBp}`,
+    `ManGo Loot: ${detail.mangoLoot}`,
+    `Active title: ${detail.activeTitleLabel}`,
+    `Owned titles: ${detail.ownedTitleCount}`,
     `Active days this week: ${formatActiveDays(detail.activeDays)}`,
     `Wallet: ${detail.walletStatus}`,
     `Pending Mystery Gifts: ${detail.pendingRewards}`,
