@@ -728,7 +728,7 @@ function getCombinedRankUpReply(
   return getAutomaticTriggerReply(activityResult, userName);
 }
 
-function finalizeXpAward(userId, userName, result) {
+function finalizeXpAward(userId, userName, result, extras) {
   try {
     const { queueRankUpAnnouncement } = require("./rankUpAnnounce");
     queueRankUpAnnouncement({
@@ -739,6 +739,14 @@ function finalizeXpAward(userId, userName, result) {
     });
   } catch (_err) {
     logError("[rank-up] queue failed");
+  }
+  try {
+    require("./dailyQuest").afterXpAward(userId, result, extras || {});
+  } catch (err) {
+    logError(
+      "[daily-quest] afterXpAward failed:",
+      err && err.message ? err.message : err
+    );
   }
   return result;
 }
@@ -851,8 +859,9 @@ function buildGameXpResult(pointsBefore, pointsAfter, dailyPlay, unlock) {
  * First verified Snake play per UTC day → +1 XP.
  */
 function awardSnakeGameXp(userId, userName, pointsFile = POINTS_FILE, walletFile) {
+  const questExtras = { game: "snake", walletFile, pointsFile };
   if (!canEarnXp(userId, walletFile)) {
-    return finalizeXpAward(userId, userName, walletLockedSnapshot(userId, pointsFile));
+    return finalizeXpAward(userId, userName, walletLockedSnapshot(userId, pointsFile), questExtras);
   }
 
   return finalizeXpAward(
@@ -877,7 +886,8 @@ function awardSnakeGameXp(userId, userName, pointsFile = POINTS_FILE, walletFile
     }
 
     return buildGameXpResult(pointsBefore, user.points, dailyPlay, 0);
-  }, pointsFile)
+  }, pointsFile),
+    questExtras
   );
 }
 
@@ -886,6 +896,7 @@ function awardSnakeGameXp(userId, userName, pointsFile = POINTS_FILE, walletFile
  * Direct level L unlocks 1..L when above current bounchUnlockedMax.
  */
 function awardBounchGameXp(userId, userName, level, pointsFile = POINTS_FILE, walletFile) {
+  const questExtras = { game: "bounch", walletFile, pointsFile };
   if (typeof level !== "number" || !Number.isInteger(level) || level < 1 || level > 7) {
     return finalizeXpAward(userId, userName, {
       awarded: false,
@@ -898,7 +909,7 @@ function awardBounchGameXp(userId, userName, level, pointsFile = POINTS_FILE, wa
   }
 
   if (!canEarnXp(userId, walletFile)) {
-    return finalizeXpAward(userId, userName, walletLockedSnapshot(userId, pointsFile));
+    return finalizeXpAward(userId, userName, walletLockedSnapshot(userId, pointsFile), questExtras);
   }
 
   return finalizeXpAward(
@@ -933,7 +944,8 @@ function awardBounchGameXp(userId, userName, level, pointsFile = POINTS_FILE, wa
     }
 
     return buildGameXpResult(pointsBefore, user.points, dailyPlay, unlock);
-  }, pointsFile)
+  }, pointsFile),
+    questExtras
   );
 }
 
@@ -1094,12 +1106,14 @@ function awardTriggerPoints(userId, userName, trigger, pointsFile = POINTS_FILE,
  */
 function awardChatFightXp(userId, userName, pointsFile = POINTS_FILE, walletFile) {
   const pointsToAdd = 2;
+  const questExtras = { game: "chatfight", walletFile, pointsFile };
 
   if (isCommunityCompetitionExcluded(userId)) {
     return finalizeXpAward(
       userId,
       userName,
-      excludedAwardResult(userId, pointsFile, { pointsToAdd: 0 })
+      excludedAwardResult(userId, pointsFile, { pointsToAdd: 0 }),
+      questExtras
     );
   }
 
@@ -1107,7 +1121,8 @@ function awardChatFightXp(userId, userName, pointsFile = POINTS_FILE, walletFile
     return finalizeXpAward(
       userId,
       userName,
-      walletLockedSnapshot(userId, pointsFile, { pointsToAdd: 0 })
+      walletLockedSnapshot(userId, pointsFile, { pointsToAdd: 0 }),
+      questExtras
     );
   }
 
@@ -1137,7 +1152,8 @@ function awardChatFightXp(userId, userName, pointsFile = POINTS_FILE, walletFile
       rank,
       previousRank,
     };
-  }, pointsFile)
+  }, pointsFile),
+    questExtras
   );
 }
 
@@ -1212,6 +1228,7 @@ function awardTriviaRoundXp(
     typeof pointsToAdd === "number" && Number.isInteger(pointsToAdd) && pointsToAdd > 0
       ? pointsToAdd
       : TRIVIA_ROUND_WIN_XP;
+  const questExtras = { game: "trivia", walletFile, pointsFile };
 
   if (isCommunityCompetitionExcluded(userId)) {
     return finalizeXpAward(
@@ -1221,7 +1238,8 @@ function awardTriviaRoundXp(
         pointsToAdd: 0,
         rewardedRoundsToday: 0,
         dailyCap: TRIVIA_DAILY_REWARD_CAP,
-      })
+      }),
+      questExtras
     );
   }
 
@@ -1233,7 +1251,8 @@ function awardTriviaRoundXp(
         pointsToAdd: 0,
         rewardedRoundsToday: 0,
         dailyCap: TRIVIA_DAILY_REWARD_CAP,
-      })
+      }),
+      questExtras
     );
   }
 
@@ -1280,7 +1299,8 @@ function awardTriviaRoundXp(
       rank,
       previousRank,
     };
-  }, pointsFile)
+  }, pointsFile),
+    questExtras
   );
 }
 
@@ -1369,6 +1389,7 @@ function awardMangoBombXp(
       ? pointsToAdd
       : 0;
   const rid = roundId == null ? "" : String(roundId);
+  const questExtras = { game: "mangobomb", walletFile, pointsFile };
 
   if (!amount || !rid) {
     const data = readPointsSnapshot(pointsFile);
@@ -1395,7 +1416,8 @@ function awardMangoBombXp(
         pointsToAdd: 0,
         rewardedRoundsToday: 0,
         dailyCap: MANGO_BOMB_DAILY_ROUND_CAP,
-      })
+      }),
+      questExtras
     );
   }
 
@@ -1407,7 +1429,8 @@ function awardMangoBombXp(
         pointsToAdd: 0,
         rewardedRoundsToday: 0,
         dailyCap: MANGO_BOMB_DAILY_ROUND_CAP,
-      })
+      }),
+      questExtras
     );
   }
 
@@ -1462,7 +1485,8 @@ function awardMangoBombXp(
       rank,
       previousRank,
     };
-  }, pointsFile)
+  }, pointsFile),
+    questExtras
   );
 }
 
@@ -1525,6 +1549,7 @@ function getPvpRewardedWinsToday(user) {
  */
 function awardPvpWinXp(userId, userName, pointsFile = POINTS_FILE, walletFile) {
   const pointsToAdd = PVP_WIN_XP;
+  const questExtras = { game: "pvp", walletFile, pointsFile };
 
   if (isCommunityCompetitionExcluded(userId)) {
     return finalizeXpAward(
@@ -1534,7 +1559,8 @@ function awardPvpWinXp(userId, userName, pointsFile = POINTS_FILE, walletFile) {
         pointsToAdd: 0,
         rewardedWinsToday: 0,
         dailyCap: PVP_DAILY_WIN_CAP,
-      })
+      }),
+      questExtras
     );
   }
 
@@ -1546,7 +1572,8 @@ function awardPvpWinXp(userId, userName, pointsFile = POINTS_FILE, walletFile) {
         pointsToAdd: 0,
         rewardedWinsToday: 0,
         dailyCap: PVP_DAILY_WIN_CAP,
-      })
+      }),
+      questExtras
     );
   }
 
@@ -1593,7 +1620,8 @@ function awardPvpWinXp(userId, userName, pointsFile = POINTS_FILE, walletFile) {
       rank,
       previousRank,
     };
-  }, pointsFile)
+  }, pointsFile),
+    questExtras
   );
 }
 

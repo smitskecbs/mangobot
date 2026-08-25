@@ -529,7 +529,9 @@ async function main() {
   assert.ok(text.includes("Builder BP all-time: 14"));
   assert.ok(text.includes("ManGo Loot: 0"));
   assert.ok(text.includes("Active title: None"));
-  assert.ok(text.includes("Owned titles: 0"));
+    assert.ok(text.includes("Owned titles: 0"));
+    assert.ok(text.includes("Daily Quest: 0/3 today"));
+    assert.ok(text.includes("Daily streak: 0"));
   assert.ok(text.includes("Active days this week: 5"));
   assert.ok(text.includes("Wallet: 🟡 Registered") || text.includes("Wallet: 🟢 Verified"));
   assert.ok(text.includes("Pending Mystery Gifts: 0"));

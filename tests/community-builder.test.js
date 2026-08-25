@@ -816,6 +816,7 @@ async function main() {
     const groupMenu = getGroupMenuExtra(mockCtx({ chatType: "group" }));
     const labels = groupMenu.reply_markup.inline_keyboard.flat().map((b) => b.text);
     assert.ok(labels.includes("🤝 Community Builder"));
+    assert.ok(labels.includes("🎯 Daily Quest"));
     assert.ok(labels.includes("🏪 ManGo Shop"));
     assert.ok(TELEGRAM_ALLOWED_UPDATES.includes("chat_member"));
   });

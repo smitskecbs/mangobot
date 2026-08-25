@@ -115,10 +115,30 @@ function hasEligibleCommunityContent(msg) {
 }
 
 /**
- * Whether this Telegram update may claim the daily community activity award.
- * @param {object} ctx
+ * Daily Quest community slot: text or caption, not slash, not sticker/GIF-only.
+ * @param {object} msg
  * @returns {boolean}
  */
+function hasDailyQuestCommunityText(msg) {
+  if (!msg) {
+    return false;
+  }
+  if (typeof msg.text === "string" && msg.text.trim() && !isCommandText(msg.text)) {
+    return true;
+  }
+  if (typeof msg.caption === "string" && msg.caption.trim() && !isCommandText(msg.caption)) {
+    return true;
+  }
+  return false;
+}
+
+function isEligibleDailyQuestCommunityMessage(ctx) {
+  if (!isEligibleCommunityActivityMessage(ctx)) {
+    return false;
+  }
+  return hasDailyQuestCommunityText(ctx.message);
+}
+
 function isEligibleCommunityActivityMessage(ctx) {
   if (!ctx || !ctx.from || ctx.from.is_bot) {
     return false;
@@ -166,6 +186,18 @@ function processCommunityMessage(ctx, options = {}) {
         ? awardDailyActivityPoint(userId, userName, pointsFile, undefined, walletFile)
         : awardDailyActivityPoint(userId, userName);
     noteCommunityActivity();
+  }
+
+  if (!ctx.from.is_bot && isEligibleDailyQuestCommunityMessage(ctx)) {
+    try {
+      require("../services/dailyQuest").noteDailyQuestCommunity(userId, {
+        walletFile,
+        shopFile: options.shopFile,
+        now: options.now,
+      });
+    } catch (_err) {
+      // Quest tracking must never break the XP pipeline.
+    }
   }
 
   const trigger = isMenuTap ? null : detectTrigger(textForTrigger);
@@ -225,6 +257,7 @@ module.exports = (bot) => {
 module.exports.registerCommunityActivityListener = registerCommunityActivityListener;
 module.exports.shouldSkipCommunityActivity = shouldSkipCommunityActivity;
 module.exports.isEligibleCommunityActivityMessage = isEligibleCommunityActivityMessage;
+module.exports.isEligibleDailyQuestCommunityMessage = isEligibleDailyQuestCommunityMessage;
 module.exports.isServiceMessage = isServiceMessage;
 module.exports.getMessageTextForTrigger = getMessageTextForTrigger;
 module.exports.processCommunityMessage = processCommunityMessage;

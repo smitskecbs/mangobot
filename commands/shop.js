@@ -101,6 +101,7 @@ function groupShopExtra(ctx) {
 function homeKeyboard() {
   return keyboard([
     [btn("🏷️ Titles", SHOP_CALLBACK.TITLES), btn("📦 My Titles", SHOP_CALLBACK.MINE)],
+    [btn("🎯 Daily Quest", "dquest:home")],
     [btn("⬅️ Back", "phub:back")],
   ]);
 }
@@ -168,6 +169,14 @@ function buildHomeText(userId, options) {
       `XP: ${model.next.xp} / ${title.requiredXp}`,
       `BP: ${model.next.bp} / ${title.requiredBp}`,
       `Loot: ${model.next.loot} / ${title.lootPrice}`
+    );
+  }
+  if (model.quest) {
+    lines.push(
+      "",
+      "🎯 Daily Quest",
+      `Today: ${model.quest.completedToday}/3 completed`,
+      `🔥 Streak: ${model.quest.streak} days`
     );
   }
   return lines.join("\n");

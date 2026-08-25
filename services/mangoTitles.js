@@ -26,8 +26,8 @@ const TITLE_CATALOG = Object.freeze([
     id: "supporter",
     name: "ManGo Supporter",
     emoji: "🥭",
-    description: "A community member who supports ManGo.",
-    requiredXp: 50,
+    description: "An active member who supports the ManGo community.",
+    requiredXp: 100,
     requiredBp: 5,
     lootPrice: 25,
     purchasable: true,
@@ -41,8 +41,8 @@ const TITLE_CATALOG = Object.freeze([
     id: "contributor",
     name: "ManGo Contributor",
     emoji: "🤝",
-    description: "An active member who helps the ManGo community grow.",
-    requiredXp: 100,
+    description: "A community member who actively contributes and helps ManGo grow.",
+    requiredXp: 200,
     requiredBp: 15,
     lootPrice: 50,
     purchasable: true,
@@ -56,11 +56,40 @@ const TITLE_CATALOG = Object.freeze([
     id: "ambassador",
     name: "ManGo Ambassador",
     emoji: "🌟",
-    description:
-      "A respected community member who actively supports and helps ManGo grow.",
-    requiredXp: 250,
+    description: "A trusted community member who helps represent and grow ManGo.",
+    requiredXp: 500,
     requiredBp: 30,
     lootPrice: 100,
+    purchasable: true,
+    active: true,
+    availableFrom: null,
+    availableUntil: null,
+    limited: false,
+    kind: TITLE_KIND,
+  },
+  {
+    id: "guard",
+    name: "ManGo Guard",
+    emoji: "🛡️",
+    description: "A highly active and established member of the ManGo community.",
+    requiredXp: 800,
+    requiredBp: 60,
+    lootPrice: 200,
+    purchasable: true,
+    active: true,
+    availableFrom: null,
+    availableUntil: null,
+    limited: false,
+    kind: TITLE_KIND,
+  },
+  {
+    id: "elite",
+    name: "ManGo Elite",
+    emoji: "👑",
+    description: "One of ManGo's most dedicated and accomplished community members.",
+    requiredXp: 1500,
+    requiredBp: 120,
+    lootPrice: 400,
     purchasable: true,
     active: true,
     availableFrom: null,
@@ -72,16 +101,17 @@ const TITLE_CATALOG = Object.freeze([
     id: "advocate",
     name: "ManGo Advocate",
     emoji: "🏅",
-    description: "A dedicated community champion who represents ManGo values.",
+    description: "Legacy community title. No longer available in the shop.",
     requiredXp: 500,
     requiredBp: 60,
     lootPrice: 200,
-    purchasable: true,
-    active: true,
+    purchasable: false,
+    active: false,
     availableFrom: null,
     availableUntil: null,
     limited: false,
     kind: TITLE_KIND,
+    legacy: true,
   },
 ]);
 
@@ -137,7 +167,9 @@ function assertCatalogSafe(catalog = TITLE_CATALOG) {
 assertCatalogSafe(TITLE_CATALOG);
 
 function getTitleCatalog() {
-  return TITLE_CATALOG.map((row) => Object.assign({}, row));
+  return TITLE_CATALOG.filter((row) => row.active !== false).map((row) =>
+    Object.assign({}, row)
+  );
 }
 
 function getTitleById(titleId) {

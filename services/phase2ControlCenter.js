@@ -882,11 +882,21 @@ function loadMemberDetail(userId, options = {}) {
   let mangoLoot = 0;
   let activeTitleLabel = "None";
   let ownedTitleCount = 0;
+  let dailyQuestToday = "0/3";
+  let dailyStreak = 0;
   try {
     mangoLoot = getLootAccount(userId, files.shopFile).balance;
     ownedTitleCount = getOwnedTitleIds(userId, files.shopFile).length;
     const activeTitle = getActiveTitle(userId, files.shopFile);
     activeTitleLabel = activeTitle ? formatTitleLabel(activeTitle) : "None";
+    const { getDailyQuestSnapshot } = require("./dailyQuest");
+    const quest = getDailyQuestSnapshot(userId, {
+      shopFile: files.shopFile,
+      walletFile: files.walletFile,
+      now: files.now,
+    });
+    dailyQuestToday = `${quest.completedToday}/3 today`;
+    dailyStreak = quest.streak;
   } catch (_err) {
     mangoLoot = 0;
     activeTitleLabel = "None";
@@ -905,6 +915,8 @@ function loadMemberDetail(userId, options = {}) {
     mangoLoot,
     activeTitleLabel,
     ownedTitleCount,
+    dailyQuestToday,
+    dailyStreak,
     activeDays: consecutiveActiveDaysThisWeek(user, files.now),
     referralsActive: builder.activeReferrals,
     walletStatus: walletStatusLabel(wallet),
@@ -929,6 +941,8 @@ function buildMemberView(detail, now = Date.now()) {
     `ManGo Loot: ${detail.mangoLoot}`,
     `Active title: ${detail.activeTitleLabel}`,
     `Owned titles: ${detail.ownedTitleCount}`,
+    `Daily Quest: ${detail.dailyQuestToday}`,
+    `Daily streak: ${detail.dailyStreak}`,
     `Active days this week: ${formatActiveDays(detail.activeDays)}`,
     `Wallet: ${detail.walletStatus}`,
     `Pending Mystery Gifts: ${detail.pendingRewards}`,

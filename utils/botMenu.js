@@ -12,6 +12,7 @@ const MENU_LABELS = Object.freeze({
   HELP: "ℹ️ Help",
   COMMUNITY_BUILDER: "🤝 Community Builder",
   SHOP: "🏪 ManGo Shop",
+  DAILY_QUEST: "🎯 Daily Quest",
   PHASE2: "🚀 Phase 2 Control Center",
   SNAKE: "🎮 Play Snake",
   BOUNCH: "🏀 Play Bounch",
@@ -43,7 +44,7 @@ Check your XP, streak, wallet status and rewards.`;
 const GROUP_PROGRESS_TEXT = GROUP_PROFILE_TEXT;
 
 const PRIVATE_MENU_HINT =
-  "🥭 Use the menu below to open your profile, wallet, rewards, community builder, shop, or play.";
+  "🥭 Use the menu below to open your profile, wallet, daily quest, shop, or play.";
 
 const GROUP_MENU_CALLBACK = Object.freeze({
   RANKINGS: "gmenu:rankings",
@@ -66,6 +67,7 @@ const GROUP_MENU_CALLBACK = Object.freeze({
   MANGOBOMB: "gmenu:mangobomb",
   BUILDER: "gmenu:builder",
   SHOP: "gmenu:shop",
+  DAILY_QUEST: "gmenu:dquest",
 });
 
 const PRIVATE_HUB_CALLBACK = Object.freeze({
@@ -222,7 +224,8 @@ function getPrivateMenuKeyboard(ctxOrUserId) {
   const rows = [
     [MENU_LABELS.MY_PROFILE, MENU_LABELS.WALLET],
     [MENU_LABELS.REWARDS, MENU_LABELS.HELP],
-    [MENU_LABELS.COMMUNITY_BUILDER, MENU_LABELS.SHOP],
+    [MENU_LABELS.DAILY_QUEST, MENU_LABELS.SHOP],
+    [MENU_LABELS.COMMUNITY_BUILDER],
     [MENU_LABELS.SNAKE, MENU_LABELS.BOUNCH],
   ];
   if (isAdmin(keyboardUserId(ctxOrUserId))) {
@@ -293,15 +296,23 @@ function getGroupMenuExtra(ctx) {
     [
       privateDeepLinkButton(
         ctx,
-        "🤝 Community Builder",
-        "builder",
-        GROUP_MENU_CALLBACK.BUILDER
+        "🎯 Daily Quest",
+        "dailyquest",
+        GROUP_MENU_CALLBACK.DAILY_QUEST
       ),
       privateDeepLinkButton(
         ctx,
         "🏪 ManGo Shop",
         "shop",
         GROUP_MENU_CALLBACK.SHOP
+      ),
+    ],
+    [
+      privateDeepLinkButton(
+        ctx,
+        "🤝 Community Builder",
+        "builder",
+        GROUP_MENU_CALLBACK.BUILDER
       ),
     ],
   ]);
@@ -465,7 +476,8 @@ function isGroupMenuCallback(data) {
     data === GROUP_MENU_CALLBACK.TRIVIA ||
     data === GROUP_MENU_CALLBACK.MANGOBOMB ||
     data === GROUP_MENU_CALLBACK.BUILDER ||
-    data === GROUP_MENU_CALLBACK.SHOP
+    data === GROUP_MENU_CALLBACK.SHOP ||
+    data === GROUP_MENU_CALLBACK.DAILY_QUEST
   );
 }
 

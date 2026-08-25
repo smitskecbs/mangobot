@@ -269,13 +269,23 @@ function formatShopProgressBlock(userId, options = {}) {
   const title = getActiveTitle(userId, options.shopFile);
   const loot = getLootAccount(userId, options.shopFile).balance;
   const bp = readAlltimeBp(userId, options);
-  return [
+  const lines = [
     "Community Title:",
     title ? formatTitleLabel(title) : "None",
     "",
-    `ManGo Loot: ${loot} 🥭`,
+    `🥭 ManGo Loot: ${loot}`,
     `Builder BP: ${bp}`,
-  ].join("\n");
+  ];
+  try {
+    const { formatDailyQuestProgressLine } = require("./dailyQuest");
+    const quest = formatDailyQuestProgressLine(userId, options);
+    if (quest) {
+      lines.push("", quest);
+    }
+  } catch (_err) {
+    // Quest store unavailable.
+  }
+  return lines.join("\n");
 }
 
 function getShopHomeModel(userId, options = {}) {
@@ -283,7 +293,14 @@ function getShopHomeModel(userId, options = {}) {
   const xp = readLifetimeXp(userId, options.pointsFile);
   const bp = readAlltimeBp(userId, options);
   const next = nextLockedTitle(userId, options);
-  return { loot, xp, bp, next };
+  let quest = null;
+  try {
+    const { getDailyQuestSnapshot } = require("./dailyQuest");
+    quest = getDailyQuestSnapshot(userId, options);
+  } catch (_err) {
+    quest = null;
+  }
+  return { loot, xp, bp, next, quest };
 }
 
 module.exports = {

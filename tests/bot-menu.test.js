@@ -337,6 +337,7 @@ runTest("menu bevat private opties zonder PvP", () => {
     MENU_LABELS.HELP,
     MENU_LABELS.COMMUNITY_BUILDER,
     MENU_LABELS.SHOP,
+    MENU_LABELS.DAILY_QUEST,
     MENU_LABELS.PHASE2,
     MENU_LABELS.SNAKE,
     MENU_LABELS.BOUNCH,
@@ -352,7 +353,8 @@ runTest("menu bevat private opties zonder PvP", () => {
   assert.deepStrictEqual(rows, [
     [MENU_LABELS.MY_PROFILE, MENU_LABELS.WALLET],
     [MENU_LABELS.REWARDS, MENU_LABELS.HELP],
-    [MENU_LABELS.COMMUNITY_BUILDER, MENU_LABELS.SHOP],
+    [MENU_LABELS.DAILY_QUEST, MENU_LABELS.SHOP],
+    [MENU_LABELS.COMMUNITY_BUILDER],
     [MENU_LABELS.SNAKE, MENU_LABELS.BOUNCH],
   ]);
   assert.ok(rows.every((row) => row.length <= 2));
@@ -589,7 +591,7 @@ runTest("/menu group toont Wallet en Rewards op hoofdmenu", () => {
   handleMenu(ctx);
   assert.strictEqual(ctx.replies[0].text, GROUP_MENU_TEXT);
   const rows = getInlineRows(ctx.replies[0].extra);
-  assert.strictEqual(rows.length, 4);
+  assert.strictEqual(rows.length, 5);
   assert.ok(rows.every((row) => row.length <= 2));
   const labels = rows.flat().map((b) => b.text);
   assert.deepStrictEqual(labels, [
@@ -599,8 +601,9 @@ runTest("/menu group toont Wallet en Rewards op hoofdmenu", () => {
     "👛 Wallet",
     "🎁 Rewards",
     "ℹ️ Help",
-    "🤝 Community Builder",
+    "🎯 Daily Quest",
     "🏪 ManGo Shop",
+    "🤝 Community Builder",
   ]);
   const streakLabels = labels.filter((t) => /streak/i.test(t));
   assert.strictEqual(streakLabels.length, 0);
@@ -707,7 +710,8 @@ runTest("/menu private toont reply-keyboard hint", () => {
   assert.deepStrictEqual(rows, [
     [MENU_LABELS.MY_PROFILE, MENU_LABELS.WALLET],
     [MENU_LABELS.REWARDS, MENU_LABELS.HELP],
-    [MENU_LABELS.COMMUNITY_BUILDER, MENU_LABELS.SHOP],
+    [MENU_LABELS.DAILY_QUEST, MENU_LABELS.SHOP],
+    [MENU_LABELS.COMMUNITY_BUILDER],
     [MENU_LABELS.SNAKE, MENU_LABELS.BOUNCH],
   ]);
   assert.ok(rows.every((row) => row.length <= 2));
@@ -866,8 +870,9 @@ runTest("Rankings / Games / Profile / Back navigation edits menu", async () => {
       "👛 Wallet",
       "🎁 Rewards",
       "ℹ️ Help",
-      "🤝 Community Builder",
+      "🎯 Daily Quest",
       "🏪 ManGo Shop",
+      "🤝 Community Builder",
     ]
   );
 });

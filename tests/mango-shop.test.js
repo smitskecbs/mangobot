@@ -236,7 +236,7 @@ async function main() {
   });
 
   await runTest("35. group access redirects private", () => {
-    const files = filesFor(USER, { xp: 80, bp: 20, loot: 84 });
+    const files = filesFor(USER, { xp: 120, bp: 20, loot: 84 });
     const ctx = mockCtx({ userId: USER, chatType: "supergroup" });
     handleShop(ctx, shopOpts(files));
     assert.strictEqual(ctx.replies[0].text, GROUP_SHOP_TEXT);
@@ -254,7 +254,12 @@ async function main() {
     const ctx = mockCtx({ userId: USER });
     handleShop(ctx, shopOpts(files));
     assert.ok(ctx.replies[0].text.includes("🥭 ManGo Loot: 84"));
-    assert.deepStrictEqual(buttonLabels(ctx.replies[0].extra), ["🏷️ Titles", "📦 My Titles", "⬅️ Back"]);
+    assert.deepStrictEqual(buttonLabels(ctx.replies[0].extra), [
+      "🏷️ Titles",
+      "📦 My Titles",
+      "🎯 Daily Quest",
+      "⬅️ Back",
+    ]);
   });
 
   await runTest("37. titles list", () => {
@@ -263,7 +268,8 @@ async function main() {
       "🥭 ManGo Supporter",
       "🤝 ManGo Contributor",
       "🌟 ManGo Ambassador",
-      "🏅 ManGo Advocate",
+      "🛡️ ManGo Guard",
+      "👑 ManGo Elite",
       "⬅️ Back",
     ]);
   });
@@ -275,7 +281,7 @@ async function main() {
   });
 
   await runTest("39. my titles populated", () => {
-    const files = filesFor(USER, { xp: 80, bp: 20, loot: 25 });
+    const files = filesFor(USER, { xp: 120, bp: 20, loot: 25 });
     purchaseTitle(USER, "supporter", shopOpts(files));
     setActiveTitle(USER, "supporter", shopOpts(files));
     const text = buildMyTitlesText(USER, shopOpts(files));
@@ -287,7 +293,7 @@ async function main() {
     const locked = filesFor(USER, { xp: 10, bp: 0, loot: 0 });
     const lockedProgress = titleProgress(USER, getTitleById("supporter"), shopOpts(locked));
     assert.ok(!buttonLabels(titleDetailKeyboard(lockedProgress)).includes("🛒 Buy Title"));
-    const open = filesFor(USER, { xp: 80, bp: 20, loot: 25 });
+    const open = filesFor(USER, { xp: 120, bp: 20, loot: 25 });
     const openProgress = titleProgress(USER, getTitleById("supporter"), shopOpts(open));
     assert.ok(buttonLabels(titleDetailKeyboard(openProgress)).includes("🛒 Buy Title"));
   });
@@ -305,18 +311,18 @@ async function main() {
         xp: 40,
         bp: 1,
         loot: 0,
-        requiredXp: 50,
+        requiredXp: 100,
         requiredBp: 5,
         price: 25,
       },
     });
-    assert.ok(locked.includes("10 more XP"));
+    assert.ok(locked.includes("60 more XP"));
     assert.ok(locked.includes("4 more BP"));
     assert.ok(locked.includes("25 more ManGo Loot"));
   });
 
   await runTest("42. successful purchase UX", async () => {
-    const files = filesFor(USER, { xp: 80, bp: 20, loot: 120 });
+    const files = filesFor(USER, { xp: 120, bp: 20, loot: 120 });
     const ctx = mockCtx({ userId: USER, data: "shop:buy:supporter" });
     await handleShopCallback(ctx, shopOpts(files));
     const text = ctx.edits[0].text;
@@ -347,7 +353,7 @@ async function main() {
   });
 
   await runTest("44. stale/invalid callback safe", async () => {
-    const files = filesFor(USER, { xp: 80, bp: 20, loot: 25 });
+    const files = filesFor(USER, { xp: 120, bp: 20, loot: 25 });
     const stale = mockCtx({ userId: USER, data: "shop:buy:nope" });
     await handleShopCallback(stale, shopOpts(files));
     assert.ok(stale.answered.includes("This action is no longer available.") || stale.answered.includes("Could not buy this title."));
@@ -358,7 +364,7 @@ async function main() {
   });
 
   await runTest("45. cannot spoof another user", async () => {
-    const files = filesFor(USER, { xp: 80, bp: 20, loot: 25 });
+    const files = filesFor(USER, { xp: 120, bp: 20, loot: 25 });
     seedXp(files.pointsFile, OTHER, 10);
     const ctx = mockCtx({ userId: OTHER, data: "shop:buy:supporter" });
     await handleShopCallback(ctx, shopOpts(files));
@@ -367,7 +373,7 @@ async function main() {
   });
 
   await runTest("46. cannot submit Loot price client-side", async () => {
-    const files = filesFor(USER, { xp: 80, bp: 20, loot: 25 });
+    const files = filesFor(USER, { xp: 120, bp: 20, loot: 25 });
     const ctx = mockCtx({ userId: USER, data: "shop:buy:supporter:1" });
     await handleShopCallback(ctx, shopOpts(files));
     assert.strictEqual(parseShopCallback("shop:buy:supporter:1"), null);
@@ -375,7 +381,7 @@ async function main() {
   });
 
   await runTest("47. cannot purchase disabled title", () => {
-    const files = filesFor(USER, { xp: 80, bp: 20, loot: 25 });
+    const files = filesFor(USER, { xp: 120, bp: 20, loot: 25 });
     setTitleLookupForTests(() => ({
       id: "retired",
       name: "ManGo Retired",
@@ -394,7 +400,7 @@ async function main() {
   });
 
   await runTest("48. cannot purchase unavailable seasonal title", () => {
-    const files = filesFor(USER, { xp: 80, bp: 20, loot: 25 });
+    const files = filesFor(USER, { xp: 120, bp: 20, loot: 25 });
     setTitleLookupForTests(() => ({
       id: "seasonal",
       name: "ManGo Seasonal",
@@ -415,7 +421,7 @@ async function main() {
   });
 
   await runTest("49-51. no wallet, XP, or BP mutation", () => {
-    const files = filesFor(USER, { xp: 80, bp: 20, loot: 25 });
+    const files = filesFor(USER, { xp: 120, bp: 20, loot: 25 });
     const pointsBefore = fs.readFileSync(files.pointsFile, "utf8");
     const builderBefore = fs.readFileSync(files.builderFile, "utf8");
     const walletBefore = fs.readFileSync(files.walletFile, "utf8");
@@ -451,7 +457,7 @@ async function main() {
   });
 
   await runTest("group callback does not leak balances", async () => {
-    const files = filesFor(USER, { xp: 80, bp: 20, loot: 99 });
+    const files = filesFor(USER, { xp: 120, bp: 20, loot: 99 });
     const ctx = mockCtx({ userId: USER, chatType: "supergroup", data: "shop:home" });
     await handleShopCallback(ctx, shopOpts(files));
     assert.strictEqual(ctx.replies[0].text, GROUP_SHOP_TEXT);
@@ -459,7 +465,7 @@ async function main() {
   });
 
   await runTest("simultaneous Loot award and purchase stay coherent", async () => {
-    const files = filesFor(USER, { xp: 80, bp: 20, loot: 25 });
+    const files = filesFor(USER, { xp: 120, bp: 20, loot: 25 });
     const [buy, award] = await Promise.all([
       spawnChild([
         path.join(__dirname, "helpers", "mango-shop-buy-worker.js"),

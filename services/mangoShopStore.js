@@ -114,6 +114,91 @@ function normalizeLoot(raw) {
   };
 }
 
+function emptyActivitySlot() {
+  return {
+    completed: false,
+    completedAt: 0,
+    lootAwarded: false,
+    lootSkipped: false,
+  };
+}
+
+function normalizeQuestDay(raw) {
+  const community = Object.assign(emptyActivitySlot(), raw && raw.community);
+  const game = Object.assign(emptyActivitySlot(), raw && raw.game);
+  const xpRaw = raw && raw.xp ? raw.xp : {};
+  const progress = Number.isInteger(xpRaw.progress) ? Math.max(0, xpRaw.progress) : 0;
+  return {
+    community: {
+      completed: Boolean(community.completed),
+      completedAt: Number.isFinite(community.completedAt) ? community.completedAt : 0,
+      lootAwarded: Boolean(community.lootAwarded),
+      lootSkipped: Boolean(community.lootSkipped),
+    },
+    game: {
+      completed: Boolean(game.completed),
+      completedAt: Number.isFinite(game.completedAt) ? game.completedAt : 0,
+      lootAwarded: Boolean(game.lootAwarded),
+      lootSkipped: Boolean(game.lootSkipped),
+    },
+    xp: {
+      progress,
+      target: 3,
+      completed: Boolean(xpRaw.completed) || progress >= 3,
+      completedAt: Number.isFinite(xpRaw.completedAt) ? xpRaw.completedAt : 0,
+      lootAwarded: Boolean(xpRaw.lootAwarded),
+      lootSkipped: Boolean(xpRaw.lootSkipped),
+    },
+    fullCompletionAt: Number.isFinite(raw && raw.fullCompletionAt)
+      ? raw.fullCompletionAt
+      : 0,
+    fullLootAwarded: Boolean(raw && raw.fullLootAwarded),
+    fullLootSkipped: Boolean(raw && raw.fullLootSkipped),
+    lootAwardedToday: Number.isInteger(raw && raw.lootAwardedToday)
+      ? Math.max(0, raw.lootAwardedToday)
+      : 0,
+  };
+}
+
+function normalizeDailyQuest(raw) {
+  const streakRaw = raw && raw.streak ? raw.streak : {};
+  const days = {};
+  for (const [date, row] of Object.entries(asObjectMap(raw && raw.days))) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      continue;
+    }
+    days[date] = normalizeQuestDay(row);
+  }
+  const milestones = {};
+  for (const [cycleId, row] of Object.entries(asObjectMap(streakRaw.milestones))) {
+    const mapped = {};
+    for (const [key, status] of Object.entries(asObjectMap(row))) {
+      if (status === "awarded" || status === "skipped") {
+        mapped[String(key)] = status;
+      }
+    }
+    milestones[String(cycleId)] = mapped;
+  }
+  return {
+    streak: {
+      current: Number.isInteger(streakRaw.current) ? Math.max(0, streakRaw.current) : 0,
+      longest: Number.isInteger(streakRaw.longest) ? Math.max(0, streakRaw.longest) : 0,
+      lastCompletedDate:
+        typeof streakRaw.lastCompletedDate === "string" &&
+        /^\d{4}-\d{2}-\d{2}$/.test(streakRaw.lastCompletedDate)
+          ? streakRaw.lastCompletedDate
+          : null,
+      cycleId: typeof streakRaw.cycleId === "string" ? streakRaw.cycleId : null,
+      milestones,
+    },
+    days,
+  };
+}
+
+function emptyDailyQuest() {
+  return normalizeDailyQuest(null);
+}
+
 function normalizeOwnedTitles(raw) {
   const owned = {};
   for (const [titleId, row] of Object.entries(asObjectMap(raw))) {
@@ -144,6 +229,7 @@ function normalizeUser(raw) {
     loot: normalizeLoot(raw && raw.loot),
     ownedTitles,
     activeTitle,
+    dailyQuest: normalizeDailyQuest(raw && raw.dailyQuest),
   };
 }
 
@@ -305,4 +391,6 @@ module.exports = {
   mutateShopStore,
   ensureUser,
   normalizeUser,
+  emptyDailyQuest,
+  normalizeDailyQuest,
 };

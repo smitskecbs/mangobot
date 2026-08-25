@@ -168,13 +168,37 @@ async function runTest(name, fn) {
 async function main() {
   await runTest("14. catalog loads", () => {
     const catalog = getTitleCatalog();
-    assert.strictEqual(catalog.length, 4);
+    assert.strictEqual(catalog.length, 5);
     assert.deepStrictEqual(
       catalog.map((row) => row.id),
-      ["supporter", "contributor", "ambassador", "advocate"]
+      ["supporter", "contributor", "ambassador", "guard", "elite"]
+    );
+    assert.deepStrictEqual(
+      catalog.map((row) => [row.requiredXp, row.requiredBp, row.lootPrice]),
+      [
+        [100, 5, 25],
+        [200, 15, 50],
+        [500, 30, 100],
+        [800, 60, 200],
+        [1500, 120, 400],
+      ]
+    );
+    assert.strictEqual(getTitleById("supporter").description, "An active member who supports the ManGo community.");
+    assert.strictEqual(
+      getTitleById("guard").description,
+      "A highly active and established member of the ManGo community."
+    );
+    assert.strictEqual(
+      getTitleById("elite").description,
+      "One of ManGo's most dedicated and accomplished community members."
     );
     assert.strictEqual(getTitleById("advocate").name, "ManGo Advocate");
-    assert.ok(!TITLE_CATALOG.some((row) => /guardian|mod|admin|owner|dev/i.test(row.name)));
+    assert.strictEqual(getTitleById("advocate").active, false);
+    assert.strictEqual(getTitleById("advocate").purchasable, false);
+    assert.ok(!getTitleCatalog().some((row) => row.id === "advocate"));
+    const { getRank } = require("../services/points");
+    assert.strictEqual(getRank(300).title, "Guardian");
+    assert.ok(!TITLE_CATALOG.some((row) => /mod|admin|owner|dev/i.test(row.name) && row.active));
     assertCatalogSafe();
   });
 
@@ -205,7 +229,7 @@ async function main() {
   });
 
   await runTest("16. supporter locked below XP", () => {
-    const files = filesFor(USER, { xp: 49, bp: 20, loot: 100 });
+    const files = filesFor(USER, { xp: 99, bp: 20, loot: 100 });
     const progress = titleProgress(USER, getTitleById("supporter"), opts(files));
     assert.strictEqual(progress.status, "locked");
     assert.strictEqual(progress.xpOk, false);
@@ -213,28 +237,28 @@ async function main() {
   });
 
   await runTest("17. locked below BP", () => {
-    const files = filesFor(USER, { xp: 80, bp: 4, loot: 100 });
+    const files = filesFor(USER, { xp: 120, bp: 4, loot: 100 });
     const progress = titleProgress(USER, getTitleById("supporter"), opts(files));
     assert.strictEqual(progress.bpOk, false);
     assert.strictEqual(progress.status, "locked");
   });
 
   await runTest("18. locked below Loot", () => {
-    const files = filesFor(USER, { xp: 80, bp: 20, loot: 10 });
+    const files = filesFor(USER, { xp: 120, bp: 20, loot: 10 });
     const progress = titleProgress(USER, getTitleById("supporter"), opts(files));
     assert.strictEqual(progress.lootOk, false);
     assert.strictEqual(progress.status, "locked");
   });
 
   await runTest("19. all requirements met -> available", () => {
-    const files = filesFor(USER, { xp: 50, bp: 5, loot: 25 });
+    const files = filesFor(USER, { xp: 100, bp: 5, loot: 25 });
     const progress = titleProgress(USER, getTitleById("supporter"), opts(files));
     assert.strictEqual(progress.available, true);
     assert.strictEqual(progress.status, "available");
   });
 
   await runTest("20-23. purchase deducts only Loot; ownership stored", () => {
-    const files = filesFor(USER, { xp: 80, bp: 20, loot: 40 });
+    const files = filesFor(USER, { xp: 120, bp: 20, loot: 40 });
     const xpBefore = JSON.parse(fs.readFileSync(files.pointsFile, "utf8")).users[USER].points;
     const bpBefore = JSON.parse(fs.readFileSync(files.builderFile, "utf8")).builders[USER].points;
     const result = purchaseTitle(USER, "supporter", opts(files));
@@ -255,7 +279,7 @@ async function main() {
   });
 
   await runTest("24-25. duplicate purchase and replay reject extra spend", () => {
-    const files = filesFor(USER, { xp: 80, bp: 20, loot: 80 });
+    const files = filesFor(USER, { xp: 120, bp: 20, loot: 80 });
     const first = purchaseTitle(USER, "supporter", opts(files));
     const second = purchaseTitle(USER, "supporter", opts(files));
     assert.strictEqual(first.ok, true);
@@ -267,7 +291,7 @@ async function main() {
   });
 
   await runTest("26. concurrent buy exactly once", async () => {
-    const files = filesFor(USER, { xp: 80, bp: 20, loot: 25 });
+    const files = filesFor(USER, { xp: 120, bp: 20, loot: 25 });
     const [a, b] = await Promise.all([
       spawnBuy(files, USER, "supporter"),
       spawnBuy(files, USER, "supporter"),
@@ -304,7 +328,7 @@ async function main() {
   });
 
   await runTest("30. restart preserves ownership", () => {
-    const files = filesFor(USER, { xp: 80, bp: 20, loot: 25 });
+    const files = filesFor(USER, { xp: 120, bp: 20, loot: 25 });
     purchaseTitle(USER, "supporter", opts(files));
     setActiveTitle(USER, "supporter", opts(files));
     setMangoShopFileForTests(files.shopFile);
@@ -316,7 +340,7 @@ async function main() {
     const files = filesFor(USER, { xp: 82, bp: 11, loot: 44 });
     const progress = titleProgress(USER, getTitleById("contributor"), opts(files));
     assert.strictEqual(progress.xp, 82);
-    assert.strictEqual(progress.requiredXp, 100);
+    assert.strictEqual(progress.requiredXp, 200);
     assert.strictEqual(progress.bp, 11);
     assert.strictEqual(progress.requiredBp, 15);
     assert.strictEqual(progress.loot, 44);
@@ -325,7 +349,7 @@ async function main() {
   });
 
   await runTest("32. user cannot activate unowned title", () => {
-    const files = filesFor(USER, { xp: 80, bp: 20, loot: 25 });
+    const files = filesFor(USER, { xp: 120, bp: 20, loot: 25 });
     const result = setActiveTitle(USER, "ambassador", opts(files));
     assert.strictEqual(result.ok, false);
     assert.strictEqual(result.reason, "unowned");
@@ -333,7 +357,7 @@ async function main() {
   });
 
   await runTest("other user cannot spend this purchase", () => {
-    const files = filesFor(USER, { xp: 80, bp: 20, loot: 25 });
+    const files = filesFor(USER, { xp: 120, bp: 20, loot: 25 });
     seedXp(files.pointsFile, OTHER, 80);
     const builder = JSON.parse(fs.readFileSync(files.builderFile, "utf8"));
     builder.builders[OTHER] = {
@@ -348,6 +372,23 @@ async function main() {
     purchaseTitle(USER, "supporter", opts(files));
     assert.deepStrictEqual(getOwnedTitleIds(OTHER, files.shopFile), []);
     assert.strictEqual(getLootAccount(OTHER, files.shopFile).balance, 25);
+  });
+
+  await runTest("8. legacy advocate ownership remains readable and not purchasable", () => {
+    const files = filesFor(USER, { xp: 600, bp: 80, loot: 400 });
+    const { mutateShopStore } = require("../services/mangoShopStore");
+    mutateShopStore((store) => {
+      const user = require("../services/mangoShopStore").ensureUser(store, USER);
+      user.ownedTitles.advocate = { purchasedAt: 1, purchaseId: "legacy" };
+      user.activeTitle = "advocate";
+    }, files.shopFile);
+    const blocked = purchaseTitle(USER, "advocate", opts(files));
+    assert.strictEqual(blocked.ok, false);
+    assert.ok(blocked.reason === "unavailable" || blocked.reason === "disabled" || blocked.reason === "owned");
+    const active = getActiveTitle(USER, files.shopFile);
+    assert.strictEqual(active.id, "advocate");
+    const used = setActiveTitle(USER, "advocate", opts(files));
+    assert.strictEqual(used.ok, true);
   });
 
   await runTest("no production files touched", () => {

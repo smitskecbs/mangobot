@@ -77,6 +77,57 @@ function getLootAccount(userId, shopFile) {
     : { balance: 0, lifetimeEarned: 0, lifetimeSpent: 0, updatedAt: 0 };
 }
 
+function applyLootAwardToStore(store, userId, amount, reason, referenceId, now) {
+  const id = normalizeUserId(userId);
+  const qty = Number(amount);
+  const why = String(reason || "");
+  if (!id) {
+    return { ok: false, reason: "no-user" };
+  }
+  if (!Number.isInteger(qty) || qty <= 0) {
+    return { ok: false, reason: "amount" };
+  }
+  if (!EARN_REASONS.includes(why) && why !== "admin-award") {
+    return { ok: false, reason: "reason" };
+  }
+  const ts = Number.isFinite(now) ? now : Date.now();
+  const type = why === "admin-award" ? "adjust" : "earn";
+  if (referenceId) {
+    const existing = findByReference(store, referenceId);
+    if (existing) {
+      const user = ensureUser(store, id);
+      return {
+        ok: true,
+        duplicate: true,
+        balance: snapshotLoot(user).balance,
+        amount: existing.amount,
+        transactionId: existing.id,
+      };
+    }
+  }
+  const user = ensureUser(store, id);
+  user.loot.balance += qty;
+  user.loot.lifetimeEarned += qty;
+  user.loot.updatedAt = ts;
+  const txId = newId();
+  recordTransaction(store, {
+    id: txId,
+    userId: id,
+    type,
+    amount: qty,
+    reason: why,
+    createdAt: ts,
+    referenceId: referenceId ? String(referenceId) : null,
+  });
+  return {
+    ok: true,
+    duplicate: false,
+    balance: user.loot.balance,
+    amount: qty,
+    transactionId: txId,
+  };
+}
+
 function awardLoot(userId, amount, reason, referenceId, options = {}) {
   const id = normalizeUserId(userId);
   const qty = Number(amount);
@@ -91,43 +142,10 @@ function awardLoot(userId, amount, reason, referenceId, options = {}) {
     return { ok: false, reason: "reason" };
   }
   const now = Number.isFinite(options.now) ? options.now : Date.now();
-  const type = why === "admin-award" ? "adjust" : "earn";
-  return mutateShopStore((store) => {
-    if (referenceId) {
-      const existing = findByReference(store, referenceId);
-      if (existing) {
-        const user = ensureUser(store, id);
-        return {
-          ok: true,
-          duplicate: true,
-          balance: snapshotLoot(user).balance,
-          amount: existing.amount,
-          transactionId: existing.id,
-        };
-      }
-    }
-    const user = ensureUser(store, id);
-    user.loot.balance += qty;
-    user.loot.lifetimeEarned += qty;
-    user.loot.updatedAt = now;
-    const txId = newId();
-    recordTransaction(store, {
-      id: txId,
-      userId: id,
-      type,
-      amount: qty,
-      reason: why,
-      createdAt: now,
-      referenceId: referenceId ? String(referenceId) : null,
-    });
-    return {
-      ok: true,
-      duplicate: false,
-      balance: user.loot.balance,
-      amount: qty,
-      transactionId: txId,
-    };
-  }, options.shopFile);
+  return mutateShopStore(
+    (store) => applyLootAwardToStore(store, id, qty, why, referenceId, now),
+    options.shopFile
+  );
 }
 
 function spendLoot(userId, amount, reason, referenceId, options = {}) {
@@ -224,4 +242,5 @@ module.exports = {
   spendLoot,
   getLootHistory,
   awardDailyActivityLoot,
+  applyLootAwardToStore,
 };

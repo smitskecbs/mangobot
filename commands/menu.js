@@ -20,6 +20,7 @@ const { handleRewards } = require("./rewards");
 const { handlePresale } = require("./presale");
 const { handleCommunityBuilder } = require("./communitybuilder");
 const { handleShop } = require("./shop");
+const { handleDailyQuest } = require("./dailyquest");
 const { formatShopProgressBlock } = require("../services/mangoShop");
 const {
   handleStreak,
@@ -70,6 +71,7 @@ const GROUP_MENU_ACTION_RE = new RegExp(
     GROUP_MENU_CALLBACK.MANGOBOMB,
     GROUP_MENU_CALLBACK.BUILDER,
     GROUP_MENU_CALLBACK.SHOP,
+    GROUP_MENU_CALLBACK.DAILY_QUEST,
   ].join("|")})$`
 );
 
@@ -263,6 +265,9 @@ async function handleGroupMenuCallback(ctx, options = {}) {
   if (data === GROUP_MENU_CALLBACK.SHOP) {
     return handleShop(ctx, options);
   }
+  if (data === GROUP_MENU_CALLBACK.DAILY_QUEST) {
+    return handleDailyQuest(ctx, options);
+  }
 }
 
 module.exports = (bot) => {
@@ -360,6 +365,13 @@ module.exports = (bot) => {
       return;
     }
     return handleShop(ctx);
+  });
+
+  bot.hears(MENU_LABELS.DAILY_QUEST, (ctx) => {
+    if (!isPrivateChat(ctx)) {
+      return;
+    }
+    return handleDailyQuest(ctx);
   });
 };
 

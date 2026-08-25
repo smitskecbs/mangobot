@@ -11,6 +11,7 @@ const { handleRewards } = require("./rewards");
 const { handlePresale } = require("./presale");
 const { handleCommunityBuilder } = require("./communitybuilder");
 const { handleShop } = require("./shop");
+const { handleDailyQuest } = require("./dailyquest");
 const {
   isPrivateChat,
   getPrivateMenuKeyboard,
@@ -53,6 +54,9 @@ function handleStart(ctx, options = {}) {
     }
     if (payload === "shop") {
       return handleShop(ctx, options);
+    }
+    if (payload === "dailyquest") {
+      return handleDailyQuest(ctx, options);
     }
 
     return ctx.reply(WELCOME_MESSAGE, getPrivateMenuKeyboard(ctx));
