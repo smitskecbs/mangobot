@@ -437,8 +437,11 @@ async function main() {
     for (const src of [shopSrc, cmdSrc]) {
       assert.ok(!src.includes("promoteChatMember"));
       assert.ok(!src.includes("setChatAdministratorCustomTitle"));
-      assert.ok(!src.includes("setChatMemberTag"));
+      assert.ok(!src.includes("restrictChatMember"));
+      assert.ok(!src.includes("banChatMember"));
     }
+    assert.ok(!shopSrc.includes("setChatMemberTag"));
+    assert.ok(!cmdSrc.includes("setChatMemberTag"));
     const catalog = fs.readFileSync(path.join(__dirname, "..", "services", "mangoTitles.js"), "utf8");
     assert.ok(!catalog.includes("ManGo Mod"));
     assert.ok(!catalog.includes("ManGo Admin"));

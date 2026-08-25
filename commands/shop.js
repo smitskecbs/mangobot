@@ -30,6 +30,12 @@ const {
   getActiveTitle,
   formatShopProgressBlock,
 } = require("../services/mangoShop");
+const {
+  setNativeTitleTagTelegram,
+  syncActiveTitleTag,
+  clearNativeTitleTag,
+  formatTelegramTagLine,
+} = require("../services/nativeTitleTag");
 
 const GROUP_SHOP_TEXT =
   "Open a private chat with the bot to use the ManGo Shop.";
@@ -39,6 +45,7 @@ const SHOP_CALLBACK = Object.freeze({
   TITLES: "shop:titles",
   MINE: "shop:mine",
   CLEAR: "shop:clear",
+  SYNC: "shop:sync",
 });
 
 function parseShopCallback(data) {
@@ -56,6 +63,9 @@ function parseShopCallback(data) {
   }
   if (data === SHOP_CALLBACK.CLEAR) {
     return { action: "clear" };
+  }
+  if (data === SHOP_CALLBACK.SYNC) {
+    return { action: "sync" };
   }
   const parts = data.split(":");
   if (parts.length !== 3) {
@@ -122,6 +132,9 @@ function titleDetailKeyboard(progress) {
   if (progress.owned && !progress.active) {
     rows.push([btn("🏷️ Use Title", `shop:use:${progress.title.id}`)]);
   }
+  if (progress.owned && progress.active) {
+    rows.push([btn("🔄 Sync Telegram Tag", SHOP_CALLBACK.SYNC)]);
+  }
   rows.push([btn("⬅️ Titles", SHOP_CALLBACK.TITLES)]);
   return keyboard(rows);
 }
@@ -139,6 +152,7 @@ function myTitlesKeyboard(ownedIds, hasActive) {
     return title ? [btn(formatTitleLabel(title), `shop:title:${title.id}`)] : [];
   }).filter((row) => row.length);
   if (hasActive) {
+    rows.push([btn("🔄 Sync Telegram Tag", SHOP_CALLBACK.SYNC)]);
     rows.push([btn("❌ Remove Active Title", SHOP_CALLBACK.CLEAR)]);
   }
   rows.push([btn("⬅️ Back", SHOP_CALLBACK.HOME)]);
@@ -219,6 +233,34 @@ function buildTitleDetailText(progress) {
   return lines.join("\n");
 }
 
+function activateKeyboard() {
+  return keyboard([
+    [btn("📦 My Titles", SHOP_CALLBACK.MINE)],
+    [btn("⬅️ Shop", SHOP_CALLBACK.HOME)],
+  ]);
+}
+
+function buildActivateText(title, tagResult) {
+  const label = formatTitleLabel(title);
+  if (tagResult && tagResult.ok) {
+    return [
+      "🎉 Community Title active!",
+      "",
+      label,
+      "",
+      "Your title is now visible in the ManGo group. 🥭",
+    ].join("\n");
+  }
+  return [
+    "✅ Title activated!",
+    "",
+    label,
+    "",
+    "Telegram tag could not be updated right now.",
+    "Your ManGo title is still active.",
+  ].join("\n");
+}
+
 function buildMyTitlesText(userId, options) {
   const owned = getOwnedTitleIds(userId, options.shopFile);
   if (!owned.length) {
@@ -231,14 +273,19 @@ function buildMyTitlesText(userId, options) {
     ].join("\n");
   }
   const active = getActiveTitle(userId, options.shopFile);
-  return [
+  const lines = [
     "📦 My Titles",
     "",
     "Active:",
     active ? formatTitleLabel(active) : "None",
     "",
     "Owned:",
-  ].join("\n");
+  ];
+  const tagLine = formatTelegramTagLine(userId, options.shopFile);
+  if (tagLine) {
+    lines.push("", tagLine);
+  }
+  return lines.join("\n");
 }
 
 function lockedBuyText(result) {
@@ -347,11 +394,23 @@ async function handleShopCallback(ctx, options = {}) {
     }
     if (parsed.action === "clear") {
       clearActiveTitle(userId, opts);
-      await answerCb(ctx, "Active title removed.");
+      const tagResult = await clearNativeTitleTag(userId, opts);
+      await answerCb(
+        ctx,
+        tagResult.ok ? "Active title removed." : "Active title removed."
+      );
       const owned = getOwnedTitleIds(userId, opts.shopFile);
+      const text = [
+        buildMyTitlesText(userId, opts),
+        tagResult.ok
+          ? ""
+          : "\nTelegram tag could not be updated right now.",
+      ]
+        .join("")
+        .replace(/\n+$/, "");
       return showShopView(
         ctx,
-        buildMyTitlesText(userId, opts),
+        text,
         myTitlesKeyboard(owned, false)
       );
     }
@@ -394,9 +453,32 @@ async function handleShopCallback(ctx, options = {}) {
         await answerCb(ctx, "You do not own this title.");
         return;
       }
+      const tagResult = await syncActiveTitleTag(userId, opts);
       await answerCb(ctx, "Title activated.");
-      const progress = titleProgress(userId, result.title, opts);
-      return showShopView(ctx, buildTitleDetailText(progress), titleDetailKeyboard(progress));
+      return showShopView(
+        ctx,
+        buildActivateText(result.title, tagResult),
+        activateKeyboard()
+      );
+    }
+    if (parsed.action === "sync") {
+      const active = getActiveTitle(userId, opts.shopFile);
+      if (!active) {
+        await answerCb(ctx, "No active title to sync.");
+        const owned = getOwnedTitleIds(userId, opts.shopFile);
+        return showShopView(
+          ctx,
+          buildMyTitlesText(userId, opts),
+          myTitlesKeyboard(owned, false)
+        );
+      }
+      const tagResult = await syncActiveTitleTag(userId, opts);
+      await answerCb(ctx, tagResult.ok ? "Telegram tag synced." : "Could not sync Telegram tag.");
+      return showShopView(
+        ctx,
+        buildActivateText(active, tagResult),
+        activateKeyboard()
+      );
     }
   } catch (err) {
     logError("[shop] callback failed:", err && err.message ? err.message : err);
@@ -405,6 +487,9 @@ async function handleShopCallback(ctx, options = {}) {
 }
 
 module.exports = (bot) => {
+  if (bot && bot.telegram) {
+    setNativeTitleTagTelegram(bot.telegram);
+  }
   bot.action(/^shop:/, (ctx) => handleShopCallback(ctx));
 };
 
@@ -422,3 +507,5 @@ module.exports.titleDetailKeyboard = titleDetailKeyboard;
 module.exports.purchaseSuccessText = purchaseSuccessText;
 module.exports.lockedBuyText = lockedBuyText;
 module.exports.homeKeyboard = homeKeyboard;
+module.exports.myTitlesKeyboard = myTitlesKeyboard;
+module.exports.buildActivateText = buildActivateText;

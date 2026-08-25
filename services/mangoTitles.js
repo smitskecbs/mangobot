@@ -30,6 +30,7 @@ const TITLE_CATALOG = Object.freeze([
     requiredXp: 100,
     requiredBp: 5,
     lootPrice: 25,
+    nativeTag: "ManGo Supporter",
     purchasable: true,
     active: true,
     availableFrom: null,
@@ -45,6 +46,7 @@ const TITLE_CATALOG = Object.freeze([
     requiredXp: 200,
     requiredBp: 15,
     lootPrice: 50,
+    nativeTag: "Contributor",
     purchasable: true,
     active: true,
     availableFrom: null,
@@ -60,6 +62,7 @@ const TITLE_CATALOG = Object.freeze([
     requiredXp: 500,
     requiredBp: 30,
     lootPrice: 100,
+    nativeTag: "ManGo Ambassador",
     purchasable: true,
     active: true,
     availableFrom: null,
@@ -75,6 +78,7 @@ const TITLE_CATALOG = Object.freeze([
     requiredXp: 800,
     requiredBp: 60,
     lootPrice: 200,
+    nativeTag: "ManGo Guard",
     purchasable: true,
     active: true,
     availableFrom: null,
@@ -90,6 +94,7 @@ const TITLE_CATALOG = Object.freeze([
     requiredXp: 1500,
     requiredBp: 120,
     lootPrice: 400,
+    nativeTag: "ManGo Elite",
     purchasable: true,
     active: true,
     availableFrom: null,
@@ -105,6 +110,7 @@ const TITLE_CATALOG = Object.freeze([
     requiredXp: 500,
     requiredBp: 60,
     lootPrice: 200,
+    nativeTag: "ManGo Advocate",
     purchasable: false,
     active: false,
     availableFrom: null,
@@ -114,6 +120,33 @@ const TITLE_CATALOG = Object.freeze([
     legacy: true,
   },
 ]);
+
+const NATIVE_TAG_MAX = 16;
+const NATIVE_TAG_PATTERN = /^[A-Za-z ]{1,16}$/;
+
+function isValidNativeTag(tag) {
+  if (typeof tag !== "string") {
+    return false;
+  }
+  if (tag.length < 1 || tag.length > NATIVE_TAG_MAX) {
+    return false;
+  }
+  if (!NATIVE_TAG_PATTERN.test(tag)) {
+    return false;
+  }
+  return true;
+}
+
+function getNativeTagForTitle(titleOrId) {
+  const title =
+    titleOrId && typeof titleOrId === "object"
+      ? titleOrId
+      : getTitleById(titleOrId);
+  if (!title || !isValidNativeTag(title.nativeTag)) {
+    return null;
+  }
+  return title.nativeTag;
+}
 
 function tokenizeTitleText(value) {
   return String(value || "")
@@ -159,6 +192,9 @@ function assertCatalogSafe(catalog = TITLE_CATALOG) {
     const reserved = findReservedTitleMatch(title);
     if (reserved) {
       throw new Error(`reserved-title:${reserved}`);
+    }
+    if (!isValidNativeTag(title.nativeTag)) {
+      throw new Error(`invalid-native-tag:${title.id}`);
     }
   }
   return true;
@@ -218,4 +254,7 @@ module.exports = {
   findReservedTitleMatch,
   assertCatalogSafe,
   isReservedTitleToken,
+  NATIVE_TAG_MAX,
+  isValidNativeTag,
+  getNativeTagForTitle,
 };

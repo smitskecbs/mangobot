@@ -20,6 +20,9 @@ const {
   findReservedTitleMatch,
   isTitlePurchasable,
   isTitleWindowOpen,
+  NATIVE_TAG_MAX,
+  isValidNativeTag,
+  getNativeTagForTitle,
 } = require("../services/mangoTitles");
 const {
   titleProgress,
@@ -195,7 +198,18 @@ async function main() {
     assert.strictEqual(getTitleById("advocate").name, "ManGo Advocate");
     assert.strictEqual(getTitleById("advocate").active, false);
     assert.strictEqual(getTitleById("advocate").purchasable, false);
-    assert.ok(!getTitleCatalog().some((row) => row.id === "advocate"));
+    assert.strictEqual(getNativeTagForTitle("supporter"), "ManGo Supporter");
+    assert.strictEqual(getNativeTagForTitle("contributor"), "Contributor");
+    assert.strictEqual(getNativeTagForTitle("ambassador"), "ManGo Ambassador");
+    assert.strictEqual(getNativeTagForTitle("guard"), "ManGo Guard");
+    assert.strictEqual(getNativeTagForTitle("elite"), "ManGo Elite");
+    assert.strictEqual(getNativeTagForTitle("advocate"), "ManGo Advocate");
+    for (const id of ["supporter", "contributor", "ambassador", "guard", "elite", "advocate"]) {
+      const tag = getNativeTagForTitle(id);
+      assert.ok(isValidNativeTag(tag));
+      assert.ok(tag.length <= NATIVE_TAG_MAX);
+      assert.ok(!/[^\x20-\x7E]/.test(tag));
+    }
     const { getRank } = require("../services/points");
     assert.strictEqual(getRank(300).title, "Guardian");
     assert.ok(!TITLE_CATALOG.some((row) => /mod|admin|owner|dev/i.test(row.name) && row.active));

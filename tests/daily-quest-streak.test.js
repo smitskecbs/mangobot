@@ -66,7 +66,7 @@ function completeDay(f, dayOffset) {
   const now = at(dayOffset);
   const options = { shopFile: f.shopFile, walletFile: f.walletFile, now, date: utcDate(now) };
   noteDailyQuestCommunity(USER, options);
-  noteDailyQuestGame(USER, "snake", options);
+  noteDailyQuestGame(USER, "trivia", options);
   return noteDailyQuestXp(USER, 3, options);
 }
 
@@ -193,7 +193,7 @@ async function main() {
     completeDay(f, 1);
     const now = at(2);
     noteDailyQuestCommunity(USER, { shopFile: f.shopFile, walletFile: f.walletFile, now, date: utcDate(now) });
-    noteDailyQuestGame(USER, "snake", { shopFile: f.shopFile, walletFile: f.walletFile, now, date: utcDate(now) });
+    noteDailyQuestGame(USER, "trivia", { shopFile: f.shopFile, walletFile: f.walletFile, now, date: utcDate(now) });
     const [a, b] = await Promise.all([
       spawnMilestone(f, now),
       spawnMilestone(f, now),

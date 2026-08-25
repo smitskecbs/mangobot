@@ -34,8 +34,6 @@ const STREAK_MILESTONES = Object.freeze([
 ]);
 
 const GAME_SOURCES = Object.freeze([
-  "snake",
-  "bounch",
   "trivia",
   "tictactoe",
   "connect4",

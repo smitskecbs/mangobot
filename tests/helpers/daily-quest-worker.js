@@ -28,7 +28,7 @@ try {
   if (mode === "community") {
     result = noteDailyQuestCommunity(userId, options);
   } else if (mode === "game") {
-    result = noteDailyQuestGame(userId, "snake", options);
+    result = noteDailyQuestGame(userId, "trivia", options);
   } else if (mode === "xp") {
     result = noteDailyQuestXp(userId, amount, options);
   } else {

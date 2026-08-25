@@ -195,6 +195,16 @@ function normalizeDailyQuest(raw) {
   };
 }
 
+function normalizeTagSync(raw) {
+  const status =
+    raw && ["synced", "failed", "cleared"].includes(raw.status) ? raw.status : "none";
+  return {
+    status,
+    at: typeof (raw && raw.at) === "number" && Number.isFinite(raw.at) ? raw.at : 0,
+    titleId: typeof (raw && raw.titleId) === "string" && raw.titleId ? String(raw.titleId) : null,
+  };
+}
+
 function emptyDailyQuest() {
   return normalizeDailyQuest(null);
 }
@@ -230,6 +240,7 @@ function normalizeUser(raw) {
     ownedTitles,
     activeTitle,
     dailyQuest: normalizeDailyQuest(raw && raw.dailyQuest),
+    tagSync: normalizeTagSync(raw && raw.tagSync),
   };
 }
 
