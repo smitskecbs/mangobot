@@ -962,7 +962,7 @@ runTest("Connect Four menu lets members start (no admin required)", async () => 
   }
 });
 
-runTest("Trivia menu lets members start (no admin required)", async () => {
+runTest("Trivia menu opens category chooser (no admin required)", async () => {
   const prevChat = process.env.TELEGRAM_CHAT_ID;
   process.env.TELEGRAM_CHAT_ID = String(-1003916996602);
   delete process.env.TELEGRAM_GAMES_TOPIC_ID;
@@ -985,8 +985,14 @@ runTest("Trivia menu lets members start (no admin required)", async () => {
       },
       setMessageIdFn: () => {},
     });
-    assert.strictEqual(started, true);
-    assert.ok(ctx.replies[0].text.includes("Trivia"));
+    assert.strictEqual(started, false);
+    const view = ctx.edits[0] || ctx.replies[0];
+    assert.ok(view.text.includes("ManGo Trivia"));
+    assert.ok(view.text.includes("Choose a category"));
+    const buttons = (view.extra.reply_markup.inline_keyboard || []).flat();
+    assert.ok(buttons.some((b) => /Geography/.test(b.text)));
+    assert.ok(buttons.some((b) => b.callback_data === "trivia:cat:geography"));
+    assert.ok(buttons.some((b) => b.callback_data === "trivia:games"));
   } finally {
     if (prevChat === undefined) delete process.env.TELEGRAM_CHAT_ID;
     else process.env.TELEGRAM_CHAT_ID = prevChat;

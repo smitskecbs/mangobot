@@ -17,6 +17,7 @@ const {
   awardSnakeGameXp,
   awardBounchGameXp,
   awardTriviaRoundXp,
+  awardTriviaAttemptXp,
   awardPvpWinXp,
   awardChatFightXp,
   loadPoints,
@@ -53,6 +54,7 @@ const {
   createMemoryRateLimiter,
 } = require("../services/walletVerification");
 const { createPresaleSession } = require("../services/presaleSessions");
+const { setMangoShopFileForTests } = require("../services/mangoShopStore");
 const { processCommunityMessage } = require("../events/points-trigger");
 const { handlePoints } = require("../commands/points");
 const { formatMemberCheck } = require("../commands/membercheck");
@@ -69,6 +71,7 @@ const prodRoots = [
   path.join(__dirname, "..", "data", "wallet-links.json"),
   path.join(__dirname, "..", "data", "member-rewards.json"),
   path.join(__dirname, "..", "data", "presale-participation.json"),
+  path.join(__dirname, "..", "data", "mango-shop.json"),
 ];
 const prodMtimes = {};
 for (const file of prodRoots) {
@@ -85,11 +88,14 @@ process.env.TELEGRAM_CHAT_ID = "-1003916996602";
 
 function files() {
   n += 1;
+  const shopFile = path.join(tempDir, `shop-${n}.json`);
+  setMangoShopFileForTests(shopFile);
   return {
     pointsFile: path.join(tempDir, `p-${n}.json`),
     walletFile: path.join(tempDir, `w-${n}.json`),
     rewardsFile: path.join(tempDir, `r-${n}.json`),
     snakeFile: path.join(tempDir, `s-${n}.json`),
+    shopFile,
   };
 }
 
@@ -331,17 +337,34 @@ runTest("26. Bounch unlinked → XP 0, play state not consumed", () => {
   assert.strictEqual(later.xp.unlock, 3);
 });
 
-runTest("27. Trivia correct unlinked → XP 0", () => {
+runTest("27. Trivia correct unlinked → XP 0, attempt consumed, no retroactive XP", () => {
   const { pointsFile, walletFile } = files();
-  const blocked = awardTriviaRoundXp(27, "Ada", TRIVIA_ROUND_WIN_XP, pointsFile, walletFile);
+  const blocked = awardTriviaAttemptXp(
+    27,
+    "Ada",
+    { correct: true },
+    pointsFile,
+    walletFile
+  );
   assert.strictEqual(blocked.awarded, false);
   assert.strictEqual(blocked.reason, XP_WALLET_REQUIRED);
+  assert.strictEqual(blocked.attemptsUsed, 1);
+  assert.strictEqual(blocked.pointsToAdd, 0);
   const triviaSrc = fs.readFileSync(path.join(__dirname, "../services/trivia.js"), "utf8");
   assert.ok(triviaSrc.includes("Trivia XP: 🔒 0 XP — wallet not linked — /wallet"));
   registerManualWallet(27, generateSolanaWallet().address, walletFile, 10_000);
-  const later = awardTriviaRoundXp(27, "Ada", TRIVIA_ROUND_WIN_XP, pointsFile, walletFile);
+  const later = awardTriviaAttemptXp(
+    27,
+    "Ada",
+    { correct: true },
+    pointsFile,
+    walletFile
+  );
   assert.strictEqual(later.awarded, true);
-  assert.strictEqual(later.points, 3);
+  assert.strictEqual(later.points, 1);
+  assert.strictEqual(later.attemptsUsed, 2);
+  assert.strictEqual(loadPoints(pointsFile).users["27"].trivia.attemptsUsed, 2);
+  assert.strictEqual(loadPoints(pointsFile).users["27"].points, 1);
 });
 
 runTest("28. linked game XP amounts unchanged", () => {

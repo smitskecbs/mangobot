@@ -1157,33 +1157,48 @@ function awardChatFightXp(userId, userName, pointsFile = POINTS_FILE, walletFile
   );
 }
 
-/** Trivia sole-winner round XP. */
+/** Trivia sole-winner round XP (legacy auto-round helper). */
 const TRIVIA_ROUND_WIN_XP = 3;
-/** Trivia shared-#1 tie XP. */
+/** Trivia shared-#1 tie XP (legacy auto-round helper). */
 const TRIVIA_TIE_XP = 2;
-/** Max rewarded Trivia rounds per UTC day per user. */
+/** Max rewarded Trivia rounds per UTC day per user (legacy helper). */
 const TRIVIA_DAILY_REWARD_CAP = 2;
+/** XP awarded for one correct XP-eligible Trivia answer. */
+const TRIVIA_ATTEMPT_XP = 1;
+/** Max XP-eligible Trivia answers per user per UTC day (all categories). */
+const TRIVIA_DAILY_ATTEMPT_CAP = 5;
+
+function normalizeNonNegInt(value) {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    return 0;
+  }
+  return value;
+}
 
 /**
  * Ensure optional trivia XP state exists (backward compatible).
  * @param {object} user
- * @returns {{ rewardDate: string|null, rewardedRounds: number }}
+ * @returns {object}
  */
 function ensureTriviaState(user) {
   if (!user.trivia || typeof user.trivia !== "object") {
     user.trivia = {
       rewardDate: null,
       rewardedRounds: 0,
+      attemptsUsed: 0,
+      correctCount: 0,
+      xpEarnedFromTrivia: 0,
     };
   }
   if (!Object.prototype.hasOwnProperty.call(user.trivia, "rewardDate")) {
     user.trivia.rewardDate = null;
   }
-  let rounds = user.trivia.rewardedRounds;
-  if (typeof rounds !== "number" || !Number.isInteger(rounds) || rounds < 0) {
-    rounds = 0;
-  }
-  user.trivia.rewardedRounds = rounds;
+  user.trivia.rewardedRounds = normalizeNonNegInt(user.trivia.rewardedRounds);
+  user.trivia.attemptsUsed = normalizeNonNegInt(user.trivia.attemptsUsed);
+  user.trivia.correctCount = normalizeNonNegInt(user.trivia.correctCount);
+  user.trivia.xpEarnedFromTrivia = normalizeNonNegInt(
+    user.trivia.xpEarnedFromTrivia
+  );
   return user.trivia;
 }
 
@@ -1193,7 +1208,57 @@ function resetTriviaIfNewDay(user) {
   if (user.trivia.rewardDate !== today) {
     user.trivia.rewardDate = today;
     user.trivia.rewardedRounds = 0;
+    user.trivia.attemptsUsed = 0;
+    user.trivia.correctCount = 0;
+    user.trivia.xpEarnedFromTrivia = 0;
   }
+}
+
+function emptyTriviaAttemptStatus() {
+  return {
+    date: getTodayDate(),
+    attemptsUsed: 0,
+    correctCount: 0,
+    xpEarnedFromTrivia: 0,
+    dailyCap: TRIVIA_DAILY_ATTEMPT_CAP,
+    remaining: TRIVIA_DAILY_ATTEMPT_CAP,
+    limitReached: false,
+  };
+}
+
+/**
+ * Read-only per-user Trivia daily attempt snapshot (UTC).
+ * @param {string|number} userId
+ * @param {string} [pointsFile]
+ */
+function getTriviaAttemptStatus(userId, pointsFile = POINTS_FILE) {
+  const empty = emptyTriviaAttemptStatus();
+  const id = String(userId || "");
+  if (!id) {
+    return empty;
+  }
+  const data = readPointsSnapshot(pointsFile);
+  const user = data.users && data.users[id];
+  if (!user || typeof user !== "object") {
+    return empty;
+  }
+  if (!user.trivia || typeof user.trivia !== "object") {
+    return empty;
+  }
+  if (user.trivia.rewardDate !== empty.date) {
+    return empty;
+  }
+  const attemptsUsed = normalizeNonNegInt(user.trivia.attemptsUsed);
+  const cap = TRIVIA_DAILY_ATTEMPT_CAP;
+  return {
+    date: empty.date,
+    attemptsUsed,
+    correctCount: normalizeNonNegInt(user.trivia.correctCount),
+    xpEarnedFromTrivia: normalizeNonNegInt(user.trivia.xpEarnedFromTrivia),
+    dailyCap: cap,
+    remaining: Math.max(0, cap - attemptsUsed),
+    limitReached: attemptsUsed >= cap,
+  };
 }
 
 function getTriviaRewardedRoundsToday(user) {
@@ -1307,6 +1372,116 @@ function awardTriviaRoundXp(
 /** @deprecated Use awardTriviaRoundXp — kept name alias for clarity in older call sites. */
 function awardTriviaWinXp(userId, userName, pointsFile = POINTS_FILE) {
   return awardTriviaRoundXp(userId, userName, TRIVIA_ROUND_WIN_XP, pointsFile);
+}
+
+function triviaAttemptResult(user, extra = {}) {
+  const attemptsUsed = user && user.trivia ? user.trivia.attemptsUsed : 0;
+  const xpEarned = user && user.trivia ? user.trivia.xpEarnedFromTrivia : 0;
+  const correctCount = user && user.trivia ? user.trivia.correctCount : 0;
+  const cap = TRIVIA_DAILY_ATTEMPT_CAP;
+  return {
+    points: user && typeof user.points === "number" ? user.points : 0,
+    pointsToAdd: 0,
+    awarded: false,
+    attemptsUsed,
+    correctCount,
+    xpEarnedFromTrivia: xpEarned,
+    dailyCap: cap,
+    remaining: Math.max(0, cap - attemptsUsed),
+    limitReached: attemptsUsed >= cap,
+    rankUp: false,
+    rank: getRank(user && typeof user.points === "number" ? user.points : 0),
+    ...extra,
+  };
+}
+
+/**
+ * One Trivia answer: always consumes a daily attempt. XP only for a correct
+ * answer among the first 5 UTC-day attempts, and only when the wallet is linked.
+ * Unlinked play still consumes the attempt (no retroactive XP after linking).
+ * @param {string|number} userId
+ * @param {string} userName
+ * @param {{ correct?: boolean, shopFile?: string, walletFile?: string }} [payload]
+ * @param {string} [pointsFile]
+ * @param {string} [walletFile]
+ */
+function awardTriviaAttemptXp(
+  userId,
+  userName,
+  payload = {},
+  pointsFile = POINTS_FILE,
+  walletFile
+) {
+  const correct = Boolean(payload && payload.correct);
+  const resolvedWallet =
+    walletFile || (payload && payload.walletFile ? payload.walletFile : undefined);
+  const questExtras = {
+    game: "trivia",
+    walletFile: resolvedWallet,
+    pointsFile,
+    shopFile: payload && payload.shopFile ? payload.shopFile : undefined,
+  };
+
+  return finalizeXpAward(
+    userId,
+    userName,
+    mutatePoints((data) => {
+      const id = String(userId);
+      const user = ensureUserRecord(data, id, userName);
+      user.name = userName;
+      resetWeeklyIfNewWeek(user, id);
+      resetTriviaIfNewDay(user);
+
+      const eligible = user.trivia.attemptsUsed < TRIVIA_DAILY_ATTEMPT_CAP;
+      user.trivia.attemptsUsed += 1;
+      if (correct) {
+        user.trivia.correctCount += 1;
+      }
+
+      if (isCommunityCompetitionExcluded(userId)) {
+        return triviaAttemptResult(user, {
+          reason: "excluded",
+          eligible,
+          funPlay: !eligible,
+        });
+      }
+
+      const walletOk = canEarnXp(userId, resolvedWallet);
+      if (!eligible || !correct || !walletOk) {
+        let reason = "incorrect";
+        if (!eligible) {
+          reason = "daily-cap";
+        } else if (!walletOk) {
+          reason = XP_WALLET_REQUIRED;
+        }
+        return triviaAttemptResult(user, {
+          reason,
+          eligible,
+          funPlay: !eligible,
+          previousRank: getRank(user.points),
+        });
+      }
+
+      const pointsBefore = user.points;
+      user.points += TRIVIA_ATTEMPT_XP;
+      user.weeklyPoints += TRIVIA_ATTEMPT_XP;
+      user.trivia.xpEarnedFromTrivia += TRIVIA_ATTEMPT_XP;
+      noteWeeklyStandingSafe(id, user);
+
+      const previousRank = getRank(pointsBefore);
+      const rank = getRank(user.points);
+      return triviaAttemptResult(user, {
+        awarded: true,
+        pointsToAdd: TRIVIA_ATTEMPT_XP,
+        eligible: true,
+        funPlay: false,
+        rankUp: previousRank.title !== rank.title,
+        rank,
+        previousRank,
+      });
+    }, pointsFile),
+    questExtras
+  );
 }
 
 /** ManGo Bomb participation XP (awarded once when a round actually starts). */
@@ -1744,11 +1919,15 @@ module.exports = {
   awardChatFightXp,
   awardTriviaRoundXp,
   awardTriviaWinXp,
+  awardTriviaAttemptXp,
   TRIVIA_ROUND_WIN_XP,
   TRIVIA_TIE_XP,
   TRIVIA_DAILY_REWARD_CAP,
+  TRIVIA_ATTEMPT_XP,
+  TRIVIA_DAILY_ATTEMPT_CAP,
   ensureTriviaState,
   getTriviaRewardedRoundsToday,
+  getTriviaAttemptStatus,
   awardMangoBombXp,
   MANGO_BOMB_PARTICIPATE_XP,
   MANGO_BOMB_SURVIVE_XP,

@@ -25,12 +25,19 @@ const {
   validateTriviaQuestionBank,
 } = require("../services/triviaQuestions");
 require("../services/xpWalletGate").setXpWalletAutoLinkForTests(true);
+const { setMangoShopFileForTests } = require("../services/mangoShopStore");
 const {
   awardTriviaRoundXp,
+  awardTriviaAttemptXp,
   TRIVIA_DAILY_REWARD_CAP,
+  TRIVIA_ATTEMPT_XP,
+  TRIVIA_DAILY_ATTEMPT_CAP,
   loadPoints,
 } = require("../services/points");
-const { handleTrivia, handleTriviaAnswer } = require("../commands/trivia");
+const {
+  handleTrivia,
+  handleTriviaAnswer,
+} = require("../commands/trivia");
 const {
   isCommunityChallengeBusy,
   getCommunityBusyReason,
@@ -54,6 +61,7 @@ const {
 } = require("../utils/expiredMessageCleanup");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-trivia-"));
+setMangoShopFileForTests(path.join(tempDir, "shop.json"));
 let testCounter = 0;
 const COMMUNITY_CHAT = -1001234567890;
 const OTHER_CHAT = -1009999999999;
@@ -136,7 +144,7 @@ function makeBank(n = 20) {
   for (let i = 0; i < n; i += 1) {
     bank.push({
       id: `t-${i}`,
-      category: "general knowledge",
+      category: "general",
       question: `Question number ${i}?`,
       answers: ["Alpha", "Beta", "Gamma", "Delta"],
       correctIndex: 1,
@@ -374,8 +382,8 @@ async function main() {
   await runTest("wrong answer awards no round XP; correct XP unchanged", () => {
     const file = pointsFile();
     const { service, timers } = createService({ nextQuestionDelayMs: 1, wrongAnswerNextDelayMs: 1 });
-    service.setAwardXpHandler((uid, name, amount) =>
-      awardTriviaRoundXp(uid, name, amount, file)
+    service.setAwardXpHandler((uid, name, payload) =>
+      awardTriviaAttemptXp(uid, name, payload, file)
     );
     service.setEditMessageHandler(() => {});
     const started = startRound(service);
@@ -386,8 +394,11 @@ async function main() {
       timers.advance(1);
     }
     assert.strictEqual(service.isTriviaOpen(), false);
-    assert.strictEqual(loadPoints(file).users[String(USER_A)], undefined);
-    assert.strictEqual(loadPoints(file).users[String(USER_B)].points, 3);
+    assert.strictEqual(loadPoints(file).users[String(USER_A)].points, 0);
+    assert.strictEqual(loadPoints(file).users[String(USER_A)].trivia.attemptsUsed, 1);
+    assert.strictEqual(loadPoints(file).users[String(USER_B)].points, 4);
+    assert.strictEqual(TRIVIA_ATTEMPT_XP, 1);
+    assert.strictEqual(TRIVIA_DAILY_ATTEMPT_CAP, 5);
     assert.strictEqual(TRIVIA_ROUND_WIN_XP, 3);
     assert.strictEqual(TRIVIA_TIE_XP, 2);
   });
@@ -408,7 +419,7 @@ async function main() {
     assert.ok(ctx.edited[0].text.includes("❌ Wrong answer!"));
     assert.ok(ctx.edited[0].text.includes("Correct answer:"));
     await handleTriviaAnswer(ctx, { runtime: service });
-    assert.strictEqual(ctx.cbAnswers[1], "This question is over.");
+    assert.strictEqual(ctx.cbAnswers[1], "This question is already finished.");
     assert.strictEqual(ctx.edited.length, 1);
   });
 
@@ -422,8 +433,8 @@ async function main() {
       edits.push({ text, extra });
     });
     const file = pointsFile();
-    service.setAwardXpHandler((uid, name, amount) =>
-      awardTriviaRoundXp(uid, name, amount, file)
+    service.setAwardXpHandler((uid, name, payload) =>
+      awardTriviaAttemptXp(uid, name, payload, file)
     );
     startRound(service);
     assert.strictEqual(service.isTriviaOpen(), true);
@@ -473,8 +484,8 @@ async function main() {
   await runTest("full round sole winner awards once; concurrency one question winner", () => {
     const file = pointsFile();
     const { service, timers } = createService({ nextQuestionDelayMs: 1 });
-    service.setAwardXpHandler((uid, name, amount) =>
-      awardTriviaRoundXp(uid, name, amount, file)
+    service.setAwardXpHandler((uid, name, payload) =>
+      awardTriviaAttemptXp(uid, name, payload, file)
     );
     const edits = [];
     service.setEditMessageHandler((c, m, text) => {
@@ -490,7 +501,7 @@ async function main() {
       timers.advance(1);
     }
     assert.strictEqual(service.isTriviaOpen(), false);
-    assert.strictEqual(loadPoints(file).users[String(USER_A)].points, 3);
+    assert.strictEqual(loadPoints(file).users[String(USER_A)].points, 5);
     assert.strictEqual(loadPoints(file).users[String(USER_B)], undefined);
     const claim2 = service.claimRoundXp();
     assert.strictEqual(claim2.shouldAward, false);
@@ -499,8 +510,8 @@ async function main() {
   await runTest("tie winners both get +2", () => {
     const file = pointsFile();
     const { service, timers } = createService({ nextQuestionDelayMs: 1 });
-    service.setAwardXpHandler((uid, name, amount) =>
-      awardTriviaRoundXp(uid, name, amount, file)
+    service.setAwardXpHandler((uid, name, payload) =>
+      awardTriviaAttemptXp(uid, name, payload, file)
     );
     service.setEditMessageHandler(() => {});
     const started = startRound(service);
@@ -524,9 +535,9 @@ async function main() {
     const awards = [];
     const edits = [];
     const { service, timers } = createService({ nextQuestionDelayMs: 1 });
-    service.setAwardXpHandler((uid, name, amount) => {
-      awards.push({ uid, name, amount });
-      return awardTriviaRoundXp(uid, name, amount, file);
+    service.setAwardXpHandler((uid, name, payload) => {
+      awards.push({ uid, name, payload });
+      return awardTriviaAttemptXp(uid, name, payload, file);
     });
     service.setEditMessageHandler((_c, _m, text) => {
       edits.push(text);
@@ -679,8 +690,10 @@ async function main() {
       isBusyFn: () => false,
       setMessageIdFn: (id, mid) => service.setMessageId(id, mid),
     });
-    assert.ok(member.replies[0].includes("Question 1 / 5"));
+    assert.ok(member.replies[0].includes("Choose a category"));
+    assert.ok(member.replies[0].includes("ManGo Trivia"));
     assert.ok(!String(member.replies[0]).toLowerCase().includes("admin"));
+    assert.strictEqual(service.isTriviaOpen(), false);
   });
 
   await runTest("member start blocked outside Games topic when configured", async () => {
@@ -717,7 +730,7 @@ async function main() {
       isBusyFn: () => false,
       setMessageIdFn: (id, mid) => service.setMessageId(id, mid),
     });
-    assert.ok(ok.replies[0].includes("Question 1"));
+    assert.ok(ok.replies[0].includes("Choose a category"));
     assert.strictEqual(ok.replyExtras[0].message_thread_id, 123);
 
     const adminBypass = createMockCtx({
@@ -731,7 +744,7 @@ async function main() {
       canManageGroupFn: async () => true,
       setMessageIdFn: (id, mid) => service.setMessageId(id, mid),
     });
-    assert.ok(adminBypass.replies[0].includes("Question 1"));
+    assert.ok(adminBypass.replies[0].includes("Choose a category"));
   });
 
   await runTest("auto Trivia announce uses Games topic thread when configured", async () => {
@@ -814,7 +827,7 @@ async function main() {
       sessionId: "abc123",
       answerIndex: 1,
     });
-    assert.ok(HELP_MESSAGE.includes("Start a Trivia round"));
+    assert.ok(HELP_MESSAGE.includes("Open Trivia categories"));
   });
 
   await runTest("anti-repeat window", () => {

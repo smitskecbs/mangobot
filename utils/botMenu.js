@@ -369,7 +369,7 @@ function getGroupGamesMenuExtra(ctx) {
     Markup.button.callback("Connect Four", GROUP_MENU_CALLBACK.CONNECT4),
   ]);
   rows.push([
-    Markup.button.callback("Trivia", GROUP_MENU_CALLBACK.TRIVIA),
+    Markup.button.callback("🧠 Trivia", GROUP_MENU_CALLBACK.TRIVIA),
     Markup.button.callback("ManGo Bomb", GROUP_MENU_CALLBACK.MANGOBOMB),
   ]);
   rows.push([Markup.button.callback("⬅️ Back", GROUP_MENU_CALLBACK.BACK)]);

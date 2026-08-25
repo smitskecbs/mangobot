@@ -1,8 +1,9 @@
 /**
- * Community Trivia — 5-question rounds (manual + Activity Engine auto).
- * Per-question race: first correct earns 1 round point.
- * Round XP only at the end (sole winner +3 / tie +2), with daily reward cap.
- * Restart clears in-memory sessions.
+ * Community Trivia — category hub + 5-question auto rounds.
+ * Hub: Games → category → unlimited questions, Next / Change Category / Games.
+ * Auto: 5-question community race, Random category, auto-advance.
+ * Per valid answer: one daily attempt. First 5 UTC attempts can earn +1 XP if correct.
+ * Restart clears in-memory sessions; daily attempts live in points.json.
  */
 
 const crypto = require("crypto");
@@ -11,13 +12,17 @@ const { isAllowedChatFightChat } = require("./chatFight");
 const { sanitizePvpDisplayName } = require("./pvpSessionManager");
 const {
   TRIVIA_QUESTIONS,
+  TRIVIA_HUB_CATEGORIES,
   ANTI_REPEAT_WINDOW,
   pickTriviaQuestion,
+  getCategoryMeta,
+  isHubCategoryId,
 } = require("./triviaQuestions");
 const {
   TRIVIA_ROUND_WIN_XP,
   TRIVIA_TIE_XP,
   TRIVIA_DAILY_REWARD_CAP,
+  TRIVIA_DAILY_ATTEMPT_CAP,
 } = require("./points");
 const {
   emptyInlineKeyboardExtra,
@@ -67,11 +72,54 @@ function parseTriviaCallbackData(data) {
   if (!sessionId || !/^[a-f0-9]+$/i.test(sessionId)) {
     return null;
   }
+  if (sessionId.toLowerCase() === "cat") {
+    return null;
+  }
   const answerIndex = Number(parts[2]);
   if (!Number.isInteger(answerIndex) || answerIndex < 0 || answerIndex > 3) {
     return null;
   }
   return { sessionId, answerIndex };
+}
+
+const TRIVIA_HUB_ACTION = Object.freeze({
+  CHOOSER: "trivia:hub",
+  NEXT: "trivia:next",
+  CHANGE: "trivia:change",
+  GAMES: "trivia:games",
+});
+
+function buildCategoryCallbackData(categoryId) {
+  return `trivia:cat:${categoryId}`;
+}
+
+/**
+ * Hub navigation callbacks. No user ids.
+ */
+function parseTriviaHubCallback(data) {
+  if (typeof data !== "string") {
+    return null;
+  }
+  if (data === TRIVIA_HUB_ACTION.CHOOSER) {
+    return { action: "hub" };
+  }
+  if (data === TRIVIA_HUB_ACTION.NEXT) {
+    return { action: "next" };
+  }
+  if (data === TRIVIA_HUB_ACTION.CHANGE) {
+    return { action: "change" };
+  }
+  if (data === TRIVIA_HUB_ACTION.GAMES) {
+    return { action: "games" };
+  }
+  const parts = data.split(":");
+  if (parts.length !== 3 || parts[0] !== "trivia" || parts[1] !== "cat") {
+    return null;
+  }
+  if (!isHubCategoryId(parts[2])) {
+    return null;
+  }
+  return { action: "category", category: parts[2] };
 }
 
 function materializeQuestion(raw, random) {
@@ -89,6 +137,7 @@ function materializeQuestion(raw, random) {
     question: raw.question,
     answers,
     correctIndex: answers.indexOf(correctText),
+    difficulty: raw.difficulty || null,
   };
 }
 
@@ -105,19 +154,77 @@ function buildAnswerKeyboard(sessionId) {
   ]);
 }
 
-function buildQuestionText(session) {
-  const lines = [
-    "🧠 MANGO TRIVIA",
-    `Question ${session.questionNumber} / ${session.totalQuestions}`,
-    "",
-    session.question,
-    "",
-  ];
+function buildHubResultKeyboard() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("➡️ Next Question", TRIVIA_HUB_ACTION.NEXT)],
+    [Markup.button.callback("🔄 Change Category", TRIVIA_HUB_ACTION.CHANGE)],
+    [Markup.button.callback("⬅️ Games", TRIVIA_HUB_ACTION.GAMES)],
+  ]);
+}
+
+function buildTriviaChooserKeyboard() {
+  const rows = TRIVIA_HUB_CATEGORIES.map((row) => [
+    Markup.button.callback(
+      `${row.emoji} ${row.label}`,
+      buildCategoryCallbackData(row.id)
+    ),
+  ]);
+  rows.push([Markup.button.callback("⬅️ Back", TRIVIA_HUB_ACTION.GAMES)]);
+  return Markup.inlineKeyboard(rows);
+}
+
+function formatTriviaXpStatusLine(status, { fullLimitCopy = false } = {}) {
+  const used =
+    status && typeof status.attemptsUsed === "number" ? status.attemptsUsed : 0;
+  const cap =
+    status && typeof status.dailyCap === "number"
+      ? status.dailyCap
+      : TRIVIA_DAILY_ATTEMPT_CAP;
+  if (used >= cap) {
+    if (fullLimitCopy) {
+      return "🎮 Daily Trivia XP limit reached.\n\nYou can keep playing for fun. 🥭";
+    }
+    return "🎮 Daily Trivia XP limit reached.";
+  }
+  return `🎯 XP-eligible plays: ${used} / ${cap}`;
+}
+
+function buildTriviaChooserText(status) {
+  const lines = ["🧠 ManGo Trivia", "", "Choose a category:", ""];
+  lines.push(formatTriviaXpStatusLine(status, { fullLimitCopy: true }));
+  return lines.join("\n");
+}
+
+function categoryHeader(session) {
+  const meta = getCategoryMeta(
+    (session && (session.questionCategory || session.category)) || "random"
+  );
+  return `${meta.emoji} ${meta.label} Trivia`;
+}
+
+function buildQuestionText(session, status) {
+  const hub = Boolean(session && session.hubMode);
+  const lines = hub
+    ? [categoryHeader(session), "", `Question ${session.questionNumber}`, ""]
+    : [
+        "🧠 MANGO TRIVIA",
+        categoryHeader(session),
+        `Question ${session.questionNumber} / ${session.totalQuestions}`,
+        "",
+      ];
+  lines.push(session.question, "");
   for (let i = 0; i < 4; i += 1) {
     lines.push(`${LETTERS[i]}. ${session.answers[i]}`);
   }
   lines.push("");
   lines.push("Answer using inline buttons.");
+  if (status) {
+    lines.push("");
+    lines.push(formatTriviaXpStatusLine(status));
+  } else if (hub) {
+    lines.push("");
+    lines.push(formatTriviaXpStatusLine({ attemptsUsed: 0 }));
+  }
   return lines.join("\n");
 }
 
@@ -129,12 +236,55 @@ A 5-question community round is starting!
 `;
 }
 
-function buildQuestionWonText(session, winnerName) {
+function xpResultLines(xpResult, { correct } = {}) {
+  if (!xpResult) {
+    return [];
+  }
+  const lines = [];
+  if (xpResult.funPlay || xpResult.limitReached || xpResult.reason === "daily-cap") {
+    if (correct) {
+      lines.push("", "✅ Correct!", "", "Daily Trivia XP limit reached.", "Playing for fun. 🥭");
+    } else {
+      lines.push("", "Daily Trivia XP limit reached.", "Playing for fun. 🥭");
+    }
+    return lines;
+  }
+  if (xpResult.reason === "wallet-required") {
+    lines.push("");
+    lines.push(correct ? "+0 XP" : "+0 XP");
+    lines.push("Trivia XP: 🔒 0 XP — wallet not linked — /wallet");
+    lines.push("");
+    lines.push(formatTriviaXpStatusLine(xpResult));
+    return lines;
+  }
+  if (correct && xpResult.awarded) {
+    lines.push("", "+1 XP", "", formatTriviaXpStatusLine(xpResult));
+    return lines;
+  }
+  lines.push("", "+0 XP", "", formatTriviaXpStatusLine(xpResult));
+  return lines;
+}
+
+function buildQuestionWonText(session, winnerName, xpResult) {
+  if (session && session.hubMode) {
+    const lines = ["✅ Correct!"];
+    if (xpResult && (xpResult.funPlay || xpResult.reason === "daily-cap")) {
+      lines.push("", "Daily Trivia XP limit reached.", "Playing for fun. 🥭");
+    } else if (xpResult && xpResult.reason === "wallet-required") {
+      lines.push("", "+0 XP", "Trivia XP: 🔒 0 XP — wallet not linked — /wallet");
+      lines.push("", formatTriviaXpStatusLine(xpResult));
+    } else if (xpResult && xpResult.awarded) {
+      lines.push("", "+1 XP", "", formatTriviaXpStatusLine(xpResult));
+    } else {
+      lines.push("", "+0 XP", "", formatTriviaXpStatusLine(xpResult));
+    }
+    return lines.join("\n");
+  }
   const score =
     (session.scores[String(session.questionWinnerId)] &&
       session.scores[String(session.questionWinnerId)].score) ||
     1;
-  return [
+  const lines = [
     "✅ Correct!",
     "",
     `${session.answers[session.correctIndex]} was the right answer.`,
@@ -143,14 +293,30 @@ function buildQuestionWonText(session, winnerName) {
     `Score: ${score}`,
     "",
     "Next question in 5 seconds... 🥭",
-  ].join("\n");
+  ];
+  if (xpResult) {
+    lines.push(...xpResultLines(xpResult, { correct: true }).filter((line) => line !== "✅ Correct!"));
+  }
+  return lines.join("\n");
 }
 
-function buildQuestionWrongText(session) {
+function buildQuestionWrongText(session, xpResult) {
   const answer =
     session && Array.isArray(session.answers)
       ? session.answers[session.correctIndex]
       : "";
+  if (session && session.hubMode) {
+    const lines = ["❌ Not quite.", "", "Correct answer:", answer || ""];
+    if (xpResult && (xpResult.funPlay || xpResult.reason === "daily-cap")) {
+      lines.push("", "Daily Trivia XP limit reached.", "Playing for fun. 🥭");
+    } else {
+      lines.push("", "+0 XP", "", formatTriviaXpStatusLine(xpResult));
+      if (xpResult && xpResult.reason === "wallet-required") {
+        lines.push("Trivia XP: 🔒 0 XP — wallet not linked — /wallet");
+      }
+    }
+    return lines.join("\n");
+  }
   return [
     "❌ Wrong answer!",
     "",
@@ -162,6 +328,15 @@ function buildQuestionWrongText(session) {
 }
 
 function buildQuestionTimeoutText(session) {
+  if (session && session.hubMode) {
+    return [
+      "⏱ TIME'S UP",
+      "",
+      `Correct answer: ${session.answers[session.correctIndex]}`,
+      "",
+      "No attempt used.",
+    ].join("\n");
+  }
   return [
     "⏱ TIME'S UP",
     "",
@@ -304,7 +479,7 @@ function createTriviaService(options = {}) {
 
   function generateSessionId() {
     let id = randomIdFn();
-    while (session && session.id === id) {
+    while (isTriviaOpen() && session.id === id) {
       id = randomIdFn();
     }
     return id;
@@ -348,6 +523,9 @@ function createTriviaService(options = {}) {
       messageId: session.messageId,
       source: session.source,
       xpClaimed: session.xpClaimed,
+      hubMode: Boolean(session.hubMode),
+      category: session.category || null,
+      questionCategory: session.questionCategory || null,
     };
     if (includeSecret) {
       snap.correctIndex = session.correctIndex;
@@ -371,12 +549,17 @@ function createTriviaService(options = {}) {
       .catch(() => false);
   }
 
-  function pickNextMaterialized() {
+  function pickNextMaterialized(categoryOverride) {
+    const category =
+      categoryOverride != null
+        ? categoryOverride
+        : session && session.category;
     const picked = pickTriviaQuestion(
       questions,
       recentQuestionIds,
       random,
-      antiRepeatWindow
+      antiRepeatWindow,
+      category
     );
     if (!picked.question) {
       return null;
@@ -390,6 +573,7 @@ function createTriviaService(options = {}) {
     session.question = materialized.question;
     session.answers = materialized.answers;
     session.correctIndex = materialized.correctIndex;
+    session.questionCategory = materialized.category || null;
     session.questionPhase = QUESTION_PHASE.OPEN;
     session.answeredUsers = {};
     session.questionWinnerId = null;
@@ -427,8 +611,13 @@ function createTriviaService(options = {}) {
     session.questionPhase = QUESTION_PHASE.RESOLVED;
     clearQuestionTimer();
     const text = buildQuestionTimeoutText(session);
-    Promise.resolve(safeEdit(text, emptyInlineKeyboardExtra())).catch(() => {});
-    scheduleAdvance();
+    const extra = session.hubMode
+      ? buildHubResultKeyboard()
+      : emptyInlineKeyboardExtra();
+    Promise.resolve(safeEdit(text, extra)).catch(() => {});
+    if (!session.hubMode) {
+      scheduleAdvance();
+    }
   }
 
   function scheduleAdvance(delayMs) {
@@ -526,24 +715,11 @@ function createTriviaService(options = {}) {
 
     const claim = claimRoundXp();
     const xpResults = [];
-    if (claim.ok && claim.shouldAward && typeof awardXpFn === "function") {
-      for (const winner of claim.winners) {
-        try {
-          xpResults.push(
-            awardXpFn(winner.userId, winner.displayName, claim.pointsToAdd)
-          );
-        } catch (_err) {
-          xpResults.push({
-            awarded: false,
-            reason: "award-error",
-            pointsToAdd: 0,
-          });
-        }
-      }
-    }
-
     const xpSummary = {
-      line: formatXpSummaryLine(xpResults, claim),
+      line: formatXpSummaryLine(xpResults, {
+        ...claim,
+        shouldAward: false,
+      }),
       results: xpResults,
       claim,
     };
@@ -571,7 +747,7 @@ function createTriviaService(options = {}) {
     if (!session || session.status !== STATUS.ACTIVE) {
       return null;
     }
-    if (session.questionNumber >= session.totalQuestions) {
+    if (!session.hubMode && session.questionNumber >= session.totalQuestions) {
       return finishRound();
     }
 
@@ -583,7 +759,7 @@ function createTriviaService(options = {}) {
     session.questionNumber += 1;
     applyQuestionToSession(next);
     scheduleQuestionTimeout(session);
-    const text = buildQuestionText(session);
+    const text = buildQuestionText(session, session.lastXpResult || session.xpStatus);
     const extra = buildAnswerKeyboard(session.id);
     Promise.resolve(safeEdit(text, extra)).catch(() => {
       abortRound("edit-failed");
@@ -596,18 +772,24 @@ function createTriviaService(options = {}) {
     };
   }
 
-  function abortRound(reason) {
+  function abortRound(reason, options = {}) {
     clearAllTimers();
     if (session) {
       session.status = STATUS.ABORTED;
       session.abortReason = reason || "aborted";
       logGameCleanup(GAME_TYPE.TRIVIA, FINAL_STATE.CANCELLED);
-      const text = buildFinalGameText(GAME_TYPE.TRIVIA, FINAL_STATE.CANCELLED);
-      Promise.resolve(safeEdit(text, emptyGameKeyboardExtra())).catch(() => {
-        logCleanupRenderFailed(GAME_TYPE.TRIVIA);
-      });
+      if (!options.silent) {
+        const text = buildFinalGameText(GAME_TYPE.TRIVIA, FINAL_STATE.CANCELLED);
+        Promise.resolve(safeEdit(text, emptyGameKeyboardExtra())).catch(() => {
+          logCleanupRenderFailed(GAME_TYPE.TRIVIA);
+        });
+      }
     }
     return { ok: false, reason: reason || "aborted", session: snapshot(true) };
+  }
+
+  function releaseHubSession(reason) {
+    return abortRound(reason || "hub-nav", { silent: true });
   }
 
   function startTrivia({
@@ -615,6 +797,9 @@ function createTriviaService(options = {}) {
     source = "manual",
     question: forcedQuestion,
     autoIntro = false,
+    category = null,
+    hubMode = false,
+    xpStatus = null,
   } = {}) {
     if (!isAllowedChatFightChat(chatId)) {
       return { ok: false, reason: "wrong-chat" };
@@ -625,17 +810,21 @@ function createTriviaService(options = {}) {
 
     clearAllTimers();
 
+    const resolvedCategory =
+      source === "auto" && !category ? "random" : category;
+    const useHub = Boolean(hubMode);
+
     let materialized;
     if (forcedQuestion && typeof forcedQuestion === "object") {
       materialized = {
         id: forcedQuestion.id || "custom",
-        category: forcedQuestion.category || "custom",
+        category: forcedQuestion.category || resolvedCategory || "custom",
         question: String(forcedQuestion.question || ""),
         answers: forcedQuestion.answers.slice(),
         correctIndex: forcedQuestion.correctIndex,
       };
     } else {
-      materialized = pickNextMaterialized();
+      materialized = pickNextMaterialized(resolvedCategory);
       if (!materialized) {
         return { ok: false, reason: "no-questions" };
       }
@@ -650,7 +839,7 @@ function createTriviaService(options = {}) {
       status: STATUS.ACTIVE,
       questionPhase: QUESTION_PHASE.OPEN,
       questionNumber: 1,
-      totalQuestions,
+      totalQuestions: useHub ? 0 : totalQuestions,
       scores: {},
       answeredUsers: {},
       questionWinnerId: null,
@@ -661,12 +850,16 @@ function createTriviaService(options = {}) {
       source: source || "manual",
       xpClaimed: false,
       lastXpSummary: null,
+      lastXpResult: null,
+      xpStatus: xpStatus || null,
       abortReason: null,
+      hubMode: useHub,
+      category: resolvedCategory || null,
     };
     applyQuestionToSession(materialized);
     scheduleQuestionTimeout(session);
 
-    const questionBody = buildQuestionText(session);
+    const questionBody = buildQuestionText(session, xpStatus);
     const text =
       autoIntro || source === "auto"
         ? `${buildAutoIntroPrefix()}${questionBody}`
@@ -699,6 +892,24 @@ function createTriviaService(options = {}) {
 
   function setAwardXpHandler(fn) {
     awardXpFn = typeof fn === "function" ? fn : null;
+  }
+
+  function awardAttempt(uid, name, correct) {
+    if (typeof awardXpFn !== "function") {
+      return null;
+    }
+    try {
+      return awardXpFn(uid, name, { correct });
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  function resultExtra(target) {
+    if (target.hubMode) {
+      return buildHubResultKeyboard();
+    }
+    return emptyInlineKeyboardExtra();
   }
 
   /**
@@ -746,48 +957,76 @@ function createTriviaService(options = {}) {
     }
 
     target.answeredUsers[uid] = { answerIndex, at: now() };
+    const name = sanitizePvpDisplayName(displayName || { first_name: "Player" });
+    const correct = answerIndex === target.correctIndex;
 
-    if (answerIndex !== target.correctIndex) {
-      target.questionPhase = QUESTION_PHASE.RESOLVED;
-      clearQuestionTimer();
+    target.questionPhase = QUESTION_PHASE.RESOLVED;
+    clearQuestionTimer();
+
+    const xpResult = awardAttempt(uid, name, correct);
+    target.lastXpResult = xpResult;
+
+    if (!correct) {
       const rendered = {
-        text: buildQuestionWrongText(target),
-        extra: emptyInlineKeyboardExtra(),
+        text: buildQuestionWrongText(target, xpResult),
+        extra: resultExtra(target),
       };
-      scheduleAdvance(wrongAnswerNextDelayMs);
+      if (!target.hubMode) {
+        scheduleAdvance(wrongAnswerNextDelayMs);
+      }
       return {
         ok: true,
         correct: false,
         toast: "❌ Wrong answer!",
+        xpResult,
         session: snapshot(true),
         rendered,
       };
     }
 
-    // Sync question winner before any await.
-    target.questionPhase = QUESTION_PHASE.RESOLVED;
     target.questionWinnerId = uid;
-    const name = sanitizePvpDisplayName(displayName || { first_name: "Player" });
     if (!target.scores[uid]) {
       target.scores[uid] = { score: 0, displayName: name };
     }
     target.scores[uid].score += 1;
     target.scores[uid].displayName = name;
-    clearQuestionTimer();
 
     const rendered = {
-      text: buildQuestionWonText(target, name),
-      extra: emptyInlineKeyboardExtra(),
+      text: buildQuestionWonText(target, name, xpResult),
+      extra: resultExtra(target),
     };
-    scheduleAdvance();
+    if (!target.hubMode) {
+      scheduleAdvance();
+    }
 
     return {
       ok: true,
       correct: true,
       questionWon: true,
+      xpResult,
       session: snapshot(true),
       rendered,
     };
+  }
+
+  function nextHubQuestion() {
+    if (!session || session.status !== STATUS.ACTIVE) {
+      return { ok: false, reason: "inactive" };
+    }
+    if (!session.hubMode) {
+      return { ok: false, reason: "not-hub" };
+    }
+    if (session.questionPhase === QUESTION_PHASE.OPEN) {
+      return { ok: false, reason: "question-open" };
+    }
+    const advanced = advanceRound();
+    if (!advanced || !advanced.advanced) {
+      return {
+        ok: false,
+        reason: (advanced && advanced.reason) || "advance-failed",
+      };
+    }
+    return { ok: true, ...advanced };
   }
 
   function forceQuestionTimeout() {
@@ -856,7 +1095,9 @@ function createTriviaService(options = {}) {
     forceQuestionTimeout,
     forceCompleteRound,
     advanceRound,
+    nextHubQuestion,
     abortRound,
+    releaseHubSession,
     reset,
     clearAllTimers,
     getRecentQuestionIds,
@@ -889,6 +1130,9 @@ module.exports = {
   createTriviaService,
   buildAnswerCallbackData,
   parseTriviaCallbackData,
+  parseTriviaHubCallback,
+  TRIVIA_HUB_ACTION,
+  buildCategoryCallbackData,
   materializeQuestion,
   buildQuestionText,
   buildQuestionWonText,
@@ -896,6 +1140,10 @@ module.exports = {
   buildQuestionTimeoutText,
   buildFinalScoreboardText,
   buildAnswerKeyboard,
+  buildHubResultKeyboard,
+  buildTriviaChooserText,
+  buildTriviaChooserKeyboard,
+  formatTriviaXpStatusLine,
   rankRoundScores,
   sanitizePvpDisplayName,
   triviaRuntime: defaultService,

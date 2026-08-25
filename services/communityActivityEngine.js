@@ -812,6 +812,8 @@ async function processCommunityActivitySlot({
       chatId,
       source: "auto",
       autoIntro: true,
+      category: "random",
+      hubMode: false,
     });
     if (!started.ok) {
       return { ok: false, reason: started.reason || "start-failed" };
