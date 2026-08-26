@@ -51,6 +51,7 @@ function busyOptions(options = {}) {
     isConnectFourOpenFn: options.isConnectFourOpenFn,
     isTriviaOpenFn: options.isTriviaOpenFn,
     isMangoBombOpenFn: options.isMangoBombOpenFn,
+    isBlackjackOpenFn: options.isBlackjackOpenFn,
   };
 }
 
@@ -184,6 +185,9 @@ function busyReply(ctx, options = {}) {
   }
   if (reason === "mangobomb") {
     return "🥭💣 A ManGo Bomb round is already running.";
+  }
+  if (reason === "blackjack") {
+    return "🃏 A Blackjack round is already running.";
   }
   return "🧠 A Trivia challenge is already open.";
 }

@@ -58,6 +58,17 @@ function isMangoBombBusy() {
   }
 }
 
+function isBlackjackBusy() {
+  try {
+    const blackjack = require("./blackjack");
+    return typeof blackjack.isBlackjackOpen === "function"
+      ? Boolean(blackjack.isBlackjackOpen())
+      : false;
+  } catch (_err) {
+    return false;
+  }
+}
+
 function isPvpBusy(options = {}) {
   const tttOpen =
     typeof options.isTicTacToeOpenFn === "function"
@@ -77,6 +88,7 @@ function isPvpBusy(options = {}) {
  * @param {() => boolean} [options.isConnectFourOpenFn]
  * @param {() => boolean} [options.isTriviaOpenFn]
  * @param {() => boolean} [options.isMangoBombOpenFn]
+ * @param {() => boolean} [options.isBlackjackOpenFn]
  */
 function isCommunityChallengeBusy(options = {}) {
   const fightOpen =
@@ -91,11 +103,17 @@ function isCommunityChallengeBusy(options = {}) {
     typeof options.isMangoBombOpenFn === "function"
       ? options.isMangoBombOpenFn()
       : isMangoBombBusy();
-  return Boolean(fightOpen || isPvpBusy(options) || triviaOpen || bombOpen);
+  const blackjackOpen =
+    typeof options.isBlackjackOpenFn === "function"
+      ? options.isBlackjackOpenFn()
+      : isBlackjackBusy();
+  return Boolean(
+    fightOpen || isPvpBusy(options) || triviaOpen || bombOpen || blackjackOpen
+  );
 }
 
 /**
- * @returns {"chatfight"|"tictactoe"|"connect4"|"trivia"|"mangobomb"|null}
+ * @returns {"chatfight"|"tictactoe"|"connect4"|"trivia"|"mangobomb"|"blackjack"|null}
  */
 function getCommunityBusyReason(options = {}) {
   const fightOpen =
@@ -133,6 +151,13 @@ function getCommunityBusyReason(options = {}) {
   if (bombOpen) {
     return "mangobomb";
   }
+  const blackjackOpen =
+    typeof options.isBlackjackOpenFn === "function"
+      ? options.isBlackjackOpenFn()
+      : isBlackjackBusy();
+  if (blackjackOpen) {
+    return "blackjack";
+  }
   return null;
 }
 
@@ -152,6 +177,9 @@ function formatCommunityBusyReply(reason) {
   if (reason === "mangobomb") {
     return "🥭💣 A ManGo Bomb round is already running.";
   }
+  if (reason === "blackjack") {
+    return "🃏 A Blackjack round is already running.";
+  }
   return "🎮 A PvP challenge is already open.";
 }
 
@@ -164,5 +192,6 @@ module.exports = {
   isConnectFourBusy,
   isTriviaBusy,
   isMangoBombBusy,
+  isBlackjackBusy,
   isPvpBusy,
 };

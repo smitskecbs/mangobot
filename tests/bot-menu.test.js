@@ -658,6 +658,8 @@ runTest("Games submenu Snake/Bounch safe deep-links", () => {
   assert.ok(buttons.some((b) => b.callback_data === GROUP_MENU_CALLBACK.TRIVIA));
   assert.ok(buttons.some((b) => b.callback_data === GROUP_MENU_CALLBACK.MANGOBOMB));
   assert.ok(buttons.some((b) => b.text === "ManGo Bomb"));
+  assert.ok(buttons.some((b) => b.callback_data === GROUP_MENU_CALLBACK.BLACKJACK));
+  assert.ok(buttons.some((b) => b.text === "🃏 Blackjack"));
   assert.ok(buttons.some((b) => b.callback_data === GROUP_MENU_CALLBACK.BACK));
   const blob = JSON.stringify(rows);
   assert.ok(!blob.includes("?t="));

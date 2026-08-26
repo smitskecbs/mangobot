@@ -1665,6 +1665,404 @@ function awardMangoBombXp(
   );
 }
 
+/** Provisional Blackjack stake (never minted until Play/Pass resolves). */
+const BLACKJACK_STAKE_XP = 10;
+/** Blackjack Pass / safe-exit XP. */
+const BLACKJACK_PASS_XP = 2;
+/** Blackjack push/tie XP when the player chose Play. */
+const BLACKJACK_TIE_XP = 5;
+/** Blackjack vs-bot win XP. */
+const BLACKJACK_BOT_WIN_XP = 10;
+/** Blackjack PvP win XP (own stake + opponent stake, never subtracted from loser). */
+const BLACKJACK_PVP_WIN_XP = 20;
+/** Max rewarded Blackjack rounds per UTC day per user. */
+const BLACKJACK_DAILY_REWARDED_CAP = 2;
+
+/**
+ * Ensure optional Blackjack XP state exists (backward compatible).
+ * @param {object} user
+ * @returns {{ rewardDate: string|null, rewardedRoundsUsed: number, rewardedPvpOpponents: string[] }}
+ */
+function ensureBlackjackState(user) {
+  if (!user.blackjack || typeof user.blackjack !== "object") {
+    user.blackjack = {
+      rewardDate: null,
+      rewardedRoundsUsed: 0,
+      rewardedPvpOpponents: [],
+    };
+  }
+  if (!Object.prototype.hasOwnProperty.call(user.blackjack, "rewardDate")) {
+    user.blackjack.rewardDate = null;
+  }
+  user.blackjack.rewardedRoundsUsed = normalizeNonNegInt(
+    user.blackjack.rewardedRoundsUsed
+  );
+  if (!Array.isArray(user.blackjack.rewardedPvpOpponents)) {
+    user.blackjack.rewardedPvpOpponents = [];
+  } else {
+    user.blackjack.rewardedPvpOpponents = user.blackjack.rewardedPvpOpponents
+      .map((id) => String(id || ""))
+      .filter(Boolean);
+  }
+  return user.blackjack;
+}
+
+function resetBlackjackIfNewDay(user) {
+  const today = getTodayDate();
+  ensureBlackjackState(user);
+  if (user.blackjack.rewardDate !== today) {
+    user.blackjack.rewardDate = today;
+    user.blackjack.rewardedRoundsUsed = 0;
+    user.blackjack.rewardedPvpOpponents = [];
+  }
+}
+
+function emptyBlackjackStatus() {
+  return {
+    date: getTodayDate(),
+    rewardedRoundsUsed: 0,
+    dailyCap: BLACKJACK_DAILY_REWARDED_CAP,
+    remaining: BLACKJACK_DAILY_REWARDED_CAP,
+    limitReached: false,
+    rewardedPvpOpponents: [],
+  };
+}
+
+function blackjackStatusFromUser(user) {
+  const empty = emptyBlackjackStatus();
+  if (!user || typeof user !== "object") {
+    return empty;
+  }
+  if (!user.blackjack || typeof user.blackjack !== "object") {
+    return empty;
+  }
+  if (user.blackjack.rewardDate !== empty.date) {
+    return empty;
+  }
+  const used = normalizeNonNegInt(user.blackjack.rewardedRoundsUsed);
+  const opponents = Array.isArray(user.blackjack.rewardedPvpOpponents)
+    ? user.blackjack.rewardedPvpOpponents.map((id) => String(id || "")).filter(Boolean)
+    : [];
+  return {
+    date: empty.date,
+    rewardedRoundsUsed: used,
+    dailyCap: empty.dailyCap,
+    remaining: Math.max(0, empty.dailyCap - used),
+    limitReached: used >= empty.dailyCap,
+    rewardedPvpOpponents: opponents,
+  };
+}
+
+/**
+ * Read-only per-user Blackjack daily reward snapshot (UTC).
+ * @param {string|number} userId
+ * @param {string} [pointsFile]
+ */
+function getBlackjackStatus(userId, pointsFile = POINTS_FILE) {
+  const empty = emptyBlackjackStatus();
+  const id = String(userId || "");
+  if (!id) {
+    return empty;
+  }
+  const data = readPointsSnapshot(pointsFile);
+  const user = data.users && data.users[id];
+  return blackjackStatusFromUser(user);
+}
+
+function blackjackPairBlocked(data, userId, opponentId) {
+  const uid = String(userId || "");
+  const opp = String(opponentId || "");
+  if (!uid || !opp || uid === opp || opp === "bot") {
+    return false;
+  }
+  const today = getTodayDate();
+  function listed(record, otherId) {
+    if (!record || typeof record !== "object" || !record.blackjack) {
+      return false;
+    }
+    if (record.blackjack.rewardDate !== today) {
+      return false;
+    }
+    const list = record.blackjack.rewardedPvpOpponents;
+    return Array.isArray(list) && list.map(String).includes(String(otherId));
+  }
+  const a = data.users && data.users[uid];
+  const b = data.users && data.users[opp];
+  return listed(a, opp) || listed(b, uid);
+}
+
+function blackjackAwardBase(user, extra = {}) {
+  const points = user && typeof user.points === "number" ? user.points : 0;
+  const status = blackjackStatusFromUser(user);
+  return {
+    awarded: false,
+    points,
+    pointsToAdd: 0,
+    rankUp: false,
+    rank: getRank(points),
+    previousRank: getRank(points),
+    rewardedRoundsUsed: status.rewardedRoundsUsed,
+    remaining: status.remaining,
+    dailyCap: BLACKJACK_DAILY_REWARDED_CAP,
+    limitReached: status.limitReached,
+    ...extra,
+  };
+}
+
+function blackjackQuestExtras(pointsFile, walletFile, payload) {
+  return {
+    game: "blackjack",
+    walletFile,
+    pointsFile,
+    shopFile: payload && payload.shopFile ? payload.shopFile : undefined,
+  };
+}
+
+/**
+ * Claim a daily rewarded-round slot at Play/Pass (Trivia-style anti-farm).
+ * Does not mint XP. Same-opponent fun-only matchups skip the slot so bot
+ * rounds can still use remaining cap.
+ * @param {string|number} userId
+ * @param {string} userName
+ * @param {{ opponentUserId?: string, shopFile?: string, walletFile?: string }} [payload]
+ * @param {string} [pointsFile]
+ * @param {string} [walletFile]
+ */
+function reserveBlackjackRewardedRound(
+  userId,
+  userName,
+  payload = {},
+  pointsFile = POINTS_FILE,
+  walletFile
+) {
+  const resolvedWallet =
+    walletFile || (payload && payload.walletFile ? payload.walletFile : undefined);
+  const opponentUserId =
+    payload && payload.opponentUserId != null ? String(payload.opponentUserId) : "";
+
+  return mutatePoints((data) => {
+    const id = String(userId);
+    const user = ensureUserRecord(data, id, userName);
+    user.name = userName;
+    resetWeeklyIfNewWeek(user, id);
+    resetBlackjackIfNewDay(user);
+
+    const pairBlocked = blackjackPairBlocked(data, id, opponentUserId);
+    const eligibleBefore = user.blackjack.rewardedRoundsUsed < BLACKJACK_DAILY_REWARDED_CAP;
+    let slotConsumed = false;
+    if (!pairBlocked) {
+      user.blackjack.rewardedRoundsUsed += 1;
+      slotConsumed = true;
+    }
+
+    const walletOk = canEarnXp(userId, resolvedWallet);
+    const excluded = isCommunityCompetitionExcluded(userId);
+    const funOnly = pairBlocked || !eligibleBefore || excluded || !walletOk;
+    let reason = "reserved";
+    if (pairBlocked) {
+      reason = "pair-cap";
+    } else if (!eligibleBefore) {
+      reason = "daily-cap";
+    } else if (excluded) {
+      reason = "excluded";
+    } else if (!walletOk) {
+      reason = XP_WALLET_REQUIRED;
+    }
+
+    return blackjackAwardBase(user, {
+      reason,
+      slotConsumed,
+      eligible: eligibleBefore && !pairBlocked && !excluded,
+      funOnly,
+      pairBlocked,
+      walletOk,
+      opponentUserId: opponentUserId || null,
+    });
+  }, pointsFile);
+}
+
+function grantBlackjackXp(user, amount) {
+  const add =
+    typeof amount === "number" && Number.isInteger(amount) && amount > 0 ? amount : 0;
+  if (!add) {
+    return blackjackAwardBase(user, { reason: "zero" });
+  }
+  const pointsBefore = user.points;
+  user.points += add;
+  user.weeklyPoints += add;
+  const previousRank = getRank(pointsBefore);
+  const rank = getRank(user.points);
+  return blackjackAwardBase(user, {
+    awarded: true,
+    points: user.points,
+    pointsToAdd: add,
+    rankUp: previousRank.title !== rank.title,
+    rank,
+    previousRank,
+    reason: "awarded",
+  });
+}
+
+function settleBlackjackXp(
+  userId,
+  userName,
+  amount,
+  payload,
+  pointsFile,
+  walletFile,
+  extraReason
+) {
+  const resolvedWallet =
+    walletFile || (payload && payload.walletFile ? payload.walletFile : undefined);
+  const questExtras = blackjackQuestExtras(pointsFile, resolvedWallet, payload);
+  const want =
+    typeof amount === "number" && Number.isInteger(amount) && amount > 0 ? amount : 0;
+  const funOnly = Boolean(payload && payload.funOnly);
+  const eligible = payload && payload.eligible === false ? false : !funOnly;
+
+  return finalizeXpAward(
+    userId,
+    userName,
+    mutatePoints((data) => {
+      const id = String(userId);
+      const user = ensureUserRecord(data, id, userName);
+      user.name = userName;
+      resetWeeklyIfNewWeek(user, id);
+      resetBlackjackIfNewDay(user);
+
+      if (isCommunityCompetitionExcluded(userId)) {
+        return blackjackAwardBase(user, {
+          reason: "excluded",
+          funOnly: true,
+          eligible: false,
+        });
+      }
+
+      const walletOk = canEarnXp(userId, resolvedWallet);
+      if (!walletOk) {
+        return blackjackAwardBase(user, {
+          reason: XP_WALLET_REQUIRED,
+          funOnly: true,
+          eligible: false,
+          walletOk: false,
+        });
+      }
+
+      if (!eligible || !want) {
+        return blackjackAwardBase(user, {
+          reason: extraReason || (funOnly ? "fun-only" : "zero"),
+          funOnly: true,
+          eligible: false,
+          walletOk: true,
+        });
+      }
+
+      const granted = grantBlackjackXp(user, want);
+      noteWeeklyStandingSafe(id, user);
+      return { ...granted, walletOk: true, eligible: true, funOnly: false };
+    }, pointsFile),
+    questExtras
+  );
+}
+
+function awardBlackjackPassXp(
+  userId,
+  userName,
+  payload = {},
+  pointsFile = POINTS_FILE,
+  walletFile
+) {
+  return settleBlackjackXp(
+    userId,
+    userName,
+    BLACKJACK_PASS_XP,
+    payload,
+    pointsFile,
+    walletFile,
+    "pass"
+  );
+}
+
+function awardBlackjackBotResultXp(
+  userId,
+  userName,
+  payload = {},
+  pointsFile = POINTS_FILE,
+  walletFile
+) {
+  const outcome = String((payload && payload.result) || "").toLowerCase();
+  let amount = 0;
+  if (outcome === "win") {
+    amount = BLACKJACK_BOT_WIN_XP;
+  } else if (outcome === "tie" || outcome === "push") {
+    amount = BLACKJACK_TIE_XP;
+  }
+  return settleBlackjackXp(
+    userId,
+    userName,
+    amount,
+    payload,
+    pointsFile,
+    walletFile,
+    outcome || "bot"
+  );
+}
+
+function awardBlackjackPvpResultXp(
+  userId,
+  userName,
+  payload = {},
+  pointsFile = POINTS_FILE,
+  walletFile
+) {
+  const outcome = String((payload && payload.result) || "").toLowerCase();
+  let amount = 0;
+  if (outcome === "win") {
+    amount = BLACKJACK_PVP_WIN_XP;
+  } else if (outcome === "tie" || outcome === "push") {
+    amount = BLACKJACK_TIE_XP;
+  } else if (outcome === "pass-win" || outcome === "default-win") {
+    amount = BLACKJACK_STAKE_XP;
+  }
+  return settleBlackjackXp(
+    userId,
+    userName,
+    amount,
+    payload,
+    pointsFile,
+    walletFile,
+    outcome || "pvp"
+  );
+}
+
+/**
+ * Record a rewarded PvP matchup so the same pair is fun-only for the rest of the UTC day.
+ */
+function markBlackjackPvpMatchup(
+  userId,
+  opponentUserId,
+  pointsFile = POINTS_FILE
+) {
+  const uid = String(userId || "");
+  const opp = String(opponentUserId || "");
+  if (!uid || !opp || uid === opp || opp === "bot") {
+    return { ok: false, reason: "invalid" };
+  }
+  return mutatePoints((data) => {
+    function mark(id, other, name) {
+      const user = ensureUserRecord(data, id, name || "Player");
+      resetWeeklyIfNewWeek(user, id);
+      resetBlackjackIfNewDay(user);
+      if (!user.blackjack.rewardedPvpOpponents.includes(other)) {
+        user.blackjack.rewardedPvpOpponents.push(other);
+      }
+    }
+    mark(uid, opp, data.users[uid] && data.users[uid].name);
+    mark(opp, uid, data.users[opp] && data.users[opp].name);
+    return { ok: true, date: getTodayDate() };
+  }, pointsFile);
+}
+
 /** PvP board-game win XP (Tic-Tac-Toe, later Connect Four). */
 const PVP_WIN_XP = 3;
 /** Max rewarded PvP wins per UTC day per user. */
@@ -1935,6 +2333,19 @@ module.exports = {
   MANGO_BOMB_DAILY_ROUND_CAP,
   ensureMangoBombState,
   getMangoBombRewardedRoundsToday,
+  BLACKJACK_STAKE_XP,
+  BLACKJACK_PASS_XP,
+  BLACKJACK_TIE_XP,
+  BLACKJACK_BOT_WIN_XP,
+  BLACKJACK_PVP_WIN_XP,
+  BLACKJACK_DAILY_REWARDED_CAP,
+  ensureBlackjackState,
+  getBlackjackStatus,
+  reserveBlackjackRewardedRound,
+  awardBlackjackPassXp,
+  awardBlackjackBotResultXp,
+  awardBlackjackPvpResultXp,
+  markBlackjackPvpMatchup,
   awardPvpWinXp,
   PVP_WIN_XP,
   PVP_DAILY_WIN_CAP,

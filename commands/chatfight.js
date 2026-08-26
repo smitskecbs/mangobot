@@ -96,6 +96,7 @@ async function handleChatFight(ctx, options = {}) {
         isConnectFourOpenFn: options.isConnectFourOpenFn,
         isTriviaOpenFn: options.isTriviaOpenFn,
         isMangoBombOpenFn: options.isMangoBombOpenFn,
+        isBlackjackOpenFn: options.isBlackjackOpenFn,
       })
     ) {
       const reasonFn =
@@ -108,6 +109,7 @@ async function handleChatFight(ctx, options = {}) {
         isConnectFourOpenFn: options.isConnectFourOpenFn,
         isTriviaOpenFn: options.isTriviaOpenFn,
         isMangoBombOpenFn: options.isMangoBombOpenFn,
+        isBlackjackOpenFn: options.isBlackjackOpenFn,
       });
       if (reason === "tictactoe") {
         return ctx.reply("🎮 A Tic-Tac-Toe challenge is already open.");
@@ -120,6 +122,9 @@ async function handleChatFight(ctx, options = {}) {
       }
       if (reason === "mangobomb") {
         return ctx.reply("🥭💣 A ManGo Bomb round is already running.");
+      }
+      if (reason === "blackjack") {
+        return ctx.reply("🃏 A Blackjack round is already running.");
       }
       // ChatFight already-active is still handled by startFight below.
     }

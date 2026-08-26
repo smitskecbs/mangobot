@@ -40,6 +40,7 @@ const GAME_SOURCES = Object.freeze([
   "chatfight",
   "mangobomb",
   "pvp",
+  "blackjack",
 ]);
 
 let questMessenger = null;

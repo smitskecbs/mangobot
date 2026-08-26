@@ -65,6 +65,7 @@ const GROUP_MENU_CALLBACK = Object.freeze({
   CONNECT4: "gmenu:connect4",
   TRIVIA: "gmenu:trivia",
   MANGOBOMB: "gmenu:mangobomb",
+  BLACKJACK: "gmenu:blackjack",
   BUILDER: "gmenu:builder",
   SHOP: "gmenu:shop",
   DAILY_QUEST: "gmenu:dquest",
@@ -372,6 +373,9 @@ function getGroupGamesMenuExtra(ctx) {
     Markup.button.callback("🧠 Trivia", GROUP_MENU_CALLBACK.TRIVIA),
     Markup.button.callback("ManGo Bomb", GROUP_MENU_CALLBACK.MANGOBOMB),
   ]);
+  rows.push([
+    Markup.button.callback("🃏 Blackjack", GROUP_MENU_CALLBACK.BLACKJACK),
+  ]);
   rows.push([Markup.button.callback("⬅️ Back", GROUP_MENU_CALLBACK.BACK)]);
 
   return Markup.inlineKeyboard(rows);
@@ -475,6 +479,7 @@ function isGroupMenuCallback(data) {
     data === GROUP_MENU_CALLBACK.CONNECT4 ||
     data === GROUP_MENU_CALLBACK.TRIVIA ||
     data === GROUP_MENU_CALLBACK.MANGOBOMB ||
+    data === GROUP_MENU_CALLBACK.BLACKJACK ||
     data === GROUP_MENU_CALLBACK.BUILDER ||
     data === GROUP_MENU_CALLBACK.SHOP ||
     data === GROUP_MENU_CALLBACK.DAILY_QUEST

@@ -22,6 +22,7 @@ const GAME_TYPE = Object.freeze({
   TICTACTOE: "tictactoe",
   CONNECT4: "connect4",
   CHATFIGHT: "chatfight",
+  BLACKJACK: "blackjack",
 });
 
 function isMessageNotModifiedError(err) {
@@ -48,6 +49,9 @@ function titleFor(gameType) {
   }
   if (gameType === GAME_TYPE.CHATFIGHT) {
     return "⚔️ ChatFight ended";
+  }
+  if (gameType === GAME_TYPE.BLACKJACK) {
+    return "🃏 Blackjack cancelled";
   }
   return "🎮 Game cancelled";
 }

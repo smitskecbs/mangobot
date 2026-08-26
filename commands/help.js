@@ -25,6 +25,7 @@ const HELP_MESSAGE = `🥭 Commands
 /connect4 — Start Connect Four
 /trivia — Open Trivia categories
 /mangobomb — Start a ManGo Bomb round
+/blackjack — Start a ManGo Blackjack round
 /streak — Active streak leaderboard
 /streakrecord — Longest streak leaderboard
 

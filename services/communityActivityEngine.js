@@ -459,9 +459,14 @@ function isInteractiveBusy() {
       isTriviaBusy,
       isChatFightBusy,
       isMangoBombBusy,
+      isBlackjackBusy,
     } = require("./communityGameState");
     return Boolean(
-      isChatFightBusy() || isPvpBusy() || isTriviaBusy() || isMangoBombBusy()
+      isChatFightBusy() ||
+        isPvpBusy() ||
+        isTriviaBusy() ||
+        isMangoBombBusy() ||
+        isBlackjackBusy()
     );
   } catch (_err) {
     return false;
@@ -480,7 +485,7 @@ function isActionEligible(actionId, context) {
       return false;
     }
     try {
-      const { isPvpBusy, isTriviaBusy, isMangoBombBusy } = require("./communityGameState");
+      const { isPvpBusy, isTriviaBusy, isMangoBombBusy, isBlackjackBusy } = require("./communityGameState");
       if (isPvpBusy()) {
         return false;
       }
@@ -488,6 +493,9 @@ function isActionEligible(actionId, context) {
         return false;
       }
       if (isMangoBombBusy()) {
+        return false;
+      }
+      if (isBlackjackBusy()) {
         return false;
       }
     } catch (_err) {
@@ -511,7 +519,7 @@ function isActionEligible(actionId, context) {
       return false;
     }
     try {
-      const { isPvpBusy, isTriviaBusy, isMangoBombBusy } = require("./communityGameState");
+      const { isPvpBusy, isTriviaBusy, isMangoBombBusy, isBlackjackBusy } = require("./communityGameState");
       if (isPvpBusy()) {
         return false;
       }
@@ -519,6 +527,9 @@ function isActionEligible(actionId, context) {
         return false;
       }
       if (isMangoBombBusy()) {
+        return false;
+      }
+      if (isBlackjackBusy()) {
         return false;
       }
     } catch (_err) {
