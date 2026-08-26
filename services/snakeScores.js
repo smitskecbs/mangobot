@@ -11,6 +11,7 @@ const {
   applyVerifiedTelegramUserId,
 } = require("../utils/scoreIdentity");
 const { shouldHideScoreLeaderboardEntry } = require("../utils/admin");
+const { parseSnakeLevel } = require("./snakeLevelScore");
 
 const MAX_SCORE = 100_000;
 const MAX_NAME_LENGTH = 24;
@@ -62,6 +63,36 @@ function parseScore(raw) {
   return score;
 }
 
+function sanitizeStoredLevel(raw) {
+  return parseSnakeLevel(raw);
+}
+
+function sanitizeStoredMangoCount(raw) {
+  const parsed = typeof raw === "number" ? raw : Number.parseInt(String(raw), 10);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return null;
+  }
+  return parsed;
+}
+
+function applyRunMeta(entry, meta) {
+  if (!meta || typeof meta !== "object") {
+    return entry;
+  }
+
+  const level = sanitizeStoredLevel(meta.level);
+  if (level) {
+    entry.level = level;
+  }
+
+  const mangoCount = sanitizeStoredMangoCount(meta.mangoCount);
+  if (mangoCount !== null) {
+    entry.mangoCount = mangoCount;
+  }
+
+  return entry;
+}
+
 function migratePlayerEntry(entry) {
   const score = Number.parseInt(String(entry.score ?? 0), 10);
   const updatedAt =
@@ -89,10 +120,12 @@ function migratePlayerEntry(entry) {
     migrated.telegramUserId = telegramUserId;
   }
 
+  applyRunMeta(migrated, entry);
+
   return migrated;
 }
 
-function createPlayerEntry(name, score, now, verifiedTelegramUserId) {
+function createPlayerEntry(name, score, now, verifiedTelegramUserId, meta) {
   const entry = {
     name,
     score,
@@ -102,6 +135,7 @@ function createPlayerEntry(name, score, now, verifiedTelegramUserId) {
     lastPlayedAt: now,
   };
   applyVerifiedTelegramUserId(entry, verifiedTelegramUserId);
+  applyRunMeta(entry, meta);
   return entry;
 }
 
@@ -151,6 +185,8 @@ function normalizeLeaderboardEntries(leaderboard) {
       gamesPlayed: entry.gamesPlayed,
       lastPlayedAt: entry.lastPlayedAt,
       telegramUserId: entry.telegramUserId,
+      level: entry.level,
+      mangoCount: entry.mangoCount,
     });
     const existing = byKey.get(key);
 
@@ -282,10 +318,17 @@ function writeScoresFile(scoresFile, data) {
 }
 
 function formatLeaderboardResponse(data) {
-  return data.leaderboard.map((entry) => ({
-    name: entry.name,
-    score: entry.score,
-  }));
+  return data.leaderboard.map((entry) => {
+    const row = {
+      name: entry.name,
+      score: entry.score,
+    };
+    const level = sanitizeStoredLevel(entry.level);
+    if (level) {
+      row.level = level;
+    }
+    return row;
+  });
 }
 
 function findPlayerIndex(leaderboard, nameKey) {
@@ -373,6 +416,10 @@ function submitScore(scoresFile, rawName, rawScore, options = {}) {
     options && options.verifiedTelegramUserId !== undefined
       ? options.verifiedTelegramUserId
       : undefined;
+  const runMeta = {
+    level: options && options.level,
+    mangoCount: options && options.mangoCount,
+  };
 
   const data = readScoresFile(scoresFile);
   const previousGlobalHighScore = data.globalHighScore || 0;
@@ -384,7 +431,7 @@ function submitScore(scoresFile, rawName, rawScore, options = {}) {
 
   if (playerIndex === -1) {
     data.leaderboard.push(
-      createPlayerEntry(name, score, now, verifiedTelegramUserId)
+      createPlayerEntry(name, score, now, verifiedTelegramUserId, runMeta)
     );
     personalBest = true;
   } else {
@@ -400,12 +447,16 @@ function submitScore(scoresFile, rawName, rawScore, options = {}) {
     if (existing.telegramUserId !== undefined) {
       updatedPlayer.telegramUserId = existing.telegramUserId;
     }
+    applyRunMeta(updatedPlayer, existing);
     // Attach verified uid when missing; never overwrite a different verified uid.
     applyVerifiedTelegramUserId(updatedPlayer, verifiedTelegramUserId);
 
     if (score > existing.score) {
       updatedPlayer.score = score;
       updatedPlayer.updatedAt = now;
+      delete updatedPlayer.level;
+      delete updatedPlayer.mangoCount;
+      applyRunMeta(updatedPlayer, runMeta);
       personalBest = true;
     }
 
@@ -425,7 +476,7 @@ function submitScore(scoresFile, rawName, rawScore, options = {}) {
   const player =
     finalPlayerIndex >= 0
       ? data.leaderboard[finalPlayerIndex]
-      : createPlayerEntry(name, score, now, verifiedTelegramUserId);
+      : createPlayerEntry(name, score, now, verifiedTelegramUserId, runMeta);
   const personalBestScore = player.score;
 
   return {
@@ -454,10 +505,17 @@ function getDisplayLeaderboard(
   return data.leaderboard
     .filter((entry) => !shouldHideScoreLeaderboardEntry(entry))
     .slice(0, limit)
-    .map((entry) => ({
-      name: entry.name,
-      score: entry.score,
-    }));
+    .map((entry) => {
+      const row = {
+        name: entry.name,
+        score: entry.score,
+      };
+      const level = sanitizeStoredLevel(entry.level);
+      if (level) {
+        row.level = level;
+      }
+      return row;
+    });
 }
 
 module.exports = {
@@ -477,6 +535,8 @@ module.exports = {
   readScoresFile,
   writeScoresFile,
   submitScore,
+  applyRunMeta,
+  sanitizeStoredLevel,
   getDisplayLeaderboard,
   formatLeaderboardResponse,
   buildApiResponse,

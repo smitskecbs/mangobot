@@ -29,6 +29,7 @@ const HELP_MESSAGE = `🥭 Commands
 /streakrecord — Longest streak leaderboard
 
 🐍 Snake
+4 difficulties on the game page: Classic, Walls, Center, Danger Zone. Harder = more points. One leaderboard. No unlocking.
 /snake
 /snakehighscore
 /snakescore

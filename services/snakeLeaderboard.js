@@ -6,6 +6,7 @@ const {
   getScoresFilePath,
   getDisplayLeaderboard,
 } = require("./snakeScores");
+const { formatSnakeLeaderboardEntryLine } = require("./snakeLevelScore");
 const {
   buildPrivateDeepLink,
   getConfiguredBotUsername,
@@ -47,7 +48,7 @@ ${playUrl}`;
 
   const lines = scores.map((entry, index) => {
     const prefix = formatRankPrefix(index);
-    return `${prefix} ${entry.name} — ${entry.score}`;
+    return formatSnakeLeaderboardEntryLine(entry, prefix);
   });
 
   let text = `🐍 ManGo Snake Leaderboard

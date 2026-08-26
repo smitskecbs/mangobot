@@ -33,7 +33,6 @@ loadAppEnv({ envPath: path.join(__dirname, ".env") });
 const http = require("node:http");
 const {
   getScoresFilePath,
-  parseScore,
   sanitizeName,
   submitScore,
   buildApiResponse,
@@ -42,6 +41,7 @@ const {
 } = require("./services/snakeScores");
 const bounchScores = require("./services/bounchScores");
 const { verifyOptionalGameIdentity } = require("./utils/gameIdentity");
+const { resolveSnakeScoreSubmission } = require("./services/snakeLevelScore");
 const {
   awardSnakeGameXp,
   awardBounchGameXp,
@@ -308,13 +308,14 @@ async function handleSnakeHighscore(req, res, origin) {
     return;
   }
 
-  const score = parseScore(body.score);
+  const resolved = resolveSnakeScoreSubmission(body);
 
-  if (score === null) {
-    sendJson(res, 400, { ok: false, error: "Invalid score." }, origin);
+  if (resolved.error) {
+    sendJson(res, 400, { ok: false, error: resolved.error }, origin);
     return;
   }
 
+  const score = resolved.score;
   const name = sanitizeName(body.name);
 
   if (!name) {
@@ -332,6 +333,8 @@ async function handleSnakeHighscore(req, res, origin) {
   try {
     submission = submitScore(SCORES_FILE, name, score, {
       verifiedTelegramUserId,
+      level: resolved.level,
+      mangoCount: resolved.mangoCount,
     });
   } catch {
     sendJson(res, 500, { ok: false, error: "Failed to save score." }, origin);

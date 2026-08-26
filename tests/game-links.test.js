@@ -211,12 +211,18 @@ runTest("existing command text retained except link change", () => {
   const snakeReply = buildSnakeReply(snakeUrl);
   const bounchReply = buildBounchReply(bounchUrl);
 
-  assert.ok(snakeReply.includes("🐍 ManGo Snake"));
+  assert.ok(snakeReply.includes("🥭 Snake now has 4 difficulty levels."));
+  assert.ok(snakeReply.includes("🥭 Classic"));
+  assert.ok(snakeReply.includes("🧱 Walls"));
+  assert.ok(snakeReply.includes("🎯 Center"));
+  assert.ok(snakeReply.includes("🔥 Danger Zone"));
+  assert.ok(snakeReply.includes("Harder levels have more obstacles, but every mango is worth more points."));
+  assert.ok(snakeReply.includes("All difficulties compete on the same leaderboard."));
+  assert.ok(snakeReply.includes("No level unlocking. Players choose difficulty on the website."));
   assert.ok(snakeReply.includes("🎮 Play:"));
   assert.ok(snakeReply.includes(snakeUrl));
   assert.ok(snakeReply.includes("🏆 Global leaderboard:"));
   assert.ok(snakeReply.includes("/snakehighscore"));
-  assert.ok(snakeReply.includes("🥭 Think you can beat the top score?"));
   assert.ok(!snakeReply.includes("mango-labs.html"));
 
   assert.ok(bounchReply.includes("🏀 ManGo Bounch"));

@@ -200,7 +200,8 @@ runTest("private /snake → signed Snake link", () => {
 
   assert.strictEqual(ctx.replies.length, 1);
   const text = ctx.replies[0].text;
-  assert.ok(text.includes("🐍 ManGo Snake"));
+  assert.ok(text.includes("🥭 Snake now has 4 difficulty levels."));
+  assert.ok(text.includes("No level unlocking. Players choose difficulty on the website."));
   const parsed = parsePlayUrl(extractPlayUrl(text));
   assert.strictEqual(parsed.game, "snake");
   assert.ok(parsed.token);

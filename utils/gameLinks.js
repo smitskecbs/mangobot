@@ -33,15 +33,24 @@ function buildSignedGameUrl(userId, game, options = {}) {
 }
 
 function buildSnakeReply(playUrl) {
-  return `🐍 ManGo Snake
+  return `🥭 Snake now has 4 difficulty levels.
+
+🥭 Classic
+🧱 Walls
+🎯 Center
+🔥 Danger Zone
+
+Harder levels have more obstacles, but every mango is worth more points.
+
+All difficulties compete on the same leaderboard.
+
+No level unlocking. Players choose difficulty on the website.
 
 🎮 Play:
 ${playUrl}
 
 🏆 Global leaderboard:
-/snakehighscore
-
-🥭 Think you can beat the top score?`;
+/snakehighscore`;
 }
 
 function buildBounchReply(playUrl) {
