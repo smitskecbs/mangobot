@@ -7,7 +7,9 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const assert = require("assert");
+const crypto = require("node:crypto");
 
+const { encodeBase58 } = require("../utils/base58");
 const {
   createTicTacToeService,
   parsePvpCallbackData,
@@ -16,6 +18,7 @@ const {
   checkWinner,
   emptyBoard,
   STATUS,
+  BOT_USER_ID,
 } = require("../services/ticTacToe");
 const {
   sanitizePvpDisplayName,
@@ -48,6 +51,13 @@ const { HELP_MESSAGE } = require("../commands/help");
 const {
   ACTION_REGISTRY,
 } = require("../services/communityActivityEngine");
+const {
+  getDailyQuestSnapshot,
+  ACTIVITY_LOOT,
+  GAME_SOURCES,
+} = require("../services/dailyQuest");
+const { getLootBalance } = require("../services/mangoLoot");
+const { registerManualWallet } = require("../services/walletLinks");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-ttt-"));
 let testCounter = 0;
@@ -65,6 +75,68 @@ const originalGamesTopic = process.env.TELEGRAM_GAMES_TOPIC_ID;
 function pointsFile() {
   testCounter += 1;
   return path.join(tempDir, `points-${testCounter}.json`);
+}
+
+function walletAddress(seed) {
+  return encodeBase58(crypto.createHash("sha256").update(String(seed)).digest());
+}
+
+function questFiles() {
+  testCounter += 1;
+  const shopFile = path.join(tempDir, `shop-${testCounter}.json`);
+  const walletFile = path.join(tempDir, `wallet-${testCounter}.json`);
+  const points = path.join(tempDir, `qpoints-${testCounter}.json`);
+  fs.writeFileSync(points, JSON.stringify({ users: {} }, null, 2), "utf8");
+  fs.writeFileSync(walletFile, JSON.stringify({ users: {}, wallets: {} }, null, 2), "utf8");
+  return { shopFile, walletFile, pointsFile: points };
+}
+
+function linkQuestUser(files, userId) {
+  registerManualWallet(userId, walletAddress(`w-${testCounter}-${userId}`), files.walletFile);
+}
+
+function questSnap(files, userId) {
+  return getDailyQuestSnapshot(userId, {
+    shopFile: files.shopFile,
+    walletFile: files.walletFile,
+  });
+}
+
+function playTttWinLine(service, sessionId) {
+  service.move({ sessionId, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
+  service.move({ sessionId, userId: USER_B, cell: 3, chatId: COMMUNITY_CHAT });
+  service.move({ sessionId, userId: USER_A, cell: 1, chatId: COMMUNITY_CHAT });
+  service.move({ sessionId, userId: USER_B, cell: 4, chatId: COMMUNITY_CHAT });
+  return service.move({
+    sessionId,
+    userId: USER_A,
+    cell: 2,
+    chatId: COMMUNITY_CHAT,
+  });
+}
+
+function playTttDrawLine(service, sessionId) {
+  const moves = [
+    [USER_A, 0],
+    [USER_B, 1],
+    [USER_A, 2],
+    [USER_B, 5],
+    [USER_A, 3],
+    [USER_B, 6],
+    [USER_A, 4],
+    [USER_B, 8],
+    [USER_A, 7],
+  ];
+  let last;
+  for (const [uid, cell] of moves) {
+    last = service.move({
+      sessionId,
+      userId: uid,
+      cell,
+      chatId: COMMUNITY_CHAT,
+    });
+  }
+  return last;
 }
 
 function resetEnv() {
@@ -138,6 +210,9 @@ function createService(overrides = {}) {
     turnTimeoutMs: overrides.turnTimeoutMs != null ? overrides.turnTimeoutMs : 60_000,
     pairCooldownMs: overrides.pairCooldownMs != null ? overrides.pairCooldownMs : 1_800_000,
     randomIdFn: overrides.randomIdFn,
+    shopFile: overrides.shopFile,
+    walletFile: overrides.walletFile,
+    noteDailyQuestGameFn: overrides.noteDailyQuestGameFn,
   });
   return { service, timers };
 }
@@ -211,20 +286,16 @@ function createMockCtx({
 }
 
 function startOpen(service, chatId = COMMUNITY_CHAT) {
-  const started = service.startChallenge({ chatId });
+  const started = service.startChallenge({
+    chatId,
+    starter: { userId: USER_A, displayName: "Kevin", isBot: false },
+  });
   assert.strictEqual(started.ok, true);
   service.setMessageId(started.session.id, 5001);
   return started;
 }
 
 function joinBoth(service, sessionId) {
-  const j1 = service.join({
-    sessionId,
-    userId: USER_A,
-    displayName: "Kevin",
-    chatId: COMMUNITY_CHAT,
-  });
-  assert.strictEqual(j1.ok, true);
   const j2 = service.join({
     sessionId,
     userId: USER_B,
@@ -241,11 +312,15 @@ async function main() {
 
   await runTest("1. create session", () => {
     const { service } = createService();
-    const r = service.startChallenge({ chatId: COMMUNITY_CHAT });
+    const r = service.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_A, displayName: "Kevin", isBot: false },
+    });
     assert.strictEqual(r.ok, true);
     assert.strictEqual(r.session.status, STATUS.WAITING);
     assert.ok(r.session.id);
-    assert.ok(r.text.includes("TIC-TAC-TOE"));
+    assert.ok(r.text.includes("Tic-Tac-Toe"));
+    assert.ok(r.text.includes("looking for an opponent"));
     assert.ok(r.keyboard);
   });
 
@@ -268,7 +343,7 @@ async function main() {
       isBusyFn: () => false,
       setMessageIdFn: (id, mid) => service.setMessageId(id, mid),
     });
-    assert.ok(member.replies[0].includes("TIC-TAC-TOE"));
+    assert.ok(member.replies[0].includes("Tic-Tac-Toe"));
     assert.ok(!String(member.replies[0]).toLowerCase().includes("admin"));
 
     service.reset();
@@ -305,7 +380,7 @@ async function main() {
       isBusyFn: () => false,
       setMessageIdFn: (id, mid) => service.setMessageId(id, mid),
     });
-    assert.ok(inTopic.replies[0].includes("TIC-TAC-TOE"));
+    assert.ok(inTopic.replies[0].includes("Tic-Tac-Toe"));
     assert.strictEqual(String(inTopic.replyExtras[0].message_thread_id), "123");
   });
 
@@ -324,19 +399,11 @@ async function main() {
     assert.ok(ctx.replies[0].includes("not available"));
   });
 
-  await runTest("5-9. join flow: X, O, same user, bot, third", () => {
+  await runTest("5-9. join flow: starter is X, O joins, same user, bot, third", () => {
     const { service } = createService();
     const started = startOpen(service);
     const id = started.session.id;
-
-    const j1 = service.join({
-      sessionId: id,
-      userId: USER_A,
-      displayName: "Kevin",
-      chatId: COMMUNITY_CHAT,
-    });
-    assert.strictEqual(j1.role, "X");
-    assert.strictEqual(j1.session.players.X.userId, String(USER_A));
+    assert.strictEqual(started.session.players.X.userId, String(USER_A));
 
     const same = service.join({
       sessionId: id,
@@ -640,8 +707,10 @@ async function main() {
     const started = startOpen(service);
     timers.advance(5000);
     const s = service.getSession(started.session.id);
-    assert.strictEqual(s.status, STATUS.EXPIRED);
-    assert.strictEqual(service.isOpen(), false);
+    assert.strictEqual(s.status, STATUS.ACTIVE);
+    assert.strictEqual(s.opponentType, "bot");
+    assert.strictEqual(s.players.O.isBot, true);
+    assert.strictEqual(service.isOpen(), true);
   });
 
   await runTest("30. timer reset after move", () => {
@@ -807,7 +876,7 @@ async function main() {
     fight.reset();
   });
 
-  await runTest("coexistence: Tic-Tac-Toe blocks /chatfight", async () => {
+  await runTest("coexistence: Tic-Tac-Toe does not block /chatfight", async () => {
     const { service } = createService();
     startOpen(service);
     const fight = createChatFightService({
@@ -833,7 +902,9 @@ async function main() {
           isTicTacToeOpenFn: () => service.isOpen(),
         }),
     });
-    assert.ok(ctx.replies[0].includes("Tic-Tac-Toe"));
+    assert.ok(fight.isFightOpen());
+    assert.ok(!String(ctx.replies[0] || "").includes("Tic-Tac-Toe challenge"));
+    fight.reset();
   });
 
   await runTest("after PvP ends ChatFight may start", async () => {
@@ -906,6 +977,241 @@ async function main() {
     assert.strictEqual(awarded, PVP_DAILY_WIN_CAP);
     const data = loadPoints(file);
     assert.strictEqual(data.users[String(USER_C)].points, PVP_DAILY_WIN_CAP * PVP_WIN_XP);
+  });
+
+  await runTest("daily quest: GAME_SOURCES includes tictactoe and pvp", () => {
+    assert.ok(GAME_SOURCES.includes("tictactoe"));
+    assert.ok(GAME_SOURCES.includes("pvp"));
+  });
+
+  await runTest("daily quest: TTT win counts", () => {
+    const files = questFiles();
+    linkQuestUser(files, USER_A);
+    linkQuestUser(files, USER_B);
+    const { service } = createService(files);
+    const started = startOpen(service);
+    joinBoth(service, started.session.id);
+    const win = playTttWinLine(service, started.session.id);
+    assert.strictEqual(win.session.status, STATUS.WON);
+    assert.strictEqual(win.session.winnerUserId, String(USER_A));
+    const snap = questSnap(files, USER_A);
+    assert.strictEqual(snap.game.completed, true);
+    assert.strictEqual(getLootBalance(USER_A, files.shopFile), ACTIVITY_LOOT);
+  });
+
+  await runTest("daily quest: TTT loss counts", () => {
+    const files = questFiles();
+    linkQuestUser(files, USER_A);
+    linkQuestUser(files, USER_B);
+    const { service } = createService(files);
+    const started = startOpen(service);
+    joinBoth(service, started.session.id);
+    playTttWinLine(service, started.session.id);
+    const snap = questSnap(files, USER_B);
+    assert.strictEqual(snap.game.completed, true);
+    assert.strictEqual(getLootBalance(USER_B, files.shopFile), ACTIVITY_LOOT);
+  });
+
+  await runTest("daily quest: TTT draw counts", () => {
+    const files = questFiles();
+    linkQuestUser(files, USER_A);
+    linkQuestUser(files, USER_B);
+    const { service } = createService(files);
+    const started = startOpen(service);
+    joinBoth(service, started.session.id);
+    const last = playTttDrawLine(service, started.session.id);
+    assert.strictEqual(last.session.status, STATUS.DRAW);
+    assert.strictEqual(questSnap(files, USER_A).game.completed, true);
+    assert.strictEqual(questSnap(files, USER_B).game.completed, true);
+    assert.strictEqual(getLootBalance(USER_A, files.shopFile), ACTIVITY_LOOT);
+    assert.strictEqual(getLootBalance(USER_B, files.shopFile), ACTIVITY_LOOT);
+  });
+
+  await runTest("daily quest: TTT lobby only does not count", () => {
+    const files = questFiles();
+    linkQuestUser(files, USER_A);
+    linkQuestUser(files, USER_B);
+    const { service } = createService(files);
+    const started = startOpen(service);
+    assert.strictEqual(questSnap(files, USER_A).game.completed, false);
+    joinBoth(service, started.session.id);
+    assert.strictEqual(questSnap(files, USER_A).game.completed, false);
+    assert.strictEqual(questSnap(files, USER_B).game.completed, false);
+    assert.strictEqual(getLootBalance(USER_A, files.shopFile), 0);
+  });
+
+  await runTest("daily quest: TTT expired lobby without gameplay does not count", () => {
+    const files = questFiles();
+    linkQuestUser(files, USER_A);
+    const { service } = createService(files);
+    const started = startOpen(service);
+    const expired = service.expireJoin(started.session.id);
+    assert.strictEqual(expired.session.status, STATUS.ACTIVE);
+    assert.strictEqual(expired.session.opponentType, "bot");
+    assert.strictEqual(questSnap(files, USER_A).game.completed, false);
+    assert.strictEqual(getLootBalance(USER_A, files.shopFile), 0);
+  });
+
+  await runTest("daily quest: TTT bot win and bot loss both count", () => {
+    const winFiles = questFiles();
+    linkQuestUser(winFiles, USER_A);
+    const { service: winService } = createService(winFiles);
+    const winStart = startOpen(winService);
+    winService.expireJoin(winStart.session.id);
+    winService.move({
+      sessionId: winStart.session.id,
+      userId: USER_A,
+      cell: 0,
+      chatId: COMMUNITY_CHAT,
+    });
+    const humanWin = winService.resolveTurnTimeout(winStart.session.id);
+    assert.strictEqual(humanWin.session.status, STATUS.WON);
+    assert.strictEqual(humanWin.session.winnerUserId, String(USER_A));
+    assert.strictEqual(questSnap(winFiles, USER_A).game.completed, true);
+    assert.strictEqual(questSnap(winFiles, BOT_USER_ID).game.completed, false);
+
+    const lossFiles = questFiles();
+    linkQuestUser(lossFiles, USER_A);
+    const { service: lossService } = createService(lossFiles);
+    const lossStart = startOpen(lossService);
+    lossService.expireJoin(lossStart.session.id);
+    const botWin = lossService.resolveTurnTimeout(lossStart.session.id);
+    assert.strictEqual(botWin.session.status, STATUS.WON);
+    assert.strictEqual(botWin.session.winnerUserId, BOT_USER_ID);
+    assert.strictEqual(questSnap(lossFiles, USER_A).game.completed, true);
+    assert.strictEqual(getLootBalance(USER_A, lossFiles.shopFile), ACTIVITY_LOOT);
+  });
+
+  await runTest("daily quest: TTT bot draw counts", () => {
+    const files = questFiles();
+    linkQuestUser(files, USER_A);
+    const { service } = createService(files);
+    const started = startOpen(service);
+    service.expireJoin(started.session.id);
+    const raw = service.manager.getSession(started.session.id);
+    raw.board = ["X", "O", "X", "X", "X", "O", "O", null, "O"];
+    raw.currentPlayer = "X";
+    const last = service.move({
+      sessionId: started.session.id,
+      userId: USER_A,
+      cell: 7,
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(last.session.status, STATUS.DRAW);
+    assert.strictEqual(questSnap(files, USER_A).game.completed, true);
+    assert.strictEqual(questSnap(files, BOT_USER_ID).game.completed, false);
+  });
+
+  await runTest("daily quest: TTT duplicate resolution does not double-award", () => {
+    const files = questFiles();
+    linkQuestUser(files, USER_A);
+    linkQuestUser(files, USER_B);
+    const { service } = createService({ ...files, pairCooldownMs: 0 });
+    const first = startOpen(service);
+    joinBoth(service, first.session.id);
+    playTttWinLine(service, first.session.id);
+    assert.strictEqual(getLootBalance(USER_A, files.shopFile), ACTIVITY_LOOT);
+    assert.strictEqual(getLootBalance(USER_B, files.shopFile), ACTIVITY_LOOT);
+
+    const retry = service.move({
+      sessionId: first.session.id,
+      userId: USER_A,
+      cell: 0,
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(retry.reason, "already-ended");
+    service.resolveTurnTimeout(first.session.id);
+    service.claimXpAward(first.session.id);
+    service.claimXpAward(first.session.id);
+
+    const second = service.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_A, displayName: "Kevin", isBot: false },
+    });
+    service.setMessageId(second.session.id, 5002);
+    service.join({
+      sessionId: second.session.id,
+      userId: USER_B,
+      displayName: "Alice",
+      chatId: COMMUNITY_CHAT,
+    });
+    playTttWinLine(service, second.session.id);
+    assert.strictEqual(getLootBalance(USER_A, files.shopFile), ACTIVITY_LOOT);
+    assert.strictEqual(getLootBalance(USER_B, files.shopFile), ACTIVITY_LOOT);
+    assert.strictEqual(questSnap(files, USER_A).game.completed, true);
+  });
+
+  await runTest("daily quest: TTT unlinked wallet completes slot without Loot", () => {
+    const files = questFiles();
+    const { service } = createService(files);
+    const started = startOpen(service);
+    joinBoth(service, started.session.id);
+    playTttWinLine(service, started.session.id);
+    const snapA = questSnap(files, USER_A);
+    const snapB = questSnap(files, USER_B);
+    assert.strictEqual(snapA.game.completed, true);
+    assert.strictEqual(snapB.game.completed, true);
+    assert.strictEqual(snapA.game.lootSkipped, true);
+    assert.strictEqual(snapB.game.lootSkipped, true);
+    assert.strictEqual(getLootBalance(USER_A, files.shopFile), 0);
+    assert.strictEqual(getLootBalance(USER_B, files.shopFile), 0);
+  });
+
+  await runTest("daily quest: TTT XP cap does not block gameplay detection", () => {
+    const files = questFiles();
+    linkQuestUser(files, USER_A);
+    linkQuestUser(files, USER_B);
+    for (let i = 0; i < PVP_DAILY_WIN_CAP; i += 1) {
+      const xp = awardPvpWinXp(USER_A, "Kevin", files.pointsFile);
+      assert.strictEqual(xp.awarded, true);
+      assert.strictEqual(xp.pointsToAdd, PVP_WIN_XP);
+    }
+    const capped = awardPvpWinXp(USER_A, "Kevin", files.pointsFile);
+    assert.strictEqual(capped.awarded, false);
+    assert.strictEqual(loadPoints(files.pointsFile).users[String(USER_A)].points, PVP_DAILY_WIN_CAP * PVP_WIN_XP);
+
+    const { service } = createService(files);
+    const started = startOpen(service);
+    joinBoth(service, started.session.id);
+    playTttWinLine(service, started.session.id);
+    assert.strictEqual(questSnap(files, USER_A).game.completed, true);
+    assert.strictEqual(questSnap(files, USER_B).game.completed, true);
+    assert.strictEqual(getLootBalance(USER_B, files.shopFile), ACTIVITY_LOOT);
+    const claim = service.claimXpAward(started.session.id);
+    assert.strictEqual(claim.shouldAward, true);
+    const extra = awardPvpWinXp(claim.winnerUserId, "Kevin", files.pointsFile);
+    assert.strictEqual(extra.awarded, false);
+    assert.strictEqual(loadPoints(files.pointsFile).users[String(USER_A)].points, PVP_DAILY_WIN_CAP * PVP_WIN_XP);
+    assert.strictEqual(loadPoints(files.pointsFile).users[String(USER_B)], undefined);
+  });
+
+  await runTest("daily quest: TTT XP amount unchanged after resolved win", () => {
+    const files = questFiles();
+    const { service } = createService(files);
+    const started = startOpen(service);
+    joinBoth(service, started.session.id);
+    playTttWinLine(service, started.session.id);
+    const claim = service.claimXpAward(started.session.id);
+    assert.strictEqual(claim.shouldAward, true);
+    const xp = awardPvpWinXp(claim.winnerUserId, "Kevin", files.pointsFile);
+    assert.strictEqual(xp.awarded, true);
+    assert.strictEqual(xp.pointsToAdd, PVP_WIN_XP);
+    assert.strictEqual(PVP_WIN_XP, 3);
+    assert.strictEqual(loadPoints(files.pointsFile).users[String(USER_A)].points, 3);
+  });
+
+  await runTest("daily quest: TTT failure does not break resolution", () => {
+    const { service } = createService({
+      noteDailyQuestGameFn() {
+        throw new Error("quest-boom");
+      },
+    });
+    const started = startOpen(service);
+    joinBoth(service, started.session.id);
+    const win = playTttWinLine(service, started.session.id);
+    assert.strictEqual(win.session.status, STATUS.WON);
+    const claim = service.claimXpAward(started.session.id);
+    assert.strictEqual(claim.shouldAward, true);
   });
 
   fs.rmSync(tempDir, { recursive: true, force: true });

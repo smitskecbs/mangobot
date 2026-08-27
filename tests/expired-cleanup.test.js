@@ -175,16 +175,16 @@ async function main() {
       now: timers.now,
       joinTimeoutMs: 1000,
     });
-    const started = ttt.startChallenge({ chatId: COMMUNITY_CHAT });
+    const started = ttt.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: 111, displayName: "Kevin", isBot: false },
+    });
     assert.strictEqual(started.ok, true);
     const expired = ttt.expireJoin(started.session.id);
     assert.strictEqual(expired.ok, true);
-    assert.ok(expired.rendered.text.includes("Tic-Tac-Toe cancelled"));
-    assert.ok(expired.rendered.text.includes("No one joined this round."));
-    assert.deepStrictEqual(
-      expired.rendered.extra.reply_markup.inline_keyboard,
-      []
-    );
+    assert.strictEqual(expired.session.status, "active");
+    assert.strictEqual(expired.startedBot, true);
+    assert.ok(!JSON.stringify(expired.rendered.extra).includes("JOIN GAME"));
   });
 
   await runTest("Connect4 join timeout render clears keyboard", () => {
@@ -199,16 +199,16 @@ async function main() {
       now: timers.now,
       joinTimeoutMs: 1000,
     });
-    const started = c4.startChallenge({ chatId: COMMUNITY_CHAT });
+    const started = c4.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: 111, displayName: "Kevin", isBot: false },
+    });
     assert.strictEqual(started.ok, true);
     const expired = c4.expireJoin(started.session.id);
     assert.strictEqual(expired.ok, true);
-    assert.ok(expired.rendered.text.includes("Connect Four cancelled"));
-    assert.ok(expired.rendered.text.includes("No one joined this round."));
-    assert.deepStrictEqual(
-      expired.rendered.extra.reply_markup.inline_keyboard,
-      []
-    );
+    assert.strictEqual(expired.session.status, "active");
+    assert.strictEqual(expired.startedBot, true);
+    assert.ok(!JSON.stringify(expired.rendered.extra).includes("JOIN GAME"));
   });
 
   await runTest("delete failure does not throw", async () => {

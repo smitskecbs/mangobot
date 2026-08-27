@@ -10,6 +10,7 @@ const {
 const {
   startConnectFourChallenge,
   getConnectFourRuntime,
+  PLAYER_BUSY_TEXT,
 } = require("../services/connectFour");
 const {
   GAMES_TOPIC_REQUIRED_MESSAGE,
@@ -89,14 +90,24 @@ async function handleConnectFour(ctx, options = {}) {
     if (reason === "mangobomb") {
       return ctx.reply("🥭💣 A ManGo Bomb round is already running.");
     }
-    if (reason === "blackjack") {
-      return ctx.reply("🃏 A Blackjack round is already running.");
-    }
-    return ctx.reply("🟡 A Connect Four challenge is already open.");
+    return ctx.reply("⚔️ A community game is already running.");
   }
 
-  const result = startFn({ chatId: ctx.chat.id });
+  const result = startFn({
+    chatId: ctx.chat.id,
+    starter: {
+      userId: ctx.from.id,
+      displayName: ctx.from,
+      isBot: Boolean(ctx.from.is_bot),
+    },
+  });
   if (!result.ok) {
+    if (result.reason === "player-busy") {
+      return ctx.reply(PLAYER_BUSY_TEXT);
+    }
+    if (result.reason === "bot") {
+      return ctx.reply("🟡 Bots cannot start Connect Four.");
+    }
     if (result.reason === "already-active") {
       return ctx.reply("🟡 A Connect Four challenge is already open.");
     }

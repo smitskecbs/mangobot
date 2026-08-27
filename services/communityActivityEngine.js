@@ -455,18 +455,12 @@ function buildWeights(config, context) {
 function isInteractiveBusy() {
   try {
     const {
-      isPvpBusy,
       isTriviaBusy,
       isChatFightBusy,
       isMangoBombBusy,
-      isBlackjackBusy,
     } = require("./communityGameState");
     return Boolean(
-      isChatFightBusy() ||
-        isPvpBusy() ||
-        isTriviaBusy() ||
-        isMangoBombBusy() ||
-        isBlackjackBusy()
+      isChatFightBusy() || isTriviaBusy() || isMangoBombBusy()
     );
   } catch (_err) {
     return false;
@@ -485,17 +479,11 @@ function isActionEligible(actionId, context) {
       return false;
     }
     try {
-      const { isPvpBusy, isTriviaBusy, isMangoBombBusy, isBlackjackBusy } = require("./communityGameState");
-      if (isPvpBusy()) {
-        return false;
-      }
+      const { isTriviaBusy, isMangoBombBusy } = require("./communityGameState");
       if (isTriviaBusy()) {
         return false;
       }
       if (isMangoBombBusy()) {
-        return false;
-      }
-      if (isBlackjackBusy()) {
         return false;
       }
     } catch (_err) {
@@ -519,17 +507,11 @@ function isActionEligible(actionId, context) {
       return false;
     }
     try {
-      const { isPvpBusy, isTriviaBusy, isMangoBombBusy, isBlackjackBusy } = require("./communityGameState");
-      if (isPvpBusy()) {
-        return false;
-      }
+      const { isTriviaBusy, isMangoBombBusy } = require("./communityGameState");
       if (isTriviaBusy()) {
         return false;
       }
       if (isMangoBombBusy()) {
-        return false;
-      }
-      if (isBlackjackBusy()) {
         return false;
       }
     } catch (_err) {

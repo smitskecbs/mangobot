@@ -320,16 +320,24 @@ async function main() {
       manager,
       now: timers.now,
       joinTimeoutMs: 1000,
+      turnTimeoutMs: 1000,
     });
-    const started = ttt.startChallenge({ chatId: COMMUNITY_CHAT });
+    const started = ttt.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_A, displayName: "Kevin", isBot: false },
+    });
     ttt.setMessageId(started.session.id, 5001);
+    ttt.join({
+      sessionId: started.session.id,
+      userId: USER_B,
+      displayName: "Alice",
+      chatId: COMMUNITY_CHAT,
+    });
     timers.advance(1000);
-    assert.strictEqual(ttt.isOpen(), false);
-    const expired = ttt.getSession(started.session.id);
-    assert.strictEqual(expired.status, "expired");
-    assert.ok(ttt.renderMessage(expired).text.includes("No one joined this round."));
+    assert.strictEqual(ttt.getSession(started.session.id).status, "won");
+    const ended = ttt.getSession(started.session.id);
     assert.deepStrictEqual(
-      ttt.renderMessage(expired).extra.reply_markup.inline_keyboard,
+      ttt.renderMessage(ended).extra.reply_markup.inline_keyboard,
       []
     );
 
@@ -364,7 +372,7 @@ async function main() {
       awardPvpWinXpFn: () => ({ awarded: false }),
     });
     assert.strictEqual(ctx.cbAnswers[0], GAME_OVER_TOAST);
-    assert.ok(edited[0].text.includes("Tic-Tac-Toe cancelled"));
+    assert.ok(edited[0].text.includes("TIC-TAC-TOE") || edited[0].text.includes("Tic-Tac-Toe"));
     assert.deepStrictEqual(edited[0].extra.reply_markup.inline_keyboard, []);
   });
 
@@ -379,11 +387,21 @@ async function main() {
       manager,
       now: timers.now,
       joinTimeoutMs: 800,
+      turnTimeoutMs: 800,
     });
-    const started = c4.startChallenge({ chatId: COMMUNITY_CHAT });
-    const expired = c4.expireJoin(started.session.id);
+    const started = c4.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_A, displayName: "Kevin", isBot: false },
+    });
+    c4.join({
+      sessionId: started.session.id,
+      userId: USER_B,
+      displayName: "Alice",
+      chatId: COMMUNITY_CHAT,
+    });
+    const expired = c4.resolveTurnTimeout(started.session.id);
     assert.ok(expired.ok);
-    assert.ok(expired.rendered.text.includes("Connect Four cancelled"));
+    assert.strictEqual(expired.session.status, "won");
     assert.deepStrictEqual(expired.rendered.extra.reply_markup.inline_keyboard, []);
     assert.strictEqual(c4.isOpen(), false);
 
@@ -418,7 +436,7 @@ async function main() {
       awardPvpWinXpFn: () => ({ awarded: false }),
     });
     assert.strictEqual(ctx.cbAnswers[0], GAME_OVER_TOAST);
-    assert.ok(edited[0].text.includes("Connect Four cancelled"));
+    assert.ok(edited[0].text.includes("CONNECT FOUR") || edited[0].text.includes("Connect Four"));
     assert.deepStrictEqual(edited[0].extra.reply_markup.inline_keyboard, []);
   });
 

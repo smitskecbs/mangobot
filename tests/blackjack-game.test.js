@@ -334,7 +334,7 @@ function createMockCtx(opts = {}) {
     assert.strictEqual(late.toast, LATE_JOIN_TOAST);
   });
 
-  await runTest("20. busy protection", () => {
+  await runTest("20. parallel Blackjack allowed; per-user lock", () => {
     const { service } = createService();
     start(service);
     const second = service.startLobby({
@@ -342,16 +342,22 @@ function createMockCtx(opts = {}) {
       threadId: 123,
       starter: starter("Bob", USER_B),
     });
-    assert.strictEqual(second.ok, false);
-    assert.strictEqual(second.reason, "already-active");
+    assert.strictEqual(second.ok, true);
     assert.strictEqual(
       isCommunityChallengeBusy({ isBlackjackOpenFn: () => service.isBlackjackOpen() }),
-      true
+      false
     );
     assert.strictEqual(
       getCommunityBusyReason({ isBlackjackOpenFn: () => service.isBlackjackOpen() }),
-      "blackjack"
+      null
     );
+    const sameUser = service.startLobby({
+      chatId: COMMUNITY_CHAT,
+      threadId: 123,
+      starter: starter("Alice", USER_A),
+    });
+    assert.strictEqual(sameUser.ok, false);
+    assert.strictEqual(sameUser.reason, "player-busy");
   });
 
   await runTest("21. wrong topic reject", () => {
@@ -622,7 +628,7 @@ function createMockCtx(opts = {}) {
       path.join(__dirname, "../services/communityActivityEngine.js"),
       "utf8"
     );
-    assert.ok(engineSrc.includes("isBlackjackBusy"));
+    assert.ok(!engineSrc.includes("isBlackjackBusy"));
     assert.ok(!engineSrc.includes("getBlackjackRuntime"));
     const ctx = createMockCtx({
       callbackData: GROUP_MENU_CALLBACK.BLACKJACK,

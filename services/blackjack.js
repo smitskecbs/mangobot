@@ -7,6 +7,11 @@
 const crypto = require("crypto");
 const { Markup } = require("telegraf");
 const { sanitizePvpDisplayName } = require("./pvpSessionManager");
+const {
+  createPvpMatchReservation,
+  getSharedPvpMatchReservation,
+  PLAYER_BUSY_TEXT,
+} = require("./pvpMatchReservation");
 const { XP_WALLET_GAME_LOCKED_LINE } = require("./xpWalletGate");
 const { log, error: logError } = require("../utils/logger");
 const {
@@ -198,6 +203,8 @@ function createBlackjackService(options = {}) {
     Number.isFinite(options.watchdogGraceMs) && options.watchdogGraceMs >= 0
       ? options.watchdogGraceMs
       : WATCHDOG_GRACE_MS;
+  const reservation =
+    options.reservation || createPvpMatchReservation();
 
   const gamesById = new Map();
   const gamesByChat = new Map();
@@ -395,27 +402,59 @@ function createBlackjackService(options = {}) {
     };
   }
 
+  function chatGameMap(chatId) {
+    return gamesByChat.get(String(chatId)) || null;
+  }
+
+  function liveGamesForChat(chatId) {
+    const map = chatGameMap(chatId);
+    if (!map) {
+      return [];
+    }
+    return Array.from(map.values()).filter(
+      (game) => game.status !== STATUS.FINISHED && game.status !== STATUS.CANCELLED
+    );
+  }
+
+  function addGameToChat(game) {
+    const key = String(game.chatId);
+    let map = gamesByChat.get(key);
+    if (!map) {
+      map = new Map();
+      gamesByChat.set(key, map);
+    }
+    map.set(game.id, game);
+  }
+
+  function removeGameFromChat(game) {
+    const key = String(game.chatId);
+    const map = gamesByChat.get(key);
+    if (!map) {
+      return;
+    }
+    map.delete(game.id);
+    if (map.size === 0) {
+      gamesByChat.delete(key);
+    }
+  }
+
   function activeGameForChat(chatId) {
-    const game = gamesByChat.get(String(chatId));
-    if (!game) {
-      return null;
-    }
-    if (game.status === STATUS.FINISHED || game.status === STATUS.CANCELLED) {
-      return null;
-    }
-    return game;
+    const live = liveGamesForChat(chatId);
+    return live.length ? live[0] : null;
   }
 
   function isBlackjackOpen(chatId) {
     if (chatId == null) {
-      for (const game of gamesByChat.values()) {
-        if (game.status !== STATUS.FINISHED && game.status !== STATUS.CANCELLED) {
-          return true;
+      for (const map of gamesByChat.values()) {
+        for (const game of map.values()) {
+          if (game.status !== STATUS.FINISHED && game.status !== STATUS.CANCELLED) {
+            return true;
+          }
         }
       }
       return false;
     }
-    return Boolean(activeGameForChat(chatId));
+    return liveGamesForChat(chatId).length > 0;
   }
 
   function isRevisionCurrent(gameId, revision) {
@@ -566,8 +605,8 @@ function createBlackjackService(options = {}) {
     dropGame(game);
   }
 
-  async function recoverAfterQueueError(chatKey, stage) {
-    const game = activeGameForChat(chatKey);
+  async function recoverAfterQueueError(gameKey, stage) {
+    const game = gamesById.get(String(gameKey));
     if (!game) {
       return;
     }
@@ -612,10 +651,8 @@ function createBlackjackService(options = {}) {
       status: game.status,
     });
     gamesById.delete(game.id);
-    const current = gamesByChat.get(String(game.chatId));
-    if (current && current.id === game.id) {
-      gamesByChat.delete(String(game.chatId));
-    }
+    removeGameFromChat(game);
+    reservation.releaseMatch(game.id);
     stopWatchdogIfIdle();
   }
 
@@ -856,7 +893,7 @@ function createBlackjackService(options = {}) {
     const countdownGameId = game.id;
     const countdownInstance = game.instanceSeq;
     setGameTimer(game, "countdown", wait, () => {
-      enqueue(game.chatId, (token) => {
+      enqueue(game.id, (token) => {
         if (!isLiveTask(token)) {
           return;
         }
@@ -1087,7 +1124,7 @@ function createBlackjackService(options = {}) {
       }
       setPending(current, PENDING.TURN_TIMEOUT, generation);
       enqueue(
-        current.chatId,
+        current.id,
         (token) => autoStand(current.id, token, instance, generation),
         "turn-timeout"
       );
@@ -1115,7 +1152,7 @@ function createBlackjackService(options = {}) {
       }
       setPending(current, PENDING.BOT_ACT, generation);
       enqueue(
-        current.chatId,
+        current.id,
         (token) => botAct(current.id, token, instance, generation),
         "bot-act"
       );
@@ -1503,7 +1540,7 @@ function createBlackjackService(options = {}) {
       }
       setPending(current, PENDING.DECISION_TIMEOUT);
       enqueue(
-        current.chatId,
+        current.id,
         (token) => closeDecisions(current.id, token, instance),
         "decision-timeout"
       );
@@ -1583,9 +1620,6 @@ function createBlackjackService(options = {}) {
     if (chatId == null) {
       return { ok: false, reason: "wrong-chat" };
     }
-    if (activeGameForChat(chatId)) {
-      return { ok: false, reason: "already-active" };
-    }
     if (!starter || starter.isBot) {
       return { ok: false, reason: starter && starter.isBot ? "bot" : "no-starter" };
     }
@@ -1600,6 +1634,10 @@ function createBlackjackService(options = {}) {
     }
     if (!id) {
       id = crypto.randomBytes(8).toString("hex");
+    }
+    const reserved = reservation.tryReserve(starter.userId, "blackjack", id);
+    if (!reserved.ok) {
+      return { ok: false, reason: "player-busy", toast: PLAYER_BUSY_TEXT };
     }
     const now = nowFn();
     const game = {
@@ -1632,7 +1670,7 @@ function createBlackjackService(options = {}) {
     const player = makePlayer(starter.userId, starter.displayName);
     game.players.set(player.userId, player);
     gamesById.set(id, game);
-    gamesByChat.set(String(chatId), game);
+    addGameToChat(game);
     const lobbyInstance = game.instanceSeq;
     setGameTimer(game, "lobby", lobbyMs, () => {
       const current = gamesById.get(id);
@@ -1641,7 +1679,7 @@ function createBlackjackService(options = {}) {
       }
       setPending(current, PENDING.CLOSE_LOBBY);
       enqueue(
-        current.chatId,
+        current.id,
         (token) => closeLobby(id, token, lobbyInstance),
         "lobby-close"
       );
@@ -1713,6 +1751,10 @@ function createBlackjackService(options = {}) {
     }
     if (humanPlayers(game).length >= MAX_HUMAN_PLAYERS) {
       return { ok: false, reason: "full", toast: "This Blackjack table is full." };
+    }
+    const reserved = reservation.tryReserve(uid, "blackjack", game.id);
+    if (!reserved.ok) {
+      return { ok: false, reason: "player-busy", toast: PLAYER_BUSY_TEXT };
     }
     game.players.set(uid, makePlayer(uid, displayName));
     noteProgress(game, "join");
@@ -1825,7 +1867,7 @@ function createBlackjackService(options = {}) {
   }
 
   function enqueueJoin(input) {
-    return enqueue(input.chatId, (token) => {
+    return enqueue(input.gameId, (token) => {
       if (!isLiveTask(token)) {
         return { ok: false, reason: "queue-timeout", toast: STALE_CALLBACK };
       }
@@ -1834,7 +1876,7 @@ function createBlackjackService(options = {}) {
   }
 
   function enqueuePlay(input) {
-    return enqueue(input.chatId, (token) => {
+    return enqueue(input.gameId, (token) => {
       if (!isLiveTask(token)) {
         return { ok: false, reason: "queue-timeout", toast: STALE_CALLBACK };
       }
@@ -1843,7 +1885,7 @@ function createBlackjackService(options = {}) {
   }
 
   function enqueuePass(input) {
-    return enqueue(input.chatId, (token) => {
+    return enqueue(input.gameId, (token) => {
       if (!isLiveTask(token)) {
         return { ok: false, reason: "queue-timeout", toast: STALE_CALLBACK };
       }
@@ -1852,7 +1894,7 @@ function createBlackjackService(options = {}) {
   }
 
   function enqueueHit(input) {
-    return enqueue(input.chatId, (token) => {
+    return enqueue(input.gameId, (token) => {
       if (!isLiveTask(token)) {
         return { ok: false, reason: "queue-timeout", toast: STALE_CALLBACK };
       }
@@ -1861,7 +1903,7 @@ function createBlackjackService(options = {}) {
   }
 
   function enqueueStand(input) {
-    return enqueue(input.chatId, (token) => {
+    return enqueue(input.gameId, (token) => {
       if (!isLiveTask(token)) {
         return { ok: false, reason: "queue-timeout", toast: STALE_CALLBACK };
       }
@@ -1877,7 +1919,7 @@ function createBlackjackService(options = {}) {
     setPending(game, PENDING.CLOSE_LOBBY);
     const instance = game.instanceSeq;
     return enqueue(
-      game.chatId,
+      game.id,
       (token) => closeLobby(gameId, token, instance),
       "lobby-close"
     );
@@ -1891,7 +1933,7 @@ function createBlackjackService(options = {}) {
     setPending(game, PENDING.DECISION_TIMEOUT);
     const instance = game.instanceSeq;
     return enqueue(
-      game.chatId,
+      game.id,
       (token) => closeDecisions(gameId, token, instance),
       "decision-timeout"
     );
@@ -1906,7 +1948,7 @@ function createBlackjackService(options = {}) {
     const instance = game.instanceSeq;
     const generation = game.roundGeneration;
     return enqueue(
-      game.chatId,
+      game.id,
       (token) => autoStand(gameId, token, instance, generation),
       "turn-timeout"
     );
@@ -1947,18 +1989,18 @@ function createBlackjackService(options = {}) {
       }
       if (game.status === STATUS.LOBBY) {
         setPending(game, PENDING.CLOSE_LOBBY);
-        enqueue(game.chatId, (token) => closeLobby(game.id, token, game.instanceSeq), "lobby-close");
+        enqueue(game.id, (token) => closeLobby(game.id, token, game.instanceSeq), "lobby-close");
       } else if (game.status === STATUS.DECISION) {
         setPending(game, PENDING.DECISION_TIMEOUT);
         enqueue(
-          game.chatId,
+          game.id,
           (token) => closeDecisions(game.id, token, game.instanceSeq),
           "decision-timeout"
         );
       } else if (game.status === STATUS.PLAYER_TURN) {
         setPending(game, PENDING.TURN_TIMEOUT, game.roundGeneration);
         enqueue(
-          game.chatId,
+          game.id,
           (token) => autoStand(game.id, token, game.instanceSeq, game.roundGeneration),
           "turn-timeout"
         );
@@ -2026,11 +2068,12 @@ function createBlackjackService(options = {}) {
     sendMessage = null;
     walletReminderFn = null;
     awards = { reserve: null, pass: null, bot: null, pvp: null, status: null, markPair: null };
+    reservation.reset();
   }
 
-  function whenQueueIdle(chatId) {
-    if (chatId != null) {
-      return queues.get(String(chatId)) || Promise.resolve();
+  function whenQueueIdle(_chatId) {
+    if (!queues.size) {
+      return Promise.resolve();
     }
     return Promise.all(Array.from(queues.values()));
   }
@@ -2065,6 +2108,7 @@ function createBlackjackService(options = {}) {
     hasActiveDecisionTimer: (gameId) => hasActiveTimer(gamesById.get(gameId), "decision"),
     hasActiveTurnTimer: (gameId) => hasActiveTimer(gamesById.get(gameId), "turn"),
     whenIdle,
+    reservation,
     whenQueueIdle,
     whenWinnerUiIdle: () => winnerUiWait,
     setEditMessageHandler: (fn) => {
@@ -2109,7 +2153,9 @@ function createBlackjackService(options = {}) {
   };
 }
 
-const defaultService = createBlackjackService();
+const defaultService = createBlackjackService({
+  reservation: getSharedPvpMatchReservation(),
+});
 
 module.exports = {
   STATUS,
@@ -2128,6 +2174,7 @@ module.exports = {
   RENDER_TIMEOUT_MS,
   QUEUE_TIMEOUT_MS,
   INTERNAL_CANCEL_TEXT,
+  PLAYER_BUSY_TEXT,
   parseBlackjackCallbackData,
   callbackData,
   joinKeyboard,

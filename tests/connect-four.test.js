@@ -7,7 +7,9 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const assert = require("assert");
+const crypto = require("node:crypto");
 
+const { encodeBase58 } = require("../utils/base58");
 require("../services/xpWalletGate").setXpWalletAutoLinkForTests(true);
 const {
   createConnectFourService,
@@ -20,12 +22,14 @@ const {
   isBoardFull,
   STATUS,
   getConnectFourRuntime,
+  BOT_USER_ID,
 } = require("../services/connectFour");
 const {
   createTicTacToeService,
   getTicTacToeRuntime,
 } = require("../services/ticTacToe");
 const { createPvpSessionManager } = require("../services/pvpSessionManager");
+const { createPvpMatchReservation } = require("../services/pvpMatchReservation");
 const {
   awardPvpWinXp,
   PVP_WIN_XP,
@@ -39,6 +43,13 @@ const {
   getCommunityBusyReason,
 } = require("../services/communityGameState");
 const { ACTION_REGISTRY } = require("../services/communityActivityEngine");
+const {
+  getDailyQuestSnapshot,
+  ACTIVITY_LOOT,
+  GAME_SOURCES,
+} = require("../services/dailyQuest");
+const { getLootBalance } = require("../services/mangoLoot");
+const { registerManualWallet } = require("../services/walletLinks");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-c4-"));
 let testCounter = 0;
@@ -56,6 +67,50 @@ const originalGamesTopic = process.env.TELEGRAM_GAMES_TOPIC_ID;
 function pointsFile() {
   testCounter += 1;
   return path.join(tempDir, `points-${testCounter}.json`);
+}
+
+function walletAddress(seed) {
+  return encodeBase58(crypto.createHash("sha256").update(String(seed)).digest());
+}
+
+function questFiles() {
+  testCounter += 1;
+  const shopFile = path.join(tempDir, `shop-${testCounter}.json`);
+  const walletFile = path.join(tempDir, `wallet-${testCounter}.json`);
+  const points = path.join(tempDir, `qpoints-${testCounter}.json`);
+  fs.writeFileSync(points, JSON.stringify({ users: {} }, null, 2), "utf8");
+  fs.writeFileSync(walletFile, JSON.stringify({ users: {}, wallets: {} }, null, 2), "utf8");
+  return { shopFile, walletFile, pointsFile: points };
+}
+
+function linkQuestUser(files, userId) {
+  registerManualWallet(userId, walletAddress(`w-${testCounter}-${userId}`), files.walletFile);
+}
+
+function questSnap(files, userId) {
+  return getDailyQuestSnapshot(userId, {
+    shopFile: files.shopFile,
+    walletFile: files.walletFile,
+  });
+}
+
+function makeC4DrawBoard() {
+  const drawBoard = emptyBoard();
+  const cols = [
+    ["R", "R", "Y", "Y", "R", "R"],
+    ["Y", "Y", "R", "R", "Y", "Y"],
+    ["R", "R", "Y", "Y", "R", "R"],
+    ["Y", "Y", "R", "R", "Y", "Y"],
+    ["R", "R", "Y", "Y", "R", "R"],
+    ["Y", "Y", "R", "R", "Y", "Y"],
+    ["R", "R", "Y", "Y", "R", "R"],
+  ];
+  for (let col = 0; col < 7; col += 1) {
+    for (let i = 0; i < 6; i += 1) {
+      drawBoard[5 - i][col] = cols[col][i];
+    }
+  }
+  return drawBoard;
 }
 
 function resetEnv() {
@@ -137,6 +192,9 @@ function createService(overrides = {}) {
     turnTimeoutMs: overrides.turnTimeoutMs != null ? overrides.turnTimeoutMs : 60_000,
     pairCooldownMs: overrides.pairCooldownMs != null ? overrides.pairCooldownMs : 1_800_000,
     randomIdFn: overrides.randomIdFn,
+    shopFile: overrides.shopFile,
+    walletFile: overrides.walletFile,
+    noteDailyQuestGameFn: overrides.noteDailyQuestGameFn,
   });
   return { service, timers, manager };
 }
@@ -203,20 +261,16 @@ function createMockCtx({
 }
 
 function startOpen(service, chatId = COMMUNITY_CHAT) {
-  const started = service.startChallenge({ chatId });
+  const started = service.startChallenge({
+    chatId,
+    starter: { userId: USER_A, displayName: "Kevin", isBot: false },
+  });
   assert.strictEqual(started.ok, true);
   service.setMessageId(started.session.id, 5001);
   return started;
 }
 
 function joinBoth(service, sessionId) {
-  const j1 = service.join({
-    sessionId,
-    userId: USER_A,
-    displayName: "Kevin",
-    chatId: COMMUNITY_CHAT,
-  });
-  assert.strictEqual(j1.ok, true);
   const j2 = service.join({
     sessionId,
     userId: USER_B,
@@ -251,7 +305,7 @@ async function main() {
     const started = startOpen(service);
     assert.strictEqual(started.session.game, "connect4");
     assert.strictEqual(started.session.status, STATUS.WAITING);
-    assert.ok(started.text.includes("CONNECT FOUR"));
+    assert.ok(started.text.includes("Connect Four"));
     assert.ok(started.text.includes("Join game") || started.keyboard);
   });
 
@@ -267,7 +321,7 @@ async function main() {
       isBusyFn: () => false,
       setMessageIdFn: (id, mid) => service.setMessageId(id, mid),
     });
-    assert.ok(member.replies[0].includes("CONNECT FOUR"));
+    assert.ok(member.replies[0].includes("Connect Four"));
     assert.ok(!String(member.replies[0]).toLowerCase().includes("admin"));
 
     service.reset();
@@ -293,20 +347,14 @@ async function main() {
       isBusyFn: () => false,
       setMessageIdFn: (id, mid) => service.setMessageId(id, mid),
     });
-    assert.ok(ok.replies[0].includes("CONNECT FOUR"));
+    assert.ok(ok.replies[0].includes("Connect Four"));
   });
 
   await runTest("40. first player is red", () => {
     const { service } = createService();
     const started = startOpen(service);
-    const j1 = service.join({
-      sessionId: started.session.id,
-      userId: USER_A,
-      displayName: "Kevin",
-      chatId: COMMUNITY_CHAT,
-    });
-    assert.strictEqual(j1.role, "R");
-    assert.strictEqual(j1.started, false);
+    assert.strictEqual(started.session.players.R.userId, String(USER_A));
+    assert.strictEqual(started.session.status, STATUS.WAITING);
   });
 
   await runTest("41. second player is yellow", () => {
@@ -320,12 +368,6 @@ async function main() {
   await runTest("42. same user cannot double join", () => {
     const { service } = createService();
     const started = startOpen(service);
-    service.join({
-      sessionId: started.session.id,
-      userId: USER_A,
-      displayName: "Kevin",
-      chatId: COMMUNITY_CHAT,
-    });
     const again = service.join({
       sessionId: started.session.id,
       userId: USER_A,
@@ -570,8 +612,10 @@ async function main() {
     const file = pointsFile();
 
     function tttWin() {
-      const s = ttt.startChallenge({ chatId: COMMUNITY_CHAT });
-      ttt.join({ sessionId: s.session.id, userId: USER_A, displayName: "K", chatId: COMMUNITY_CHAT });
+      const s = ttt.startChallenge({
+        chatId: COMMUNITY_CHAT,
+        starter: { userId: USER_A, displayName: "K", isBot: false },
+      });
       ttt.join({ sessionId: s.session.id, userId: USER_B, displayName: "A", chatId: COMMUNITY_CHAT });
       ttt.move({ sessionId: s.session.id, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
       ttt.move({ sessionId: s.session.id, userId: USER_B, cell: 3, chatId: COMMUNITY_CHAT });
@@ -584,8 +628,10 @@ async function main() {
 
     tttWin();
     tttWin();
-    const c4s = c4.startChallenge({ chatId: COMMUNITY_CHAT });
-    c4.join({ sessionId: c4s.session.id, userId: USER_A, displayName: "K", chatId: COMMUNITY_CHAT });
+    const c4s = c4.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_A, displayName: "K", isBot: false },
+    });
     c4.join({ sessionId: c4s.session.id, userId: USER_B, displayName: "Alice", chatId: COMMUNITY_CHAT });
     playColumns(c4, c4s.session.id, [0, 6, 1, 5, 2, 4, 3]);
     const claim = c4.claimXpAward(c4s.session.id);
@@ -620,8 +666,10 @@ async function main() {
       setTimeoutFn: timers.setTimeout,
       clearTimeoutFn: timers.clearTimeout,
     });
-    const s = ttt.startChallenge({ chatId: COMMUNITY_CHAT });
-    ttt.join({ sessionId: s.session.id, userId: USER_A, displayName: "K", chatId: COMMUNITY_CHAT });
+    const s = ttt.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_A, displayName: "K", isBot: false },
+    });
     ttt.join({ sessionId: s.session.id, userId: USER_B, displayName: "A", chatId: COMMUNITY_CHAT });
     ttt.move({ sessionId: s.session.id, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
     ttt.move({ sessionId: s.session.id, userId: USER_B, cell: 3, chatId: COMMUNITY_CHAT });
@@ -629,8 +677,10 @@ async function main() {
     ttt.move({ sessionId: s.session.id, userId: USER_B, cell: 4, chatId: COMMUNITY_CHAT });
     ttt.move({ sessionId: s.session.id, userId: USER_A, cell: 2, chatId: COMMUNITY_CHAT });
 
-    const c4s = c4.startChallenge({ chatId: COMMUNITY_CHAT });
-    c4.join({ sessionId: c4s.session.id, userId: USER_A, displayName: "K", chatId: COMMUNITY_CHAT });
+    const c4s = c4.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_A, displayName: "K", isBot: false },
+    });
     const j2 = c4.join({
       sessionId: c4s.session.id,
       userId: USER_B,
@@ -643,14 +693,11 @@ async function main() {
     assert.strictEqual(claim.shouldAward, false);
     assert.strictEqual(claim.reason, "rematch-cooldown");
 
-    const c4c = c4.startChallenge({ chatId: COMMUNITY_CHAT });
-    assert.strictEqual(c4c.ok, true);
-    c4.join({
-      sessionId: c4c.session.id,
-      userId: USER_A,
-      displayName: "K",
+    const c4c = c4.startChallenge({
       chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_A, displayName: "K", isBot: false },
     });
+    assert.strictEqual(c4c.ok, true);
     const vsC = c4.join({
       sessionId: c4c.session.id,
       userId: USER_C,
@@ -679,8 +726,9 @@ async function main() {
     const started = startOpen(service);
     timers.advance(5000);
     const session = service.getSession(started.session.id);
-    assert.strictEqual(session.status, STATUS.EXPIRED);
-    assert.strictEqual(timers.pendingCount(), 0);
+    assert.strictEqual(session.status, STATUS.ACTIVE);
+    assert.strictEqual(session.opponentType, "bot");
+    assert.strictEqual(session.players.Y.isBot, true);
   });
 
   await runTest("59. turn timeout opponent wins", () => {
@@ -759,19 +807,34 @@ async function main() {
     assert.strictEqual(badStart.reason, "wrong-chat");
   });
 
-  await runTest("one PvP per chat: TTT blocks Connect Four", () => {
+  await runTest("parallel PvP: TTT and Connect Four can run together", () => {
     const timers = createFakeTimers();
     const manager = createPvpSessionManager({
       now: timers.now,
       setTimeoutFn: timers.setTimeout,
       clearTimeoutFn: timers.clearTimeout,
     });
-    const ttt = createTicTacToeService({ manager, now: timers.now });
-    const c4 = createConnectFourService({ manager, now: timers.now });
-    assert.strictEqual(ttt.startChallenge({ chatId: COMMUNITY_CHAT }).ok, true);
-    const blocked = c4.startChallenge({ chatId: COMMUNITY_CHAT });
+    const reservation = createPvpMatchReservation();
+    const ttt = createTicTacToeService({ manager, reservation, now: timers.now });
+    const c4 = createConnectFourService({ manager, reservation, now: timers.now });
+    assert.strictEqual(
+      ttt.startChallenge({
+        chatId: COMMUNITY_CHAT,
+        starter: { userId: USER_A, displayName: "Kevin", isBot: false },
+      }).ok,
+      true
+    );
+    const parallel = c4.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_C, displayName: "Bob", isBot: false },
+    });
+    assert.strictEqual(parallel.ok, true);
+    const blocked = c4.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_A, displayName: "Kevin", isBot: false },
+    });
     assert.strictEqual(blocked.ok, false);
-    assert.strictEqual(blocked.reason, "already-active");
+    assert.strictEqual(blocked.reason, "player-busy");
   });
 
   await runTest("full column callback answers without group spam", async () => {
@@ -799,14 +862,14 @@ async function main() {
     assert.strictEqual(ctx.edited.length, 0);
   });
 
-  await runTest("busy reason connect4", () => {
+  await runTest("busy reason connect4 does not occupy community exclusive slot", () => {
     assert.strictEqual(
       getCommunityBusyReason({
         isChatFightOpenFn: () => false,
         isTicTacToeOpenFn: () => false,
         isConnectFourOpenFn: () => true,
       }),
-      "connect4"
+      null
     );
     assert.strictEqual(
       isCommunityChallengeBusy({
@@ -814,7 +877,7 @@ async function main() {
         isTicTacToeOpenFn: () => false,
         isConnectFourOpenFn: () => true,
       }),
-      true
+      false
     );
   });
 
@@ -823,10 +886,14 @@ async function main() {
     assert.strictEqual(ACTION_REGISTRY.connect4.mode, "pvp");
   });
 
-  await runTest("production TTT and Connect Four share one manager", () => {
+  await runTest("production TTT and Connect Four share one manager and reservation", () => {
     assert.strictEqual(
       getTicTacToeRuntime().manager,
       getConnectFourRuntime().manager
+    );
+    assert.strictEqual(
+      getTicTacToeRuntime().reservation,
+      getConnectFourRuntime().reservation
     );
   });
 
@@ -850,12 +917,9 @@ async function main() {
       clearTimeoutFn: timers.clearTimeout,
       pairCooldownMs: 0,
     });
-    const s = ttt.startChallenge({ chatId: COMMUNITY_CHAT });
-    ttt.join({
-      sessionId: s.session.id,
-      userId: USER_A,
-      displayName: "K",
+    const s = ttt.startChallenge({
       chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_A, displayName: "K", isBot: false },
     });
     ttt.join({
       sessionId: s.session.id,
@@ -874,6 +938,249 @@ async function main() {
     assert.strictEqual(tttXp.awarded, false);
     assert.strictEqual(tttXp.reason, "excluded");
     assert.strictEqual(loadPoints(file).users[String(USER_A)], undefined);
+  });
+
+  await runTest("daily quest: GAME_SOURCES includes connect4 and pvp", () => {
+    assert.ok(GAME_SOURCES.includes("connect4"));
+    assert.ok(GAME_SOURCES.includes("pvp"));
+  });
+
+  await runTest("daily quest: C4 win counts", () => {
+    const files = questFiles();
+    linkQuestUser(files, USER_A);
+    linkQuestUser(files, USER_B);
+    const { service } = createService(files);
+    const started = startOpen(service);
+    joinBoth(service, started.session.id);
+    const win = playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
+    assert.strictEqual(win.session.status, STATUS.WON);
+    assert.strictEqual(win.session.winnerUserId, String(USER_A));
+    assert.strictEqual(questSnap(files, USER_A).game.completed, true);
+    assert.strictEqual(getLootBalance(USER_A, files.shopFile), ACTIVITY_LOOT);
+  });
+
+  await runTest("daily quest: C4 loss counts", () => {
+    const files = questFiles();
+    linkQuestUser(files, USER_A);
+    linkQuestUser(files, USER_B);
+    const { service } = createService(files);
+    const started = startOpen(service);
+    joinBoth(service, started.session.id);
+    playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
+    assert.strictEqual(questSnap(files, USER_B).game.completed, true);
+    assert.strictEqual(getLootBalance(USER_B, files.shopFile), ACTIVITY_LOOT);
+  });
+
+  await runTest("daily quest: C4 draw counts", () => {
+    const files = questFiles();
+    linkQuestUser(files, USER_A);
+    linkQuestUser(files, USER_B);
+    const { service } = createService(files);
+    const started = startOpen(service);
+    joinBoth(service, started.session.id);
+    const raw = service.manager.getSession(started.session.id);
+    raw.board = makeC4DrawBoard();
+    raw.board[0][6] = null;
+    raw.currentPlayer = "R";
+    const last = service.move({
+      sessionId: started.session.id,
+      userId: USER_A,
+      column: 6,
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(last.session.status, STATUS.DRAW);
+    assert.strictEqual(questSnap(files, USER_A).game.completed, true);
+    assert.strictEqual(questSnap(files, USER_B).game.completed, true);
+    assert.strictEqual(getLootBalance(USER_A, files.shopFile), ACTIVITY_LOOT);
+    assert.strictEqual(getLootBalance(USER_B, files.shopFile), ACTIVITY_LOOT);
+  });
+
+  await runTest("daily quest: C4 lobby only does not count", () => {
+    const files = questFiles();
+    linkQuestUser(files, USER_A);
+    linkQuestUser(files, USER_B);
+    const { service } = createService(files);
+    const started = startOpen(service);
+    assert.strictEqual(questSnap(files, USER_A).game.completed, false);
+    joinBoth(service, started.session.id);
+    assert.strictEqual(questSnap(files, USER_A).game.completed, false);
+    assert.strictEqual(questSnap(files, USER_B).game.completed, false);
+    assert.strictEqual(getLootBalance(USER_A, files.shopFile), 0);
+  });
+
+  await runTest("daily quest: C4 expired lobby without gameplay does not count", () => {
+    const files = questFiles();
+    linkQuestUser(files, USER_A);
+    const { service } = createService(files);
+    const started = startOpen(service);
+    const expired = service.expireJoin(started.session.id);
+    assert.strictEqual(expired.session.status, STATUS.ACTIVE);
+    assert.strictEqual(expired.session.opponentType, "bot");
+    assert.strictEqual(questSnap(files, USER_A).game.completed, false);
+    assert.strictEqual(getLootBalance(USER_A, files.shopFile), 0);
+  });
+
+  await runTest("daily quest: C4 bot win and bot loss both count", () => {
+    const winFiles = questFiles();
+    linkQuestUser(winFiles, USER_A);
+    const { service: winService } = createService(winFiles);
+    const winStart = startOpen(winService);
+    winService.expireJoin(winStart.session.id);
+    winService.move({
+      sessionId: winStart.session.id,
+      userId: USER_A,
+      column: 0,
+      chatId: COMMUNITY_CHAT,
+    });
+    const humanWin = winService.resolveTurnTimeout(winStart.session.id);
+    assert.strictEqual(humanWin.session.status, STATUS.WON);
+    assert.strictEqual(humanWin.session.winnerUserId, String(USER_A));
+    assert.strictEqual(questSnap(winFiles, USER_A).game.completed, true);
+    assert.strictEqual(questSnap(winFiles, BOT_USER_ID).game.completed, false);
+
+    const lossFiles = questFiles();
+    linkQuestUser(lossFiles, USER_A);
+    const { service: lossService } = createService(lossFiles);
+    const lossStart = startOpen(lossService);
+    lossService.expireJoin(lossStart.session.id);
+    const botWin = lossService.resolveTurnTimeout(lossStart.session.id);
+    assert.strictEqual(botWin.session.status, STATUS.WON);
+    assert.strictEqual(botWin.session.winnerUserId, BOT_USER_ID);
+    assert.strictEqual(questSnap(lossFiles, USER_A).game.completed, true);
+    assert.strictEqual(getLootBalance(USER_A, lossFiles.shopFile), ACTIVITY_LOOT);
+  });
+
+  await runTest("daily quest: C4 bot draw counts", () => {
+    const files = questFiles();
+    linkQuestUser(files, USER_A);
+    const { service } = createService(files);
+    const started = startOpen(service);
+    service.expireJoin(started.session.id);
+    const raw = service.manager.getSession(started.session.id);
+    raw.board = makeC4DrawBoard();
+    raw.board[0][6] = null;
+    raw.currentPlayer = "R";
+    const last = service.move({
+      sessionId: started.session.id,
+      userId: USER_A,
+      column: 6,
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(last.session.status, STATUS.DRAW);
+    assert.strictEqual(questSnap(files, USER_A).game.completed, true);
+    assert.strictEqual(questSnap(files, BOT_USER_ID).game.completed, false);
+  });
+
+  await runTest("daily quest: C4 duplicate resolution does not double-award", () => {
+    const files = questFiles();
+    linkQuestUser(files, USER_A);
+    linkQuestUser(files, USER_B);
+    const { service } = createService({ ...files, pairCooldownMs: 0 });
+    const first = startOpen(service);
+    joinBoth(service, first.session.id);
+    playColumns(service, first.session.id, [0, 6, 1, 5, 2, 4, 3]);
+    assert.strictEqual(getLootBalance(USER_A, files.shopFile), ACTIVITY_LOOT);
+    assert.strictEqual(getLootBalance(USER_B, files.shopFile), ACTIVITY_LOOT);
+
+    const retry = service.move({
+      sessionId: first.session.id,
+      userId: USER_B,
+      column: 0,
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(retry.reason, "already-ended");
+    service.resolveTurnTimeout(first.session.id);
+    service.claimXpAward(first.session.id);
+    service.claimXpAward(first.session.id);
+
+    const second = service.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_A, displayName: "Kevin", isBot: false },
+    });
+    service.setMessageId(second.session.id, 5002);
+    service.join({
+      sessionId: second.session.id,
+      userId: USER_B,
+      displayName: "Alice",
+      chatId: COMMUNITY_CHAT,
+    });
+    playColumns(service, second.session.id, [0, 6, 1, 5, 2, 4, 3]);
+    assert.strictEqual(getLootBalance(USER_A, files.shopFile), ACTIVITY_LOOT);
+    assert.strictEqual(getLootBalance(USER_B, files.shopFile), ACTIVITY_LOOT);
+    assert.strictEqual(questSnap(files, USER_A).game.completed, true);
+  });
+
+  await runTest("daily quest: C4 unlinked wallet completes slot without Loot", () => {
+    const files = questFiles();
+    const { service } = createService(files);
+    const started = startOpen(service);
+    joinBoth(service, started.session.id);
+    playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
+    const snapA = questSnap(files, USER_A);
+    const snapB = questSnap(files, USER_B);
+    assert.strictEqual(snapA.game.completed, true);
+    assert.strictEqual(snapB.game.completed, true);
+    assert.strictEqual(snapA.game.lootSkipped, true);
+    assert.strictEqual(snapB.game.lootSkipped, true);
+    assert.strictEqual(getLootBalance(USER_A, files.shopFile), 0);
+    assert.strictEqual(getLootBalance(USER_B, files.shopFile), 0);
+  });
+
+  await runTest("daily quest: C4 XP cap does not block gameplay detection", () => {
+    const files = questFiles();
+    linkQuestUser(files, USER_A);
+    linkQuestUser(files, USER_B);
+    for (let i = 0; i < PVP_DAILY_WIN_CAP; i += 1) {
+      const xp = awardPvpWinXp(USER_A, "Kevin", files.pointsFile);
+      assert.strictEqual(xp.awarded, true);
+      assert.strictEqual(xp.pointsToAdd, PVP_WIN_XP);
+    }
+    const capped = awardPvpWinXp(USER_A, "Kevin", files.pointsFile);
+    assert.strictEqual(capped.awarded, false);
+    assert.strictEqual(loadPoints(files.pointsFile).users[String(USER_A)].points, PVP_DAILY_WIN_CAP * PVP_WIN_XP);
+
+    const { service } = createService(files);
+    const started = startOpen(service);
+    joinBoth(service, started.session.id);
+    playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
+    assert.strictEqual(questSnap(files, USER_A).game.completed, true);
+    assert.strictEqual(questSnap(files, USER_B).game.completed, true);
+    assert.strictEqual(getLootBalance(USER_B, files.shopFile), ACTIVITY_LOOT);
+    const claim = service.claimXpAward(started.session.id);
+    assert.strictEqual(claim.shouldAward, true);
+    const extra = awardPvpWinXp(claim.winnerUserId, "Kevin", files.pointsFile);
+    assert.strictEqual(extra.awarded, false);
+    assert.strictEqual(loadPoints(files.pointsFile).users[String(USER_A)].points, PVP_DAILY_WIN_CAP * PVP_WIN_XP);
+    assert.strictEqual(loadPoints(files.pointsFile).users[String(USER_B)], undefined);
+  });
+
+  await runTest("daily quest: C4 XP amount unchanged after resolved win", () => {
+    const files = questFiles();
+    const { service } = createService(files);
+    const started = startOpen(service);
+    joinBoth(service, started.session.id);
+    playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
+    const claim = service.claimXpAward(started.session.id);
+    assert.strictEqual(claim.shouldAward, true);
+    const xp = awardPvpWinXp(claim.winnerUserId, "Kevin", files.pointsFile);
+    assert.strictEqual(xp.awarded, true);
+    assert.strictEqual(xp.pointsToAdd, PVP_WIN_XP);
+    assert.strictEqual(PVP_WIN_XP, 3);
+    assert.strictEqual(loadPoints(files.pointsFile).users[String(USER_A)].points, 3);
+  });
+
+  await runTest("daily quest: C4 failure does not break resolution", () => {
+    const { service } = createService({
+      noteDailyQuestGameFn() {
+        throw new Error("quest-boom");
+      },
+    });
+    const started = startOpen(service);
+    joinBoth(service, started.session.id);
+    const win = playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
+    assert.strictEqual(win.session.status, STATUS.WON);
+    const claim = service.claimXpAward(started.session.id);
+    assert.strictEqual(claim.shouldAward, true);
   });
 
   fs.rmSync(tempDir, { recursive: true, force: true });

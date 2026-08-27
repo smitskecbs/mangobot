@@ -239,9 +239,10 @@ function createMockCtx(opts = {}) {
       threadId: 123,
       starter: starter(),
     });
+    assert.strictEqual(service.isBlackjackOpen(), true);
     assert.strictEqual(
       isCommunityChallengeBusy({ isBlackjackOpenFn: () => service.isBlackjackOpen() }),
-      true
+      false
     );
     await service.forceLobbyEnd(started.gameId);
     await service.forceDecisionTimeout(started.gameId);

@@ -31,10 +31,8 @@ function createPvpSessionManager(options = {}) {
 
   /** @type {Map<string, object>} */
   const sessions = new Map();
-  /** @type {Map<string, string>} chatId:game -> sessionId */
+  /** @type {Map<string, Set<string>>} chatId:game -> sessionIds */
   const activeByChatGame = new Map();
-  /** @type {Map<string, string>} chatId -> sessionId (any PvP game) */
-  const activeByChat = new Map();
   /** @type {Map<string, number>} pairKey -> cooldownUntilMs (cross-game) */
   const pairCooldowns = new Map();
   /** @type {Set<string>} */
@@ -65,12 +63,20 @@ function createPvpSessionManager(options = {}) {
     return sessions.get(String(sessionId)) || null;
   }
 
+  function listActiveSessionIds(chatId, game) {
+    const set = activeByChatGame.get(chatGameKey(chatId, game));
+    return set ? Array.from(set) : [];
+  }
+
   function getActiveSession(chatId, game) {
-    const id = activeByChatGame.get(chatGameKey(chatId, game));
-    if (!id) {
-      return null;
+    const ids = listActiveSessionIds(chatId, game);
+    for (let i = ids.length - 1; i >= 0; i -= 1) {
+      const session = getSession(ids[i]);
+      if (isOpenStatus(session)) {
+        return session;
+      }
     }
-    return getSession(id);
+    return null;
   }
 
   function isOpenStatus(session) {
@@ -84,15 +90,23 @@ function createPvpSessionManager(options = {}) {
   }
 
   function getActiveSessionForChat(chatId) {
-    const id = activeByChat.get(String(chatId));
-    if (!id) {
-      return null;
+    const prefix = `${String(chatId)}:`;
+    for (const [key, ids] of activeByChatGame.entries()) {
+      if (!key.startsWith(prefix)) {
+        continue;
+      }
+      for (const id of ids) {
+        const session = getSession(id);
+        if (isOpenStatus(session)) {
+          return session;
+        }
+      }
     }
-    return getSession(id);
+    return null;
   }
 
-  function isChatBusy(chatId) {
-    return isOpenStatus(getActiveSessionForChat(chatId));
+  function isChatBusy(_chatId) {
+    return false;
   }
 
   function hasAnyOpenGame(game) {
@@ -115,19 +129,24 @@ function createPvpSessionManager(options = {}) {
 
   function registerSession(session) {
     sessions.set(session.id, session);
-    activeByChatGame.set(chatGameKey(session.chatId, session.game), session.id);
-    activeByChat.set(String(session.chatId), session.id);
+    const key = chatGameKey(session.chatId, session.game);
+    let set = activeByChatGame.get(key);
+    if (!set) {
+      set = new Set();
+      activeByChatGame.set(key, set);
+    }
+    set.add(session.id);
     return session;
   }
 
   function clearActiveIndex(session) {
     const key = chatGameKey(session.chatId, session.game);
-    if (activeByChatGame.get(key) === session.id) {
-      activeByChatGame.delete(key);
-    }
-    const chatKey = String(session.chatId);
-    if (activeByChat.get(chatKey) === session.id) {
-      activeByChat.delete(chatKey);
+    const set = activeByChatGame.get(key);
+    if (set) {
+      set.delete(session.id);
+      if (set.size === 0) {
+        activeByChatGame.delete(key);
+      }
     }
   }
 
@@ -145,35 +164,41 @@ function createPvpSessionManager(options = {}) {
     if (!session || !session.timers) {
       return;
     }
-    if (session.timers.joinTimeoutId != null) {
-      clearTimeoutFn(session.timers.joinTimeoutId);
-      session.timers.joinTimeoutId = null;
-    }
-    if (session.timers.turnTimeoutId != null) {
-      clearTimeoutFn(session.timers.turnTimeoutId);
-      session.timers.turnTimeoutId = null;
+    for (const kind of ["joinTimeoutId", "turnTimeoutId", "countdownTimeoutId", "botTimeoutId"]) {
+      if (session.timers[kind] != null) {
+        clearTimeoutFn(session.timers[kind]);
+        session.timers[kind] = null;
+      }
     }
   }
 
   function schedule(session, kind, delayMs, fn) {
     if (!session.timers) {
-      session.timers = { joinTimeoutId: null, turnTimeoutId: null };
+      session.timers = {
+        joinTimeoutId: null,
+        turnTimeoutId: null,
+        countdownTimeoutId: null,
+        botTimeoutId: null,
+      };
     }
-    if (kind === "join") {
-      if (session.timers.joinTimeoutId != null) {
-        clearTimeoutFn(session.timers.joinTimeoutId);
-      }
-      session.timers.joinTimeoutId = setTimeoutFn(fn, delayMs);
-      return session.timers.joinTimeoutId;
+    const key =
+      kind === "join"
+        ? "joinTimeoutId"
+        : kind === "turn"
+          ? "turnTimeoutId"
+          : kind === "countdown"
+            ? "countdownTimeoutId"
+            : kind === "bot"
+              ? "botTimeoutId"
+              : null;
+    if (!key) {
+      return null;
     }
-    if (kind === "turn") {
-      if (session.timers.turnTimeoutId != null) {
-        clearTimeoutFn(session.timers.turnTimeoutId);
-      }
-      session.timers.turnTimeoutId = setTimeoutFn(fn, delayMs);
-      return session.timers.turnTimeoutId;
+    if (session.timers[key] != null) {
+      clearTimeoutFn(session.timers[key]);
     }
-    return null;
+    session.timers[key] = setTimeoutFn(fn, delayMs);
+    return session.timers[key];
   }
 
   /**
@@ -247,7 +272,6 @@ function createPvpSessionManager(options = {}) {
     }
     sessions.clear();
     activeByChatGame.clear();
-    activeByChat.clear();
     pairCooldowns.clear();
     mutating.clear();
   }
@@ -262,6 +286,7 @@ function createPvpSessionManager(options = {}) {
     generateSessionId,
     getSession,
     getActiveSession,
+    listActiveSessionIds,
     getActiveSessionForChat,
     isGameOpen,
     isChatBusy,
@@ -312,8 +337,8 @@ function sanitizePvpDisplayName(fromOrName, maxLen = 24) {
 let sharedPvpSessionManager = null;
 
 /**
- * Production singleton so Tic-Tac-Toe and Connect Four share busy state
- * and pair cooldown. Tests should inject their own manager.
+ * Production singleton so Tic-Tac-Toe and Connect Four share pair cooldown.
+ * Parallel matches are allowed; per-user occupancy is handled by pvpMatchReservation.
  */
 function getSharedPvpSessionManager() {
   if (!sharedPvpSessionManager) {

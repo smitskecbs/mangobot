@@ -24,6 +24,7 @@ const {
   parseBlackjackCallbackData,
   STALE_CALLBACK,
   STATUS,
+  PLAYER_BUSY_TEXT,
 } = require("../services/blackjack");
 const { reminderForBlockedXp } = require("../services/xpWalletGate");
 const { emptyInlineKeyboardExtra } = require("../utils/expiredMessageCleanup");
@@ -209,6 +210,9 @@ async function handleBlackjack(ctx, options = {}) {
     },
   });
   if (!result.ok) {
+    if (result.reason === "player-busy") {
+      return ctx.reply(PLAYER_BUSY_TEXT);
+    }
     if (result.reason === "already-active") {
       return ctx.reply("🃏 A Blackjack round is already running.");
     }

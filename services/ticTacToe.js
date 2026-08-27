@@ -4,13 +4,25 @@
  */
 
 const { Markup } = require("telegraf");
-const { logError } = require("../utils/logger");
+const crypto = require("crypto");
+const { log, logError } = require("../utils/logger");
 const {
   createPvpSessionManager,
   getSharedPvpSessionManager,
   sanitizePvpDisplayName,
   DEFAULT_PAIR_COOLDOWN_MS,
 } = require("./pvpSessionManager");
+const {
+  createPvpMatchReservation,
+  getSharedPvpMatchReservation,
+  PLAYER_BUSY_TEXT,
+  BOT_USER_ID,
+} = require("./pvpMatchReservation");
+const { chooseTicTacToeBotCell } = require("./ticTacToeBot");
+const {
+  takeResolvedQuestUsers,
+  emitResolvedPvpDailyQuest,
+} = require("./pvpDailyQuest");
 const { isAllowedChatFightChat } = require("./chatFight");
 const {
   GAME_TYPE,
@@ -21,9 +33,13 @@ const {
 
 const GAME_ID = "tictactoe";
 
-const JOIN_TIMEOUT_MS = 5 * 60 * 1000;
+const JOIN_TIMEOUT_MS = 60 * 1000;
+const LOBBY_COUNTDOWN_MS = 5 * 1000;
 const TURN_TIMEOUT_MS = 60 * 1000;
+const BOT_THINK_MIN_MS = 700;
+const BOT_THINK_MAX_MS = 1000;
 const PAIR_COOLDOWN_MS = DEFAULT_PAIR_COOLDOWN_MS;
+const BOT_DISPLAY_NAME = "🤖 ManGo Bot";
 
 const STATUS = Object.freeze({
   WAITING: "waiting",
@@ -109,7 +125,7 @@ function parsePvpCallbackData(data) {
 
 function buildJoinKeyboard(sessionId) {
   return Markup.inlineKeyboard([
-    Markup.button.callback("Join game", buildJoinCallbackData(sessionId)),
+    Markup.button.callback("JOIN GAME", buildJoinCallbackData(sessionId)),
   ]);
 }
 
@@ -136,20 +152,26 @@ function buildBoardKeyboard(session, clickable) {
   return Markup.inlineKeyboard(rows);
 }
 
-function buildWaitingText(session) {
+function lobbyRemainingSeconds(session, nowMs) {
+  const endsAt = Number(session.lobbyEndsAt) || 0;
+  return Math.max(0, Math.ceil((endsAt - nowMs) / 1000));
+}
+
+function buildWaitingText(session, nowMs) {
   const x = session.players.X;
-  if (!x) {
-    return `🎮 TIC-TAC-TOE
+  const name = x && x.displayName ? x.displayName : "Player";
+  const seconds = lobbyRemainingSeconds(session, nowMs);
+  const display = seconds > 0 ? seconds : 1;
+  return `❌⭕ ManGo Tic-Tac-Toe
 
-A new PvP challenge is open.
+${name} is looking for an opponent.
 
-First two players can join.`;
-  }
-  return `🎮 TIC-TAC-TOE
+Players:
+1/2
 
-${MARK_X} ${x.displayName} joined.
+⏳ Starting in ${display}s
 
-Waiting for an opponent...`;
+If nobody joins, ${name} will play against 🤖 ManGo Bot.`;
 }
 
 function buildActiveText(session) {
@@ -233,11 +255,11 @@ function buildExpiredText(session) {
   );
 }
 
-function renderMessage(session, xpResult) {
+function renderMessage(session, xpResult, nowMs = Date.now()) {
   const { emptyInlineKeyboardExtra } = require("../utils/expiredMessageCleanup");
   if (session.status === STATUS.WAITING) {
     return {
-      text: buildWaitingText(session),
+      text: buildWaitingText(session, nowMs),
       extra: buildJoinKeyboard(session.id),
     };
   }
@@ -278,6 +300,18 @@ function createTicTacToeService(options = {}) {
     typeof options.pairCooldownMs === "number"
       ? options.pairCooldownMs
       : PAIR_COOLDOWN_MS;
+  const countdownMs =
+    typeof options.countdownMs === "number" && options.countdownMs > 0
+      ? options.countdownMs
+      : LOBBY_COUNTDOWN_MS;
+  const botThinkMinMs =
+    typeof options.botThinkMinMs === "number" ? options.botThinkMinMs : BOT_THINK_MIN_MS;
+  const botThinkMaxMs =
+    typeof options.botThinkMaxMs === "number" ? options.botThinkMaxMs : BOT_THINK_MAX_MS;
+  const randomIntFn =
+    typeof options.randomIntFn === "function"
+      ? options.randomIntFn
+      : (min, max) => crypto.randomInt(min, max);
 
   const manager =
     options.manager ||
@@ -288,11 +322,67 @@ function createTicTacToeService(options = {}) {
       pairCooldownMs,
       randomIdFn: options.randomIdFn,
     });
+  const reservation =
+    options.reservation || createPvpMatchReservation();
 
   const onSessionEnded =
     typeof options.onSessionEnded === "function"
       ? options.onSessionEnded
       : null;
+  let renderHandler =
+    typeof options.onRender === "function" ? options.onRender : null;
+
+  function setRenderHandler(fn) {
+    renderHandler = typeof fn === "function" ? fn : null;
+  }
+
+  function notifyRender(result) {
+    if (!result || !result.ok || !renderHandler) {
+      return;
+    }
+    try {
+      renderHandler(result);
+    } catch (_err) {
+      /* ignore */
+    }
+  }
+
+  function opponentIsBot(session) {
+    return Boolean(
+      session &&
+        ((session.players.X && session.players.X.isBot) ||
+          (session.players.O && session.players.O.isBot))
+    );
+  }
+
+  function maybeMarkPairCooldown(session) {
+    if (!session || !session.players.X || !session.players.O) {
+      return;
+    }
+    if (opponentIsBot(session)) {
+      return;
+    }
+    manager.markPairCooldown(
+      session.players.X.userId,
+      session.players.O.userId,
+      GAME_ID
+    );
+  }
+
+  function finishOpen(session) {
+    manager.clearTimers(session);
+    manager.clearActiveIndex(session);
+    reservation.releaseMatch(session.id);
+  }
+
+  function botThinkDelay() {
+    const min = Math.max(0, botThinkMinMs);
+    const max = Math.max(min, botThinkMaxMs);
+    if (max <= min) {
+      return min;
+    }
+    return randomIntFn(min, max + 1);
+  }
 
   function snapshot(session) {
     if (!session) return null;
@@ -307,13 +397,17 @@ function createTicTacToeService(options = {}) {
         currentPlayer: session.currentPlayer,
         board: session.board,
         createdAt: session.createdAt,
+        lobbyEndsAt: session.lobbyEndsAt,
         startedAt: session.startedAt,
         lastMoveAt: session.lastMoveAt,
         winnerUserId: session.winnerUserId,
         winnerSeat: session.winnerSeat,
         rewardEligible: session.rewardEligible,
         xpAwarded: session.xpAwarded,
+        questNoted: Boolean(session.questNoted),
         endReason: session.endReason || null,
+        opponentType: session.opponentType || "human",
+        botMoveGeneration: session.botMoveGeneration || 0,
       })
     );
   }
@@ -326,41 +420,65 @@ function createTicTacToeService(options = {}) {
     return manager.getActiveSession(chatId, GAME_ID);
   }
 
-  function startChallenge({ chatId } = {}) {
+  function startChallenge({ chatId, starter } = {}) {
     if (chatId == null || !isAllowedChatFightChat(chatId)) {
       return { ok: false, reason: "wrong-chat" };
     }
-    if (manager.isChatBusy(chatId) || manager.isGameOpen(chatId, GAME_ID)) {
-      return { ok: false, reason: "already-active" };
+    if (!starter || starter.isBot || starter.userId == null) {
+      return { ok: false, reason: starter && starter.isBot ? "bot" : "no-starter" };
     }
 
     const id = manager.generateSessionId();
+    const reserved = reservation.tryReserve(starter.userId, GAME_ID, id);
+    if (!reserved.ok) {
+      return { ok: false, reason: "player-busy" };
+    }
+
+    const now = manager.now();
     const session = {
       id,
       game: GAME_ID,
       chatId: String(chatId),
       messageId: null,
       status: STATUS.WAITING,
-      players: { X: null, O: null },
+      players: {
+        X: {
+          userId: String(starter.userId),
+          displayName: sanitizePvpDisplayName(starter.displayName),
+          isBot: false,
+        },
+        O: null,
+      },
       currentPlayer: "X",
       board: emptyBoard(),
-      createdAt: manager.now(),
+      createdAt: now,
+      lobbyEndsAt: now + joinTimeoutMs,
       startedAt: null,
       lastMoveAt: null,
       winnerUserId: null,
       winnerSeat: null,
       rewardEligible: true,
       xpAwarded: false,
+      questNoted: false,
       endReason: null,
-      timers: { joinTimeoutId: null, turnTimeoutId: null },
+      opponentType: "human",
+      botMoveGeneration: 0,
+      timers: {
+        joinTimeoutId: null,
+        turnTimeoutId: null,
+        countdownTimeoutId: null,
+        botTimeoutId: null,
+      },
     };
 
     manager.registerSession(session);
     manager.schedule(session, "join", joinTimeoutMs, () => {
       expireJoin(session.id);
     });
+    scheduleLobbyCountdown(session);
+    log("[pvp] match started game=tictactoe mode=lobby");
 
-    const rendered = renderMessage(session);
+    const rendered = renderMessage(session, null, manager.now());
     return {
       ok: true,
       session: snapshot(session),
@@ -376,24 +494,132 @@ function createTicTacToeService(options = {}) {
     return true;
   }
 
+  function msUntilNextCountdown(session) {
+    const now = manager.now();
+    if (!session.lobbyEndsAt || session.lobbyEndsAt - now <= 0) {
+      return null;
+    }
+    const elapsed = Math.max(0, now - session.createdAt);
+    const nextOffset = (Math.floor(elapsed / countdownMs) + 1) * countdownMs;
+    const nextAt = session.createdAt + nextOffset;
+    if (nextAt >= session.lobbyEndsAt) {
+      return null;
+    }
+    return Math.max(1, nextAt - now);
+  }
+
+  function scheduleLobbyCountdown(session) {
+    if (!session || session.status !== STATUS.WAITING) {
+      return;
+    }
+    const wait = msUntilNextCountdown(session);
+    if (wait == null) {
+      return;
+    }
+    const sessionId = session.id;
+    manager.schedule(session, "countdown", wait, () => {
+      tickLobbyCountdown(sessionId);
+    });
+  }
+
+  function tickLobbyCountdown(sessionId) {
+    const locked = manager.withSessionLock(sessionId, () => {
+      const session = manager.getSession(sessionId);
+      if (!session || session.status !== STATUS.WAITING) {
+        return { ok: false, reason: "not-waiting" };
+      }
+      scheduleLobbyCountdown(session);
+      return {
+        ok: true,
+        session: snapshot(session),
+        rendered: renderMessage(session, null, manager.now()),
+      };
+    });
+    notifyRender(locked);
+    return locked;
+  }
+
+  function activateMatch(session, opponentType) {
+    session.opponentType = opponentType;
+    if (opponentType !== "bot") {
+      const onCooldown = manager.isPairOnCooldown(
+        session.players.X.userId,
+        session.players.O.userId,
+        GAME_ID
+      );
+      session.rewardEligible = !onCooldown;
+    } else {
+      session.rewardEligible = true;
+    }
+    session.status = STATUS.ACTIVE;
+    session.startedAt = manager.now();
+    session.lastMoveAt = session.startedAt;
+    session.currentPlayer = "X";
+    manager.clearTimers(session);
+    session.timers.joinTimeoutId = null;
+    session.timers.countdownTimeoutId = null;
+    startTurnTimer(session);
+    if (isBotPlayer(session.players[session.currentPlayer])) {
+      scheduleBotMove(session);
+    }
+    log(
+      `[pvp] match started game=tictactoe mode=${opponentType === "bot" ? "bot" : "pvp"}`
+    );
+  }
+
+  function isBotPlayer(player) {
+    return Boolean(player && (player.isBot || String(player.userId) === BOT_USER_ID));
+  }
+
+  function takeQuestUsers(session) {
+    return takeResolvedQuestUsers(session, isBotPlayer);
+  }
+
+  function emitQuest(result) {
+    emitResolvedPvpDailyQuest(result && result.questUsers, GAME_ID, {
+      shopFile: options.shopFile,
+      walletFile: options.walletFile,
+      noteDailyQuestGameFn: options.noteDailyQuestGameFn,
+    });
+  }
+
+  function makeBotPlayer() {
+    return {
+      userId: BOT_USER_ID,
+      displayName: BOT_DISPLAY_NAME,
+      isBot: true,
+    };
+  }
+
   function expireJoin(sessionId) {
     const locked = manager.withSessionLock(sessionId, () => {
       const session = manager.getSession(sessionId);
       if (!session || session.status !== STATUS.WAITING) {
         return { ok: false, reason: "not-waiting" };
       }
-      session.status = STATUS.EXPIRED;
-      session.endReason = "join-timeout";
-      manager.clearTimers(session);
-      manager.clearActiveIndex(session);
-      const joined = Boolean(session.players && session.players.X);
-      logGameCleanup(
-        GAME_TYPE.TICTACTOE,
-        joined ? FINAL_STATE.NOT_ENOUGH : FINAL_STATE.EMPTY
-      );
-      return { ok: true, session: snapshot(session), rendered: renderMessage(session) };
+      const starter = session.players && session.players.X;
+      if (!starter || isBotPlayer(starter)) {
+        session.status = STATUS.EXPIRED;
+        session.endReason = "join-timeout";
+        finishOpen(session);
+        logGameCleanup(GAME_TYPE.TICTACTOE, FINAL_STATE.EMPTY);
+        return {
+          ok: true,
+          session: snapshot(session),
+          rendered: renderMessage(session, null, manager.now()),
+        };
+      }
+      session.players.O = makeBotPlayer();
+      activateMatch(session, "bot");
+      return {
+        ok: true,
+        startedBot: true,
+        session: snapshot(session),
+        rendered: renderMessage(session, null, manager.now()),
+      };
     });
-    if (locked.ok && onSessionEnded) {
+    notifyRender(locked);
+    if (locked.ok && locked.session && locked.session.status !== STATUS.ACTIVE && onSessionEnded) {
       try {
         onSessionEnded(locked.session);
       } catch (_err) {
@@ -436,18 +662,14 @@ function createTicTacToeService(options = {}) {
       session.winnerSeat = winnerSeat;
       session.winnerUserId = String(winner.userId);
       session.endReason = "timeout";
-      manager.clearTimers(session);
-      manager.clearActiveIndex(session);
-      manager.markPairCooldown(
-        session.players.X.userId,
-        session.players.O.userId,
-        GAME_ID
-      );
+      finishOpen(session);
+      maybeMarkPairCooldown(session);
       return {
         ok: true,
         needsXp: true,
+        questUsers: takeQuestUsers(session),
         session: snapshot(session),
-        rendered: renderMessage(session),
+        rendered: renderMessage(session, null, manager.now()),
       };
     });
     if (locked.ok && onSessionEnded) {
@@ -457,6 +679,8 @@ function createTicTacToeService(options = {}) {
         /* ignore */
       }
     }
+    emitQuest(locked);
+    notifyRender(locked);
     return locked;
   }
 
@@ -482,18 +706,7 @@ function createTicTacToeService(options = {}) {
       const uid = String(userId);
       const name = sanitizePvpDisplayName(displayName);
 
-      if (!session.players.X) {
-        session.players.X = { userId: uid, displayName: name };
-        return {
-          ok: true,
-          role: "X",
-          started: false,
-          session: snapshot(session),
-          rendered: renderMessage(session),
-        };
-      }
-
-      if (String(session.players.X.userId) === uid) {
+      if (session.players.X && String(session.players.X.userId) === uid) {
         return { ok: false, reason: "already-joined" };
       }
 
@@ -501,34 +714,26 @@ function createTicTacToeService(options = {}) {
         return { ok: false, reason: "full" };
       }
 
-      session.players.O = { userId: uid, displayName: name };
-      const onCooldown = manager.isPairOnCooldown(
-        session.players.X.userId,
-        session.players.O.userId,
-        GAME_ID
-      );
-      session.rewardEligible = !onCooldown;
-      session.status = STATUS.ACTIVE;
-      session.startedAt = manager.now();
-      session.lastMoveAt = session.startedAt;
-      session.currentPlayer = "X";
-      manager.clearTimers(session);
-      // clear join timer only — start turn timer
-      session.timers.joinTimeoutId = null;
-      startTurnTimer(session);
+      const reserved = reservation.tryReserve(uid, GAME_ID, session.id);
+      if (!reserved.ok) {
+        return { ok: false, reason: "player-busy" };
+      }
+
+      session.players.O = { userId: uid, displayName: name, isBot: false };
+      activateMatch(session, "human");
 
       return {
         ok: true,
         role: "O",
         started: true,
         session: snapshot(session),
-        rendered: renderMessage(session),
+        rendered: renderMessage(session, null, manager.now()),
       };
     });
   }
 
   function move({ sessionId, userId, cell, chatId } = {}) {
-    return manager.withSessionLock(sessionId, () => {
+    const locked = manager.withSessionLock(sessionId, () => {
       const session = manager.getSession(sessionId);
       if (!session) {
         return { ok: false, reason: "invalid-session" };
@@ -566,50 +771,134 @@ function createTicTacToeService(options = {}) {
         session.winnerSeat = winMark;
         session.winnerUserId = String(session.players[winMark].userId);
         session.endReason = "win";
-        manager.clearTimers(session);
-        manager.clearActiveIndex(session);
-        manager.markPairCooldown(
-          session.players.X.userId,
-          session.players.O.userId,
-          GAME_ID
-        );
+        finishOpen(session);
+        maybeMarkPairCooldown(session);
         return {
           ok: true,
           ended: true,
           needsXp: true,
+          questUsers: takeQuestUsers(session),
           session: snapshot(session),
-          rendered: renderMessage(session),
+          rendered: renderMessage(session, null, manager.now()),
         };
       }
 
       if (isBoardFull(session.board)) {
         session.status = STATUS.DRAW;
         session.endReason = "draw";
-        manager.clearTimers(session);
-        manager.clearActiveIndex(session);
-        manager.markPairCooldown(
-          session.players.X.userId,
-          session.players.O.userId,
-          GAME_ID
-        );
+        finishOpen(session);
+        maybeMarkPairCooldown(session);
         return {
           ok: true,
           ended: true,
           needsXp: false,
+          questUsers: takeQuestUsers(session),
           session: snapshot(session),
-          rendered: renderMessage(session),
+          rendered: renderMessage(session, null, manager.now()),
         };
       }
 
       session.currentPlayer = seat === "X" ? "O" : "X";
       startTurnTimer(session);
+      if (isBotPlayer(session.players[session.currentPlayer])) {
+        scheduleBotMove(session);
+      }
       return {
         ok: true,
         ended: false,
         session: snapshot(session),
-        rendered: renderMessage(session),
+        rendered: renderMessage(session, null, manager.now()),
       };
     });
+    emitQuest(locked);
+    return locked;
+  }
+
+  function scheduleBotMove(session) {
+    session.botMoveGeneration = (session.botMoveGeneration || 0) + 1;
+    const gen = session.botMoveGeneration;
+    const sessionId = session.id;
+    manager.schedule(session, "bot", botThinkDelay(), () => {
+      performBotMove(sessionId, gen);
+    });
+  }
+
+  function performBotMove(sessionId, expectedGen) {
+    const locked = manager.withSessionLock(sessionId, () => {
+      const session = manager.getSession(sessionId);
+      if (!session || session.status !== STATUS.ACTIVE) {
+        return { ok: false, reason: "not-active" };
+      }
+      if (expectedGen != null && session.botMoveGeneration !== expectedGen) {
+        return { ok: false, reason: "stale-bot" };
+      }
+      const seat = session.currentPlayer;
+      const player = session.players[seat];
+      if (!isBotPlayer(player)) {
+        return { ok: false, reason: "not-bot-turn" };
+      }
+      const cell = chooseTicTacToeBotCell(session.board, seat, randomIntFn);
+      if (!Number.isInteger(cell) || cell < 0 || cell > 8 || session.board[cell] != null) {
+        return { ok: false, reason: "illegal-bot" };
+      }
+      session.board[cell] = seat;
+      session.lastMoveAt = manager.now();
+
+      const winMark = checkWinner(session.board);
+      if (winMark) {
+        session.status = STATUS.WON;
+        session.winnerSeat = winMark;
+        session.winnerUserId = String(session.players[winMark].userId);
+        session.endReason = "win";
+        finishOpen(session);
+        maybeMarkPairCooldown(session);
+        return {
+          ok: true,
+          ended: true,
+          needsXp: true,
+          questUsers: takeQuestUsers(session),
+          session: snapshot(session),
+          rendered: renderMessage(session, null, manager.now()),
+        };
+      }
+
+      if (isBoardFull(session.board)) {
+        session.status = STATUS.DRAW;
+        session.endReason = "draw";
+        finishOpen(session);
+        maybeMarkPairCooldown(session);
+        return {
+          ok: true,
+          ended: true,
+          needsXp: false,
+          questUsers: takeQuestUsers(session),
+          session: snapshot(session),
+          rendered: renderMessage(session, null, manager.now()),
+        };
+      }
+
+      session.currentPlayer = seat === "X" ? "O" : "X";
+      startTurnTimer(session);
+      if (isBotPlayer(session.players[session.currentPlayer])) {
+        scheduleBotMove(session);
+      }
+      return {
+        ok: true,
+        ended: false,
+        session: snapshot(session),
+        rendered: renderMessage(session, null, manager.now()),
+      };
+    });
+    if (locked.ok && locked.ended && onSessionEnded) {
+      try {
+        onSessionEnded(locked.session);
+      } catch (_err) {
+        /* ignore */
+      }
+    }
+    emitQuest(locked);
+    notifyRender(locked);
+    return locked;
   }
 
   /**
@@ -623,6 +912,14 @@ function createTicTacToeService(options = {}) {
       }
       if (session.status !== STATUS.WON) {
         return { ok: false, reason: "not-won" };
+      }
+      if (isBotPlayer(session.players[session.winnerSeat])) {
+        return {
+          ok: true,
+          shouldAward: false,
+          reason: "bot-winner",
+          session: snapshot(session),
+        };
       }
       if (!session.rewardEligible) {
         return {
@@ -667,6 +964,7 @@ function createTicTacToeService(options = {}) {
 
   function reset() {
     manager.resetAll();
+    reservation.reset();
   }
 
   return {
@@ -677,16 +975,21 @@ function createTicTacToeService(options = {}) {
     join,
     move,
     expireJoin,
+    tickLobbyCountdown,
     resolveTurnTimeout,
+    performBotMove,
     claimXpAward,
     applyXpResultToRender,
     getSession,
     getActiveForChat,
     isOpen,
     reset,
+    clearAllTimers: reset,
+    setRenderHandler,
     renderMessage,
     snapshot,
     manager,
+    reservation,
     joinTimeoutMs,
     turnTimeoutMs,
     pairCooldownMs,
@@ -695,6 +998,7 @@ function createTicTacToeService(options = {}) {
 
 const ticTacToeRuntime = createTicTacToeService({
   manager: getSharedPvpSessionManager(),
+  reservation: getSharedPvpMatchReservation(),
 });
 
 function startTicTacToeChallenge(params) {
@@ -713,8 +1017,13 @@ module.exports = {
   GAME_ID,
   STATUS,
   JOIN_TIMEOUT_MS,
+  LOBBY_COUNTDOWN_MS,
   TURN_TIMEOUT_MS,
   PAIR_COOLDOWN_MS,
+  BOT_THINK_MIN_MS,
+  BOT_THINK_MAX_MS,
+  BOT_USER_ID,
+  PLAYER_BUSY_TEXT,
   WIN_LINES,
   emptyBoard,
   checkWinner,

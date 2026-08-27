@@ -1,5 +1,6 @@
 /**
- * Shared community challenge busy flag (ChatFight + PvP + Trivia).
+ * Shared community exclusive busy flag (ChatFight + Trivia + ManGo Bomb).
+ * Parallel PvP (Tic-Tac-Toe, Connect Four, Blackjack) does not occupy the group.
  * Lazy requires avoid circular init issues.
  */
 
@@ -81,16 +82,7 @@ function isPvpBusy(options = {}) {
   return Boolean(tttOpen || c4Open);
 }
 
-/**
- * @param {object} [options]
- * @param {() => boolean} [options.isChatFightOpenFn]
- * @param {() => boolean} [options.isTicTacToeOpenFn]
- * @param {() => boolean} [options.isConnectFourOpenFn]
- * @param {() => boolean} [options.isTriviaOpenFn]
- * @param {() => boolean} [options.isMangoBombOpenFn]
- * @param {() => boolean} [options.isBlackjackOpenFn]
- */
-function isCommunityChallengeBusy(options = {}) {
+function isCommunityExclusiveBusy(options = {}) {
   const fightOpen =
     typeof options.isChatFightOpenFn === "function"
       ? options.isChatFightOpenFn()
@@ -103,17 +95,22 @@ function isCommunityChallengeBusy(options = {}) {
     typeof options.isMangoBombOpenFn === "function"
       ? options.isMangoBombOpenFn()
       : isMangoBombBusy();
-  const blackjackOpen =
-    typeof options.isBlackjackOpenFn === "function"
-      ? options.isBlackjackOpenFn()
-      : isBlackjackBusy();
-  return Boolean(
-    fightOpen || isPvpBusy(options) || triviaOpen || bombOpen || blackjackOpen
-  );
+  return Boolean(fightOpen || triviaOpen || bombOpen);
 }
 
 /**
- * @returns {"chatfight"|"tictactoe"|"connect4"|"trivia"|"mangobomb"|"blackjack"|null}
+ * Community-wide exclusive activities only (not parallel PvP).
+ * @param {object} [options]
+ * @param {() => boolean} [options.isChatFightOpenFn]
+ * @param {() => boolean} [options.isTriviaOpenFn]
+ * @param {() => boolean} [options.isMangoBombOpenFn]
+ */
+function isCommunityChallengeBusy(options = {}) {
+  return isCommunityExclusiveBusy(options);
+}
+
+/**
+ * @returns {"chatfight"|"trivia"|"mangobomb"|null}
  */
 function getCommunityBusyReason(options = {}) {
   const fightOpen =
@@ -122,20 +119,6 @@ function getCommunityBusyReason(options = {}) {
       : isChatFightBusy();
   if (fightOpen) {
     return "chatfight";
-  }
-  const tttOpen =
-    typeof options.isTicTacToeOpenFn === "function"
-      ? options.isTicTacToeOpenFn()
-      : isTicTacToeBusy();
-  if (tttOpen) {
-    return "tictactoe";
-  }
-  const c4Open =
-    typeof options.isConnectFourOpenFn === "function"
-      ? options.isConnectFourOpenFn()
-      : isConnectFourBusy();
-  if (c4Open) {
-    return "connect4";
   }
   const triviaOpen =
     typeof options.isTriviaOpenFn === "function"
@@ -151,13 +134,6 @@ function getCommunityBusyReason(options = {}) {
   if (bombOpen) {
     return "mangobomb";
   }
-  const blackjackOpen =
-    typeof options.isBlackjackOpenFn === "function"
-      ? options.isBlackjackOpenFn()
-      : isBlackjackBusy();
-  if (blackjackOpen) {
-    return "blackjack";
-  }
   return null;
 }
 
@@ -165,26 +141,18 @@ function formatCommunityBusyReply(reason) {
   if (reason === "chatfight") {
     return "⚔️ A ChatFight is already running.";
   }
-  if (reason === "tictactoe") {
-    return "🎮 A Tic-Tac-Toe challenge is already open.";
-  }
-  if (reason === "connect4") {
-    return "🟡 A Connect Four challenge is already open.";
-  }
   if (reason === "trivia") {
     return "🧠 A Trivia challenge is already open.";
   }
   if (reason === "mangobomb") {
     return "🥭💣 A ManGo Bomb round is already running.";
   }
-  if (reason === "blackjack") {
-    return "🃏 A Blackjack round is already running.";
-  }
-  return "🎮 A PvP challenge is already open.";
+  return "🎮 A community game is already running.";
 }
 
 module.exports = {
   isCommunityChallengeBusy,
+  isCommunityExclusiveBusy,
   getCommunityBusyReason,
   formatCommunityBusyReply,
   isChatFightBusy,

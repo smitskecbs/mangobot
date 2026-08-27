@@ -132,6 +132,18 @@ function startBotRuntime({
       /* ignore */
     }
     try {
+      const { getSharedPvpSessionManager } = require("../services/pvpSessionManager");
+      getSharedPvpSessionManager().resetAll();
+    } catch (_err) {
+      /* ignore */
+    }
+    try {
+      const { getSharedPvpMatchReservation } = require("../services/pvpMatchReservation");
+      getSharedPvpMatchReservation().reset();
+    } catch (_err) {
+      /* ignore */
+    }
+    try {
       bot.stop(signal);
     } catch (_err) {
       /* ignore */

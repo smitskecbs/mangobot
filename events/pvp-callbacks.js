@@ -5,6 +5,7 @@
 
 const { logError } = require("../utils/logger");
 const { awardPvpWinXp } = require("../services/points");
+const { PLAYER_BUSY_TEXT } = require("../services/pvpMatchReservation");
 const {
   parsePvpCallbackData: parseTttCallbackData,
   sanitizePvpDisplayName,
@@ -120,25 +121,46 @@ function wireTimeoutMessageEdits(runtime, telegram, awardXpFn) {
     }
   };
 
+  const handleTimedResult = async (result) => {
+    if (!result || !result.ok || !result.session) {
+      return;
+    }
+    let rendered = result.rendered;
+    if (result.needsXp) {
+      const fin = await finalizeWinXp(runtime, result.session.id, awardXpFn);
+      if (fin.rendered) {
+        rendered = fin.rendered;
+      }
+    }
+    if (rendered) {
+      await editSessionMessage(result.session, rendered);
+    }
+    const status = result.session.status;
+    if (
+      (status === "expired" || status === "won" || status === "draw") &&
+      result.session.messageId != null &&
+      result.session.chatId != null
+    ) {
+      scheduleExpiredMessageCleanup({
+        telegram,
+        chatId: result.session.chatId,
+        messageId: result.session.messageId,
+      });
+    }
+  };
+
+  if (typeof runtime.setRenderHandler === "function") {
+    runtime.setRenderHandler((result) => {
+      Promise.resolve(handleTimedResult(result)).catch(() => {});
+    });
+    return;
+  }
+
   const origExpire = runtime.expireJoin.bind(runtime);
   runtime.expireJoin = (sessionId) => {
     const result = origExpire(sessionId);
     if (result && result.ok && result.rendered) {
-      Promise.resolve(editSessionMessage(result.session, result.rendered))
-        .then(() => {
-          if (
-            result.session &&
-            result.session.messageId != null &&
-            result.session.chatId != null
-          ) {
-            scheduleExpiredMessageCleanup({
-              telegram,
-              chatId: result.session.chatId,
-              messageId: result.session.messageId,
-            });
-          }
-        })
-        .catch(() => {});
+      Promise.resolve(handleTimedResult(result)).catch(() => {});
     }
     return result;
   };
@@ -147,16 +169,7 @@ function wireTimeoutMessageEdits(runtime, telegram, awardXpFn) {
   runtime.resolveTurnTimeout = (sessionId) => {
     const result = origTimeout(sessionId);
     if (result && result.ok) {
-      Promise.resolve()
-        .then(async () => {
-          let rendered = result.rendered;
-          if (result.needsXp) {
-            const fin = await finalizeWinXp(runtime, sessionId, awardXpFn);
-            if (fin.rendered) rendered = fin.rendered;
-          }
-          await editSessionMessage(result.session, rendered);
-        })
-        .catch(() => {});
+      Promise.resolve(handleTimedResult(result)).catch(() => {});
     }
     return result;
   };
@@ -215,6 +228,8 @@ async function handlePvpCallback(ctx, options = {}) {
         await cbAnswer(ctx, "You already joined this challenge.");
       } else if (result.reason === "full") {
         await cbAnswer(ctx, "This challenge is already full.");
+      } else if (result.reason === "player-busy") {
+        await cbAnswer(ctx, PLAYER_BUSY_TEXT);
       } else if (result.reason === "bot") {
         await cbAnswer(ctx, "Bots cannot play.");
       } else if (result.reason === "invalid-session" || result.reason === "not-waiting") {
