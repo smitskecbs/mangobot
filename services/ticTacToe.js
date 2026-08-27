@@ -88,6 +88,19 @@ function cellLabel(value) {
   return EMPTY_CELL;
 }
 
+function formatBoard(board) {
+  const cells = Array.isArray(board) ? board : emptyBoard();
+  const lines = [];
+  for (let r = 0; r < 3; r += 1) {
+    const row = [];
+    for (let c = 0; c < 3; c += 1) {
+      row.push(cellLabel(cells[r * 3 + c]));
+    }
+    lines.push(row.join(""));
+  }
+  return lines.join("\n");
+}
+
 function buildJoinCallbackData(sessionId) {
   return `pvp:ttt:join:${sessionId}`;
 }
@@ -187,6 +200,8 @@ ${MARK_O} ${o.displayName}
 
 Turn: ${turnMark} ${turnName}
 
+${formatBoard(session.board)}
+
 Klik hieronder om je move te doen.`;
 }
 
@@ -223,12 +238,16 @@ ${loser.displayName} ran out of time.
 
 🏆 ${winner.displayName} wins!
 
+${formatBoard(session.board)}
+
 ${xpLine} 🥭`;
   }
 
   return `🏆 TIC-TAC-TOE WINNER
 
 ${wMark} ${winner.displayName} defeated ${lMark} ${loser.displayName}!
+
+${formatBoard(session.board)}
 
 ${
     xpResult && xpResult.awarded
@@ -243,6 +262,8 @@ function buildDrawText(session) {
   return `🤝 TIC-TAC-TOE DRAW
 
 ${x.displayName} ${MARK_X} vs ${o.displayName} ${MARK_O}
+
+${formatBoard(session.board)}
 
 Good game! 🥭`;
 }
@@ -1038,6 +1059,7 @@ module.exports = {
   isTicTacToeOpen,
   getTicTacToeRuntime,
   renderMessage,
+  formatBoard,
   cellLabel,
   MARK_X,
   MARK_O,

@@ -38,14 +38,27 @@ function cbAnswer(ctx, text) {
 }
 
 async function rejectStalePvp(ctx, runtime, parsed) {
+  const session =
+    runtime && parsed && typeof runtime.getSession === "function"
+      ? runtime.getSession(parsed.sessionId)
+      : null;
+  const live =
+    session && (session.status === "waiting" || session.status === "active");
+  if (live) {
+    await cbAnswer(ctx, "This game already started.");
+    if (typeof runtime.renderMessage === "function") {
+      const rendered = runtime.renderMessage(session);
+      if (rendered && rendered.text) {
+        await safeEdit(ctx, rendered.text, rendered.extra);
+      }
+    }
+    return;
+  }
   await cbAnswer(ctx, GAME_OVER_TOAST);
   let text;
-  if (runtime && parsed && typeof runtime.getSession === "function") {
-    const session = runtime.getSession(parsed.sessionId);
-    if (session && typeof runtime.renderMessage === "function") {
-      const rendered = runtime.renderMessage(session);
-      text = rendered && rendered.text;
-    }
+  if (session && runtime && typeof runtime.renderMessage === "function") {
+    const rendered = runtime.renderMessage(session);
+    text = rendered && rendered.text;
   }
   await stripStaleCallbackButtons(ctx, {
     gameType: pvpGameType(parsed),
@@ -137,7 +150,7 @@ function wireTimeoutMessageEdits(runtime, telegram, awardXpFn) {
     }
     const status = result.session.status;
     if (
-      (status === "expired" || status === "won" || status === "draw") &&
+      status === "expired" &&
       result.session.messageId != null &&
       result.session.chatId != null
     ) {

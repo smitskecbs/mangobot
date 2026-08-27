@@ -26,7 +26,11 @@ const {
   parsePvpCallbackData: parseC4CallbackData,
 } = require("../services/connectFour");
 const { createPvpSessionManager } = require("../services/pvpSessionManager");
-const { handlePvpCallback } = require("../events/pvp-callbacks");
+const { handlePvpCallback, registerPvpCallbacks } = require("../events/pvp-callbacks");
+const {
+  getPendingExpiredCleanupCount,
+  clearAllExpiredMessageCleanups,
+} = require("../utils/expiredMessageCleanup");
 const {
   createChatFightService,
   FIGHT_TYPES,
@@ -376,6 +380,72 @@ async function main() {
     assert.deepStrictEqual(edited[0].extra.reply_markup.inline_keyboard, []);
   });
 
+  await runTest("23b. TTT live bot match join does not strip board", async () => {
+    const timers = createFakeTimers();
+    const manager = createPvpSessionManager({
+      now: timers.now,
+      setTimeoutFn: timers.setTimeout,
+      clearTimeoutFn: timers.clearTimeout,
+    });
+    const ttt = createTicTacToeService({
+      manager,
+      now: timers.now,
+      joinTimeoutMs: 1000,
+      turnTimeoutMs: 60_000,
+    });
+    const started = ttt.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_A, displayName: "Kevin", isBot: false },
+    });
+    ttt.setMessageId(started.session.id, 5001);
+    ttt.expireJoin(started.session.id);
+    const before = ttt.getSession(started.session.id);
+    assert.strictEqual(before.status, "active");
+    const boardBefore = JSON.stringify(before.board);
+    const playersBefore = JSON.stringify(before.players);
+
+    const edited = [];
+    const ctx = {
+      chat: { id: COMMUNITY_CHAT, type: "supergroup" },
+      from: { id: USER_B, is_bot: false, first_name: "Alice" },
+      callbackQuery: {
+        data: `pvp:ttt:join:${started.session.id}`,
+        from: { id: USER_B, is_bot: false },
+        message: {
+          message_id: 5001,
+          chat: { id: COMMUNITY_CHAT },
+          reply_markup: {
+            inline_keyboard: [[{ text: "JOIN GAME", callback_data: "x" }]],
+          },
+        },
+      },
+      cbAnswers: [],
+      answerCbQuery(text) {
+        this.cbAnswers.push(text || "");
+        return Promise.resolve();
+      },
+      editMessageText(text, extra) {
+        edited.push({ text, extra });
+        return Promise.resolve();
+      },
+    };
+    await handlePvpCallback(ctx, {
+      runtime: ttt,
+      parseCallbackData: parseTttCallbackData,
+      awardPvpWinXpFn: () => ({ awarded: false }),
+    });
+    assert.strictEqual(ctx.cbAnswers[0], "This game already started.");
+    assert.ok(edited[0].text.includes("TIC-TAC-TOE"));
+    assert.ok(edited[0].text.includes("⬜"));
+    assert.ok(edited[0].extra.reply_markup.inline_keyboard.length > 0);
+    const after = ttt.getSession(started.session.id);
+    assert.strictEqual(after.status, "active");
+    assert.strictEqual(after.opponentType, "bot");
+    assert.strictEqual(JSON.stringify(after.board), boardBefore);
+    assert.strictEqual(JSON.stringify(after.players), playersBefore);
+    assert.strictEqual(after.currentPlayer, before.currentPlayer);
+  });
+
   await runTest("24. Connect Four stale join strips buttons", async () => {
     const timers = createFakeTimers();
     const manager = createPvpSessionManager({
@@ -438,6 +508,115 @@ async function main() {
     assert.strictEqual(ctx.cbAnswers[0], GAME_OVER_TOAST);
     assert.ok(edited[0].text.includes("CONNECT FOUR") || edited[0].text.includes("Connect Four"));
     assert.deepStrictEqual(edited[0].extra.reply_markup.inline_keyboard, []);
+  });
+
+  await runTest("24b. C4 live bot match join does not strip board", async () => {
+    const timers = createFakeTimers();
+    const manager = createPvpSessionManager({
+      now: timers.now,
+      setTimeoutFn: timers.setTimeout,
+      clearTimeoutFn: timers.clearTimeout,
+    });
+    const c4 = createConnectFourService({
+      manager,
+      now: timers.now,
+      joinTimeoutMs: 1000,
+      turnTimeoutMs: 60_000,
+    });
+    const started = c4.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_A, displayName: "Kevin", isBot: false },
+    });
+    c4.setMessageId(started.session.id, 5002);
+    c4.expireJoin(started.session.id);
+    assert.strictEqual(c4.getSession(started.session.id).status, "active");
+
+    const edited = [];
+    const ctx = {
+      chat: { id: COMMUNITY_CHAT, type: "supergroup" },
+      from: { id: USER_B, is_bot: false, first_name: "Alice" },
+      callbackQuery: {
+        data: `pvp:c4:join:${started.session.id}`,
+        from: { id: USER_B, is_bot: false },
+        message: {
+          message_id: 5002,
+          chat: { id: COMMUNITY_CHAT },
+          reply_markup: {
+            inline_keyboard: [[{ text: "JOIN GAME", callback_data: "x" }]],
+          },
+        },
+      },
+      cbAnswers: [],
+      answerCbQuery(text) {
+        this.cbAnswers.push(text || "");
+        return Promise.resolve();
+      },
+      editMessageText(text, extra) {
+        edited.push({ text, extra });
+        return Promise.resolve();
+      },
+    };
+    await handlePvpCallback(ctx, {
+      runtime: c4,
+      parseCallbackData: parseC4CallbackData,
+      awardPvpWinXpFn: () => ({ awarded: false }),
+    });
+    assert.strictEqual(ctx.cbAnswers[0], "This game already started.");
+    assert.ok(edited[0].extra.reply_markup.inline_keyboard.length > 0);
+  });
+
+  await runTest("24c. TTT timeout result stays visible (not deleted)", async () => {
+    clearAllExpiredMessageCleanups();
+    const timers = createFakeTimers();
+    const manager = createPvpSessionManager({
+      now: timers.now,
+      setTimeoutFn: timers.setTimeout,
+      clearTimeoutFn: timers.clearTimeout,
+    });
+    const ttt = createTicTacToeService({
+      manager,
+      now: timers.now,
+      joinTimeoutMs: 1000,
+      turnTimeoutMs: 1000,
+    });
+    const edits = [];
+    const deletes = [];
+    const bot = {
+      telegram: {
+        editMessageText: async (chatId, messageId, _inline, text, extra) => {
+          edits.push({ chatId, messageId, text, extra });
+        },
+        deleteMessage: async (chatId, messageId) => {
+          deletes.push({ chatId, messageId });
+        },
+      },
+      action() {},
+    };
+    registerPvpCallbacks(bot, {
+      runtime: ttt,
+      connectFourRuntime: ttt,
+      awardPvpWinXpFn: () => ({ awarded: false, pointsToAdd: 0 }),
+    });
+    const started = ttt.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_A, displayName: "Kevin", isBot: false },
+    });
+    ttt.setMessageId(started.session.id, 5001);
+    ttt.join({
+      sessionId: started.session.id,
+      userId: USER_B,
+      displayName: "Alice",
+      chatId: COMMUNITY_CHAT,
+    });
+    const timed = ttt.resolveTurnTimeout(started.session.id);
+    assert.strictEqual(timed.session.status, "won");
+    assert.ok(timed.rendered.text.includes("ran out of time"));
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.ok(edits.some((row) => row.text && row.text.includes("ran out of time")));
+    assert.strictEqual(getPendingExpiredCleanupCount(), 0);
+    assert.strictEqual(deletes.length, 0);
+    clearAllExpiredMessageCleanups();
   });
 
   await runTest("25. ChatFight expired reveal strips buttons", async () => {

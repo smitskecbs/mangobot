@@ -19,6 +19,7 @@ const {
   emptyBoard,
   STATUS,
   BOT_USER_ID,
+  formatBoard,
 } = require("../services/ticTacToe");
 const {
   sanitizePvpDisplayName,
@@ -700,6 +701,12 @@ async function main() {
     assert.strictEqual(s.status, STATUS.WON);
     assert.strictEqual(s.winnerUserId, String(USER_B));
     assert.strictEqual(s.endReason, "timeout");
+    const rendered = service.renderMessage(s);
+    assert.ok(rendered.text.includes("ran out of time"));
+    assert.ok(rendered.text.includes(formatBoard(s.board)));
+    assert.deepStrictEqual(rendered.extra.reply_markup.inline_keyboard, []);
+    assert.strictEqual(service.reservation.has(USER_A), false);
+    assert.strictEqual(service.reservation.has(USER_B), false);
   });
 
   await runTest("29. join timeout", () => {
@@ -711,6 +718,66 @@ async function main() {
     assert.strictEqual(s.opponentType, "bot");
     assert.strictEqual(s.players.O.isBot, true);
     assert.strictEqual(service.isOpen(), true);
+    const rendered = service.renderMessage(s);
+    assert.ok(rendered.text.includes(formatBoard(s.board)));
+    assert.ok(rendered.text.includes("⬜"));
+    assert.ok(rendered.extra.reply_markup.inline_keyboard.length > 0);
+  });
+
+  await runTest("UX. active board remains visible in message text", () => {
+    const { service } = createService();
+    const started = startOpen(service);
+    joinBoth(service, started.session.id);
+    const moved = service.move({
+      sessionId: started.session.id,
+      userId: USER_A,
+      cell: 0,
+      chatId: COMMUNITY_CHAT,
+    });
+    const session = service.getSession(started.session.id);
+    const rendered = moved.rendered;
+    assert.strictEqual(session.status, STATUS.ACTIVE);
+    assert.ok(rendered.text.includes(formatBoard(session.board)));
+    assert.ok(rendered.text.includes("❌"));
+    assert.ok(rendered.extra.reply_markup.inline_keyboard.length === 3);
+    assert.strictEqual(session.board[0], "X");
+  });
+
+  await runTest("UX. win leaves final board and strips buttons", () => {
+    const { service } = createService();
+    const started = startOpen(service);
+    const id = started.session.id;
+    joinBoth(service, id);
+    service.move({ sessionId: id, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
+    service.move({ sessionId: id, userId: USER_B, cell: 3, chatId: COMMUNITY_CHAT });
+    service.move({ sessionId: id, userId: USER_A, cell: 1, chatId: COMMUNITY_CHAT });
+    service.move({ sessionId: id, userId: USER_B, cell: 4, chatId: COMMUNITY_CHAT });
+    const win = service.move({
+      sessionId: id,
+      userId: USER_A,
+      cell: 2,
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(win.session.status, STATUS.WON);
+    assert.ok(win.rendered.text.includes("WINNER"));
+    assert.ok(win.rendered.text.includes(formatBoard(win.session.board)));
+    assert.ok(win.rendered.text.includes("❌"));
+    assert.deepStrictEqual(win.rendered.extra.reply_markup.inline_keyboard, []);
+    const claim = service.claimXpAward(id);
+    assert.strictEqual(claim.shouldAward, true);
+    const again = service.claimXpAward(id);
+    assert.strictEqual(again.shouldAward, false);
+  });
+
+  await runTest("UX. draw leaves final board and strips buttons", () => {
+    const { service } = createService();
+    const started = startOpen(service);
+    joinBoth(service, started.session.id);
+    const last = playTttDrawLine(service, started.session.id);
+    assert.strictEqual(last.session.status, STATUS.DRAW);
+    assert.ok(last.rendered.text.includes("DRAW"));
+    assert.ok(last.rendered.text.includes(formatBoard(last.session.board)));
+    assert.deepStrictEqual(last.rendered.extra.reply_markup.inline_keyboard, []);
   });
 
   await runTest("30. timer reset after move", () => {

@@ -387,6 +387,85 @@ async function main() {
     assert.strictEqual(ttt.getSession(b.session.id).status, TTT_STATUS.WAITING);
   });
 
+  await runTest("stale JOIN on match A does not change live match B", async () => {
+    const { ttt } = createBundle();
+    const a = ttt.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: starter(USER_A, "Kevin"),
+    });
+    ttt.join({
+      sessionId: a.session.id,
+      userId: USER_B,
+      displayName: "Pippi",
+      chatId: COMMUNITY_CHAT,
+    });
+    ttt.move({
+      sessionId: a.session.id,
+      userId: USER_A,
+      cell: 4,
+      chatId: COMMUNITY_CHAT,
+    });
+    const b = ttt.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: starter(USER_C, "Alice"),
+    });
+    ttt.join({
+      sessionId: b.session.id,
+      userId: USER_D,
+      displayName: "Bob",
+      chatId: COMMUNITY_CHAT,
+    });
+    ttt.move({
+      sessionId: b.session.id,
+      userId: USER_C,
+      cell: 0,
+      chatId: COMMUNITY_CHAT,
+    });
+    const beforeB = ttt.getSession(b.session.id);
+    const boardB = JSON.stringify(beforeB.board);
+    const ctx = {
+      chat: { id: COMMUNITY_CHAT, type: "supergroup" },
+      from: { id: USER_E, is_bot: false, first_name: "Eve" },
+      callbackQuery: {
+        data: `pvp:ttt:join:${a.session.id}`,
+        from: { id: USER_E, is_bot: false },
+        message: {
+          message_id: 11,
+          chat: { id: COMMUNITY_CHAT },
+          reply_markup: {
+            inline_keyboard: [[{ text: "JOIN GAME", callback_data: "x" }]],
+          },
+        },
+      },
+      cbAnswers: [],
+      edited: [],
+      answerCbQuery(text) {
+        this.cbAnswers.push(text || "");
+        return Promise.resolve();
+      },
+      editMessageText(text, extra) {
+        this.edited.push({ text, extra });
+        return Promise.resolve();
+      },
+    };
+    await handlePvpCallback(ctx, {
+      runtime: ttt,
+      parseCallbackData: parseTtt,
+      awardPvpWinXpFn: () => ({ awarded: false }),
+    });
+    assert.strictEqual(ctx.cbAnswers[0], "This game already started.");
+    const afterA = ttt.getSession(a.session.id);
+    const afterB = ttt.getSession(b.session.id);
+    assert.strictEqual(afterA.status, TTT_STATUS.ACTIVE);
+    assert.strictEqual(afterA.board[4], "X");
+    assert.strictEqual(afterB.status, TTT_STATUS.ACTIVE);
+    assert.strictEqual(JSON.stringify(afterB.board), boardB);
+    assert.strictEqual(afterB.board[0], "X");
+    assert.strictEqual(afterB.players.O.userId, String(USER_D));
+    assert.ok(ctx.edited[0].text.includes("❌"));
+    assert.ok(ctx.edited[0].extra.reply_markup.inline_keyboard.length > 0);
+  });
+
   await runTest("simultaneous last-seat JOIN: one winner, one full", () => {
     const { ttt } = createBundle();
     const started = ttt.startChallenge({
