@@ -1,6 +1,6 @@
 /**
  * Best-effort community-group announcement after a Mystery Gift is sent.
- * Never rolls back sent status. Never posts wallet, rewardId, tx, or amount.
+ * Never rolls back sent status. Never posts wallet, rewardId, tx, or secrets.
  * General chat only — never a Games topic thread.
  */
 
@@ -12,10 +12,20 @@ const {
   claimMysteryGiftGroupAnnouncement,
   finishMysteryGiftGroupAnnouncement,
 } = require("./memberRewards");
+const {
+  ASSET_MANGO,
+  ASSET_NFT,
+  ASSET_OFFCHAIN,
+  MANGO_MINT_DECIMALS,
+  formatMangoGrouped,
+  formatMangoHuman,
+  parseBaseUnits,
+} = require("./deliveryConstants");
 const { fetchWithTimeout, TELEGRAM_TIMEOUT_MS } = require("../utils/safeFetch");
 const { error: logError, log } = require("../utils/logger");
+const { safeLogReason } = require("./deliveryConfig");
 
-const ANONYMOUS_CONGRATS = "Congrats to one of our ManGo community members! 🥭";
+const ANONYMOUS_CONGRATS = "A ManGo community member received a Mystery Gift. 🥭";
 
 function isLikelyTestProcess() {
   for (const arg of process.argv) {
@@ -67,6 +77,14 @@ function isSafeTelegramUserId(uid) {
   return typeof uid === "string" && /^\d{1,20}$/.test(uid);
 }
 
+function safeRewardId(rewardId) {
+  const id = typeof rewardId === "string" ? rewardId.trim() : "";
+  if (!/^[A-Za-z0-9_-]{8,24}$/.test(id)) {
+    return "unknown";
+  }
+  return id;
+}
+
 /**
  * Server-side identity only. Never uses frontend request fields.
  */
@@ -92,22 +110,89 @@ function buildCongratsLine(identity) {
     return ANONYMOUS_CONGRATS;
   }
   if (identity.kind === "username") {
-    return `Congrats @${identity.username}! 🥭`;
+    return `@${identity.username} received a ManGo Mystery Gift. 🥭`;
   }
   const name = escapeTelegramHtml(identity.displayName);
-  return `Congrats <a href="tg://user?id=${identity.telegramUserId}">${name}</a>! 🥭`;
+  return `<a href="tg://user?id=${identity.telegramUserId}">${name}</a> received a ManGo Mystery Gift. 🥭`;
 }
 
-function buildMysteryGiftDeliveredMessage(identity) {
+function formatHumanAmount(baseUnits, decimals) {
+  const parsed = parseBaseUnits(baseUnits);
+  const dec = Number(decimals);
+  if (!parsed.ok || !Number.isInteger(dec) || dec < 0 || dec > 18) {
+    return "";
+  }
+  const scale = 10n ** BigInt(dec);
+  const value = BigInt(parsed.lamports);
+  const whole = value / scale;
+  const frac = value % scale;
+  if (frac === 0n) {
+    return whole.toString();
+  }
+  return `${whole.toString()}.${frac.toString().padStart(dec, "0").replace(/0+$/, "")}`;
+}
+
+function safePublicAssetLabel(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+  const cleaned = value.replace(/[<>]/g, "").replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 24);
+  if (!cleaned || /wallet|signature|mint|tx/i.test(cleaned)) {
+    return "";
+  }
+  return escapeTelegramHtml(cleaned);
+}
+
+/**
+ * Public reward line. Never includes wallet, mint, tx, or off-chain gift names.
+ */
+function formatPublicRewardLine(reward) {
+  if (!reward || typeof reward !== "object") {
+    return "Reward: a ManGo Mystery Gift";
+  }
+  const assetType = typeof reward.assetType === "string" ? reward.assetType : "";
+  const deliveryType = typeof reward.deliveryType === "string" ? reward.deliveryType : "";
+  if (assetType === ASSET_OFFCHAIN || deliveryType === "offchain") {
+    return "Reward: a community Mystery Gift";
+  }
+  if (assetType === ASSET_NFT || deliveryType === "nft") {
+    return "Reward: an NFT Mystery Gift";
+  }
+
+  let human =
+    typeof reward.amountHuman === "string" && reward.amountHuman.trim()
+      ? reward.amountHuman.trim()
+      : "";
+  const decimals = Number.isInteger(reward.decimals)
+    ? reward.decimals
+    : assetType === ASSET_MANGO || !assetType
+      ? MANGO_MINT_DECIMALS
+      : null;
+  if (!human && reward.amountBaseUnits != null && Number.isInteger(decimals)) {
+    human =
+      assetType === ASSET_MANGO || !assetType
+        ? formatMangoHuman(reward.amountBaseUnits, decimals)
+        : formatHumanAmount(reward.amountBaseUnits, decimals);
+  }
+  if (!human) {
+    return "Reward: a ManGo Mystery Gift";
+  }
+  if (assetType === ASSET_MANGO || !assetType) {
+    return `Reward: ${formatMangoGrouped(human)} MANGO`;
+  }
+  const label = safePublicAssetLabel(reward.assetLabel) || "SPL Token";
+  return `Reward: ${escapeTelegramHtml(human)} ${label}`;
+}
+
+function buildMysteryGiftDeliveredMessage(identity, reward) {
   return [
     "🎁 Mystery Gift delivered!",
     "",
     buildCongratsLine(identity),
-    "Your Mystery Gift has been successfully delivered.",
     "",
-    "✅ Delivered",
+    formatPublicRewardLine(reward),
     "",
-    "Another reward sent to an active ManGo community member. 💛",
+    "Enjoy! 🎉",
   ].join("\n");
 }
 
@@ -118,6 +203,21 @@ function visibleAnnouncementText(html) {
     .replace(/<[^>]+>/g, "");
 }
 
+function logNotification(event, extra = {}) {
+  const parts = [`[reward-notification] ${event}`];
+  if (extra.rewardId) {
+    parts.push(`rewardId=${safeRewardId(extra.rewardId)}`);
+  }
+  if (extra.error) {
+    parts.push(`error=${safeLogReason(extra.error)}`);
+  }
+  if (event === "failed") {
+    logError(parts.join(" "));
+    return;
+  }
+  log(parts.join(" "));
+}
+
 async function announceMysteryGiftDelivered(rewardId, options = {}) {
   if (isLikelyTestProcess() && options.announceMysteryGift !== true) {
     return { sent: false, skipped: true, reason: "test-process" };
@@ -126,6 +226,7 @@ async function announceMysteryGiftDelivered(rewardId, options = {}) {
   const botToken = resolveBotToken(options);
   const chatId = resolveChatId(options);
   if (!botToken || !chatId) {
+    logNotification("skipped", { rewardId, error: "unconfigured" });
     return { sent: false, skipped: true, reason: "unconfigured" };
   }
 
@@ -142,8 +243,9 @@ async function announceMysteryGiftDelivered(rewardId, options = {}) {
     };
   }
 
+  logNotification("group start", { rewardId });
   const identity = resolveAnnouncementIdentity(claimed.reward, options);
-  const text = buildMysteryGiftDeliveredMessage(identity);
+  const text = buildMysteryGiftDeliveredMessage(identity, claimed.reward);
   const fetchFn = typeof options.fetchImpl === "function" ? options.fetchImpl : fetch;
   const payload = {
     chat_id: chatId,
@@ -169,17 +271,17 @@ async function announceMysteryGiftDelivered(rewardId, options = {}) {
       now: options.now,
     });
     if (!ok) {
-      logError("[delivery] group announcement failed");
+      logNotification("failed", { rewardId, error: "telegram_http" });
       return { sent: false, reason: "telegram_http" };
     }
-    log("[delivery] group announcement sent");
+    logNotification("group sent", { rewardId });
     return { sent: true };
   } catch (err) {
     finishMysteryGiftGroupAnnouncement(rewardId, false, {
       rewardsFile: options.rewardsFile,
       now: options.now,
     });
-    logError("[delivery] group announcement failed");
+    logNotification("failed", { rewardId, error: "telegram_error" });
     void err;
     return { sent: false, reason: "telegram_error" };
   }
@@ -190,6 +292,7 @@ module.exports = {
   resolveAnnouncementIdentity,
   buildMysteryGiftDeliveredMessage,
   buildCongratsLine,
+  formatPublicRewardLine,
   visibleAnnouncementText,
   announceMysteryGiftDelivered,
 };

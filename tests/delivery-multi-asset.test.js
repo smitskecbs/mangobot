@@ -1533,7 +1533,8 @@ async function main() {
     assert.strictEqual(announced.sent, true);
     const groupText = posts[0].text;
     assert.ok(groupText.includes("Mystery Gift delivered"));
-    assert.ok(groupText.includes("Delivered"));
+    assert.ok(groupText.includes("community Mystery Gift"));
+    assert.ok(groupText.includes("Enjoy!"));
     assert.ok(!groupText.includes("Pokémon card"));
     assert.ok(!groupText.includes("You received:"));
     assert.ok(!groupText.includes("<b>Voucher</b>"));

@@ -848,8 +848,11 @@ function buildRewardSubsetView(kind, options = {}) {
     text: lines.join("\n"),
     extra: extraFromRows([
       [{ text: "🎁 Mystery Gifts", callback_data: PHASE2_CALLBACK.REWARDS }],
+      kind === "pending"
+        ? [{ text: "🗑 Clear Pending", callback_data: "cpg:ask" }]
+        : null,
       ...backHomeRow(),
-    ]),
+    ].filter(Boolean)),
   };
 }
 

@@ -124,17 +124,17 @@ async function notifyMysteryGiftRecipient(rewardId, options = {}) {
       now: options.now,
     });
     if (!ok) {
-      logError("[delivery] recipient notification failed");
+      logError("[reward-notification] failed error=telegram_http");
       return { sent: false, reason: "telegram_http" };
     }
-    log("[delivery] recipient notification sent");
+    log("[reward-notification] recipient sent");
     return { sent: true };
   } catch (err) {
     finishMysteryGiftRecipientNotification(rewardId, false, {
       rewardsFile: options.rewardsFile,
       now: options.now,
     });
-    logError("[delivery] recipient notification failed");
+    logError("[reward-notification] failed error=telegram_error");
     void err;
     return { sent: false, reason: "telegram_error" };
   }

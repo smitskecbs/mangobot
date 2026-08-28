@@ -21,6 +21,7 @@ const {
   ANONYMOUS_CONGRATS,
   resolveAnnouncementIdentity,
   buildMysteryGiftDeliveredMessage,
+  formatPublicRewardLine,
   visibleAnnouncementText,
   announceMysteryGiftDelivered,
 } = require("../services/mysteryGiftAnnounce");
@@ -110,7 +111,8 @@ function recordingTelegram(ok = true) {
 function assertMessageSafe(text, extra = {}) {
   const blob = String(text || "");
   assert.ok(blob.includes("🎁 Mystery Gift delivered!"));
-  assert.ok(blob.includes("✅ Delivered"));
+  assert.ok(blob.includes("Enjoy! 🎉"));
+  assert.ok(blob.includes("Reward:"));
   if (extra.wallet) {
     assert.ok(!blob.includes(extra.wallet));
   }
@@ -120,7 +122,6 @@ function assertMessageSafe(text, extra = {}) {
   if (extra.signature) {
     assert.ok(!blob.includes(extra.signature));
   }
-  assert.ok(!/amount/i.test(blob));
   assert.ok(!/reward id/i.test(blob));
   assert.ok(!blob.includes("txSignature"));
 }
@@ -137,7 +138,7 @@ pending.push(
       username: "PippiMango",
       telegramUserId: "441122",
     });
-    assert.ok(html.includes("Congrats @PippiMango! 🥭"));
+    assert.ok(html.includes("@PippiMango received a ManGo Mystery Gift. 🥭"));
     assert.ok(!html.includes("tg://user?id="));
     assert.ok(!html.includes("441122"));
     assertMessageSafe(html);
@@ -154,7 +155,7 @@ pending.push(
     });
     assert.ok(html.includes(`<a href="tg://user?id=${uid}">Ada</a>`));
     const visible = visibleAnnouncementText(html);
-    assert.ok(visible.includes("Congrats Ada! 🥭"));
+    assert.ok(visible.includes("Ada received a ManGo Mystery Gift. 🥭"));
     assert.ok(!visible.includes(uid));
     assertMessageSafe(html);
   })
@@ -167,6 +168,28 @@ pending.push(
     assert.ok(!html.includes("tg://user?id="));
     assert.ok(!html.includes("@"));
     assertMessageSafe(html);
+  })
+);
+
+pending.push(
+  runTest("public reward line shows grouped MANGO and hides off-chain gift names", () => {
+    const mango = formatPublicRewardLine({
+      assetType: "mango",
+      amountHuman: "1000",
+    });
+    assert.strictEqual(mango, "Reward: 1,000 MANGO");
+    const offchain = formatPublicRewardLine({
+      assetType: "offchain",
+      offchainGiftLabel: "Secret voucher 123",
+    });
+    assert.strictEqual(offchain, "Reward: a community Mystery Gift");
+    assert.ok(!offchain.includes("Secret"));
+    const html = buildMysteryGiftDeliveredMessage(
+      { kind: "username", username: "MangoFan" },
+      { assetType: "mango", amountHuman: "1000" }
+    );
+    assert.ok(html.includes("Reward: 1,000 MANGO"));
+    assert.ok(!html.includes("wallet"));
   })
 );
 

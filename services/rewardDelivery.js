@@ -20,7 +20,7 @@ const {
 const { getPresaleParticipation } = require("./presaleLedger");
 const { mutatePresaleStore } = require("./presaleStore");
 const { getLatestBlockhash, getTransaction } = require("./presaleRpc");
-const { getDeliveryConfig, safeLogReason } = require("./deliveryConfig");
+const { getDeliveryConfig, safeLogReason, shortFingerprint } = require("./deliveryConfig");
 const {
   mutateDeliveryStore,
   loadDeliveryStore,
@@ -114,12 +114,42 @@ function publicError(reason) {
   return "Invalid request.";
 }
 
+function safeRewardIdLog(rewardId) {
+  const id = typeof rewardId === "string" ? rewardId.trim() : "";
+  if (!/^[A-Za-z0-9_-]{8,24}$/.test(id)) {
+    return "";
+  }
+  return id;
+}
+
 function logDeliveryEvent(event, extra = {}) {
   const label = typeof event === "string" ? event.trim() : "";
   if (!label) {
     return;
   }
-  const parts = [`[delivery] ${label}`];
+  const parts = [`[reward-delivery] ${label}`];
+  const rewardId = safeRewardIdLog(extra.rewardId);
+  if (rewardId) {
+    parts.push(`rewardId=${rewardId}`);
+  }
+  if (extra.token) {
+    const token = String(extra.token).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 24);
+    if (token) {
+      parts.push(`token=${token}`);
+    }
+  }
+  if (extra.amount) {
+    const amount = String(extra.amount).replace(/[^0-9.,]/g, "").slice(0, 24);
+    if (amount) {
+      parts.push(`amount=${amount}`);
+    }
+  }
+  if (extra.signature) {
+    const fp = shortFingerprint(extra.signature);
+    if (fp) {
+      parts.push(`signature=${fp}`);
+    }
+  }
   if (extra.reason) {
     parts.push(`reason=${safeLogReason(extra.reason)}`);
   }
@@ -1107,7 +1137,11 @@ async function finalizeVerifiedReward({
 }) {
   const rpc = await getTransaction(signature, withDeliveryRpc(options));
   if (isPendingRpcResult(rpc)) {
-    logDeliveryEvent("confirm pending", { reason: (rpc && rpc.reason) || "not-finalized" });
+    logDeliveryEvent("confirm pending", {
+      rewardId,
+      signature,
+      reason: (rpc && rpc.reason) || "not-finalized",
+    });
     return {
       ok: true,
       pending: true,
@@ -1131,13 +1165,13 @@ async function finalizeVerifiedReward({
     };
   }
 
-  logDeliveryEvent("reconcile verified");
+  logDeliveryEvent("transaction confirmed", { rewardId, signature });
   const done = completeRewardSent(rewardId, signature, now, options.rewardsFile);
   if (!done.ok) {
     return { ok: false, reason: done.reason, error: publicError(done.reason) };
   }
   bindDeliverySignature(signature, deliveryId, tokenHash, now, options.deliveryFile, true);
-  logDeliveryEvent("reward sent");
+  logDeliveryEvent("persisted delivered", { rewardId, signature });
   await maybeNotifyMysteryGiftSent(done.reward, options);
   return {
     ok: true,
@@ -1215,6 +1249,7 @@ async function confirmRewardSession(session, signature, options = {}) {
   const rewardId = record.rewardId;
   const now = options.now === undefined ? Date.now() : options.now;
   const existing = getReward(rewardId, options.rewardsFile);
+  logDeliveryEvent("start", { rewardId });
   if (!existing) {
     return { ok: false, reason: "missing", error: publicError("invalid") };
   }
@@ -1273,7 +1308,7 @@ async function confirmRewardSession(session, signature, options = {}) {
   if (!bound.ok) {
     return { ok: false, reason: bound.reason, error: publicError(bound.reason) };
   }
-  logDeliveryEvent("submitted");
+  logDeliveryEvent("submitted", { rewardId, signature });
 
   return finalizeVerifiedReward({
     rewardId,
@@ -1382,7 +1417,7 @@ async function reconcileDeliveryPayment(input = {}) {
     return { ok: false, reason: "duplicate-signature", error: publicError("invalid") };
   }
 
-  logDeliveryEvent("reconcile start");
+  logDeliveryEvent("reconcile start", { rewardId, signature });
   const now = input.now === undefined ? Date.now() : input.now;
   const submitted = markRewardSubmitted(rewardId, signature, {
     rewardsFile: input.rewardsFile,
@@ -1561,7 +1596,7 @@ async function markOffchainDelivered(input = {}) {
     }, input.deliveryFile);
   }
 
-  logDeliveryEvent("offchain sent");
+  logDeliveryEvent("offchain sent", { rewardId });
   await maybeNotifyMysteryGiftSent(done.reward, input);
   return {
     ok: true,

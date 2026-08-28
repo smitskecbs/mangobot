@@ -992,6 +992,8 @@ async function main() {
     assert.strictEqual(getReward(created.reward.rewardId, rewardsFile).status, "sent");
     assert.strictEqual(posts.length, 1);
     assert.ok(posts[0].text.includes("@MangoFan"));
+    assert.ok(posts[0].text.includes("Reward: 1,000 MANGO"));
+    assert.ok(posts[0].text.includes("Enjoy!"));
     assert.strictEqual(posts[0].message_thread_id, undefined);
     assert.ok(!JSON.stringify(posts[0]).includes(userWallet.address));
     assert.ok(!JSON.stringify(posts[0]).includes(created.reward.rewardId));
