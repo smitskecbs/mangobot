@@ -340,23 +340,27 @@ async function main() {
   await runTest("1. admin sees menu button", () => {
   const kb = getPrivateMenuKeyboard({ from: { id: Number(ADMIN_ID) } });
   const rows = kb.reply_markup.keyboard;
-  assert.ok(rows.some((row) => row.includes(MENU_LABELS.PHASE2)));
+  assert.ok(rows.some((row) => row.includes(MENU_LABELS.ADMIN)));
+  assert.ok(rows.every((row) => !row.includes(MENU_LABELS.PHASE2)));
   const ctx = mockCtx({ chatType: "private", userId: Number(ADMIN_ID) });
   handleMenu(ctx);
   const menuRows = ctx.replies[0].extra.reply_markup.keyboard;
-  assert.ok(menuRows.some((row) => row.includes(MENU_LABELS.PHASE2)));
+  assert.ok(menuRows.some((row) => row.includes(MENU_LABELS.ADMIN)));
 });
 
   await runTest("2. normal member does not see button", () => {
   const kb = getPrivateMenuKeyboard({ from: { id: Number(MEMBER_ID) } });
   const rows = kb.reply_markup.keyboard;
+  assert.ok(rows.every((row) => !row.includes(MENU_LABELS.ADMIN)));
   assert.ok(rows.every((row) => !row.includes(MENU_LABELS.PHASE2)));
   const ctx = mockCtx({ chatType: "private", userId: Number(MEMBER_ID) });
   handleMenu(ctx);
   const menuRows = ctx.replies[0].extra.reply_markup.keyboard;
+  assert.ok(menuRows.every((row) => !row.includes(MENU_LABELS.ADMIN)));
   assert.ok(menuRows.every((row) => !row.includes(MENU_LABELS.PHASE2)));
   const group = getGroupMenuExtra(mockCtx({ chatType: "group" }));
   const labels = group.reply_markup.inline_keyboard.flat().map((b) => b.text);
+  assert.ok(!labels.includes(MENU_LABELS.ADMIN));
   assert.ok(!labels.includes(MENU_LABELS.PHASE2));
 });
 
@@ -395,6 +399,13 @@ async function main() {
   assert.ok(viewText(ctx).includes("🚀 Phase 2 Control Center"));
   assert.ok(findButton(ctx, "🏆 XP Leaders"));
   assert.ok(findButton(ctx, "➕ Create Reward"));
+});
+
+  await runTest("5b. leftover Phase 2 keyboard still opens", async () => {
+  const h = harness();
+  const ctx = mockCtx();
+  await handlePhase2Menu(ctx, h.opts);
+  assert.ok(viewText(ctx).includes("🚀 Phase 2 Control Center"));
 });
 
   await runTest("6-9. home dashboard uses weekly sources", async () => {

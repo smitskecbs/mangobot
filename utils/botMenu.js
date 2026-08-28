@@ -14,6 +14,7 @@ const MENU_LABELS = Object.freeze({
   SHOP: "🏪 ManGo Shop",
   DAILY_QUEST: "🎯 Daily Quest",
   PHASE2: "🚀 Phase 2 Control Center",
+  ADMIN: "🛠 Admin",
   SNAKE: "🎮 Play Snake",
   BOUNCH: "🏀 Play Bounch",
   POINTS: "🥭 My Points",
@@ -230,7 +231,7 @@ function getPrivateMenuKeyboard(ctxOrUserId) {
     [MENU_LABELS.SNAKE, MENU_LABELS.BOUNCH],
   ];
   if (isAdmin(keyboardUserId(ctxOrUserId))) {
-    rows.push([MENU_LABELS.PHASE2]);
+    rows.push([MENU_LABELS.ADMIN]);
   }
   return Markup.keyboard(rows).resize();
 }

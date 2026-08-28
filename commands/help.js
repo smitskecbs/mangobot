@@ -51,7 +51,7 @@ const HELP_MESSAGE = `🥭 Commands
 
 function handleHelp(ctx) {
   if (isPrivateChat(ctx)) {
-    return ctx.reply(HELP_MESSAGE, getPrivateMenuKeyboard());
+    return ctx.reply(HELP_MESSAGE, getPrivateMenuKeyboard(ctx));
   }
   return ctx.reply(HELP_MESSAGE);
 }

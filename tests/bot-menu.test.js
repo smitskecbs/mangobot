@@ -340,6 +340,7 @@ runTest("menu bevat private opties zonder PvP", () => {
     MENU_LABELS.SHOP,
     MENU_LABELS.DAILY_QUEST,
     MENU_LABELS.PHASE2,
+    MENU_LABELS.ADMIN,
     MENU_LABELS.SNAKE,
     MENU_LABELS.BOUNCH,
     MENU_LABELS.POINTS,

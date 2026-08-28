@@ -232,7 +232,8 @@ async function main() {
     const kb = getPrivateMenuKeyboard({ from: { id: Number(ADMIN_ID) } });
     const labels = kb.reply_markup.keyboard.flat();
     assert.ok(labels.includes(MENU_LABELS.SHOP));
-    assert.ok(labels.includes(MENU_LABELS.PHASE2));
+    assert.ok(labels.includes(MENU_LABELS.ADMIN));
+    assert.ok(!labels.includes(MENU_LABELS.PHASE2));
   });
 
   await runTest("35. group access redirects private", () => {
