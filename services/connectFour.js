@@ -454,7 +454,11 @@ function createConnectFourService(options = {}) {
     emitResolvedPvpDailyQuest(result && result.questUsers, GAME_ID, {
       shopFile: options.shopFile,
       walletFile: options.walletFile,
+      pointsFile: options.pointsFile,
       noteDailyQuestGameFn: options.noteDailyQuestGameFn,
+      noteHumanPvpMatchFn: options.noteHumanPvpMatchFn,
+      opponentType: result && result.session && result.session.opponentType,
+      matchId: result && result.session && result.session.id,
     });
   }
 

@@ -50,6 +50,10 @@ const {
 } = require("../services/dailyQuest");
 const { getLootBalance } = require("../services/mangoLoot");
 const { registerManualWallet } = require("../services/walletLinks");
+const {
+  assertPvpFillsGameQuest,
+  expectedPvpGameLoot,
+} = require("./helpers/dailyQuestAssert");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-c4-"));
 let testCounter = 0;
@@ -92,6 +96,19 @@ function questSnap(files, userId) {
     shopFile: files.shopFile,
     walletFile: files.walletFile,
   });
+}
+
+function assertHumanGameQuest(files, userId, extra = {}) {
+  const snap = questSnap(files, userId);
+  const g = assertPvpFillsGameQuest(snap, extra);
+  assert.strictEqual(
+    getLootBalance(userId, files.shopFile),
+    expectedPvpGameLoot(snap, { ...extra, linked: extra.linked !== false })
+  );
+  if (extra.linked === false && g.completed) {
+    assert.strictEqual(g.lootSkipped, true);
+  }
+  return snap;
 }
 
 function makeC4DrawBoard() {
@@ -194,6 +211,7 @@ function createService(overrides = {}) {
     randomIdFn: overrides.randomIdFn,
     shopFile: overrides.shopFile,
     walletFile: overrides.walletFile,
+    pointsFile: overrides.pointsFile,
     noteDailyQuestGameFn: overrides.noteDailyQuestGameFn,
   });
   return { service, timers, manager };
@@ -955,8 +973,7 @@ async function main() {
     const win = playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
     assert.strictEqual(win.session.status, STATUS.WON);
     assert.strictEqual(win.session.winnerUserId, String(USER_A));
-    assert.strictEqual(questSnap(files, USER_A).game.completed, true);
-    assert.strictEqual(getLootBalance(USER_A, files.shopFile), ACTIVITY_LOOT);
+    assertHumanGameQuest(files, USER_A);
   });
 
   await runTest("daily quest: C4 loss counts", () => {
@@ -967,8 +984,7 @@ async function main() {
     const started = startOpen(service);
     joinBoth(service, started.session.id);
     playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
-    assert.strictEqual(questSnap(files, USER_B).game.completed, true);
-    assert.strictEqual(getLootBalance(USER_B, files.shopFile), ACTIVITY_LOOT);
+    assertHumanGameQuest(files, USER_B);
   });
 
   await runTest("daily quest: C4 draw counts", () => {
@@ -989,10 +1005,8 @@ async function main() {
       chatId: COMMUNITY_CHAT,
     });
     assert.strictEqual(last.session.status, STATUS.DRAW);
-    assert.strictEqual(questSnap(files, USER_A).game.completed, true);
-    assert.strictEqual(questSnap(files, USER_B).game.completed, true);
-    assert.strictEqual(getLootBalance(USER_A, files.shopFile), ACTIVITY_LOOT);
-    assert.strictEqual(getLootBalance(USER_B, files.shopFile), ACTIVITY_LOOT);
+    assertHumanGameQuest(files, USER_A);
+    assertHumanGameQuest(files, USER_B);
   });
 
   await runTest("daily quest: C4 lobby only does not count", () => {
@@ -1035,7 +1049,7 @@ async function main() {
     const humanWin = winService.resolveTurnTimeout(winStart.session.id);
     assert.strictEqual(humanWin.session.status, STATUS.WON);
     assert.strictEqual(humanWin.session.winnerUserId, String(USER_A));
-    assert.strictEqual(questSnap(winFiles, USER_A).game.completed, true);
+    assertHumanGameQuest(winFiles, USER_A, { vsBot: true });
     assert.strictEqual(questSnap(winFiles, BOT_USER_ID).game.completed, false);
 
     const lossFiles = questFiles();
@@ -1046,8 +1060,7 @@ async function main() {
     const botWin = lossService.resolveTurnTimeout(lossStart.session.id);
     assert.strictEqual(botWin.session.status, STATUS.WON);
     assert.strictEqual(botWin.session.winnerUserId, BOT_USER_ID);
-    assert.strictEqual(questSnap(lossFiles, USER_A).game.completed, true);
-    assert.strictEqual(getLootBalance(USER_A, lossFiles.shopFile), ACTIVITY_LOOT);
+    assertHumanGameQuest(lossFiles, USER_A, { vsBot: true });
   });
 
   await runTest("daily quest: C4 bot draw counts", () => {
@@ -1067,7 +1080,7 @@ async function main() {
       chatId: COMMUNITY_CHAT,
     });
     assert.strictEqual(last.session.status, STATUS.DRAW);
-    assert.strictEqual(questSnap(files, USER_A).game.completed, true);
+    assertHumanGameQuest(files, USER_A, { vsBot: true });
     assert.strictEqual(questSnap(files, BOT_USER_ID).game.completed, false);
   });
 
@@ -1079,8 +1092,8 @@ async function main() {
     const first = startOpen(service);
     joinBoth(service, first.session.id);
     playColumns(service, first.session.id, [0, 6, 1, 5, 2, 4, 3]);
-    assert.strictEqual(getLootBalance(USER_A, files.shopFile), ACTIVITY_LOOT);
-    assert.strictEqual(getLootBalance(USER_B, files.shopFile), ACTIVITY_LOOT);
+    assertHumanGameQuest(files, USER_A);
+    assertHumanGameQuest(files, USER_B);
 
     const retry = service.move({
       sessionId: first.session.id,
@@ -1105,9 +1118,8 @@ async function main() {
       chatId: COMMUNITY_CHAT,
     });
     playColumns(service, second.session.id, [0, 6, 1, 5, 2, 4, 3]);
-    assert.strictEqual(getLootBalance(USER_A, files.shopFile), ACTIVITY_LOOT);
-    assert.strictEqual(getLootBalance(USER_B, files.shopFile), ACTIVITY_LOOT);
-    assert.strictEqual(questSnap(files, USER_A).game.completed, true);
+    assertHumanGameQuest(files, USER_A);
+    assertHumanGameQuest(files, USER_B);
   });
 
   await runTest("daily quest: C4 unlinked wallet completes slot without Loot", () => {
@@ -1116,14 +1128,8 @@ async function main() {
     const started = startOpen(service);
     joinBoth(service, started.session.id);
     playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
-    const snapA = questSnap(files, USER_A);
-    const snapB = questSnap(files, USER_B);
-    assert.strictEqual(snapA.game.completed, true);
-    assert.strictEqual(snapB.game.completed, true);
-    assert.strictEqual(snapA.game.lootSkipped, true);
-    assert.strictEqual(snapB.game.lootSkipped, true);
-    assert.strictEqual(getLootBalance(USER_A, files.shopFile), 0);
-    assert.strictEqual(getLootBalance(USER_B, files.shopFile), 0);
+    assertHumanGameQuest(files, USER_A, { linked: false });
+    assertHumanGameQuest(files, USER_B, { linked: false });
   });
 
   await runTest("daily quest: C4 XP cap does not block gameplay detection", () => {
@@ -1143,15 +1149,14 @@ async function main() {
     const started = startOpen(service);
     joinBoth(service, started.session.id);
     playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
-    assert.strictEqual(questSnap(files, USER_A).game.completed, true);
-    assert.strictEqual(questSnap(files, USER_B).game.completed, true);
-    assert.strictEqual(getLootBalance(USER_B, files.shopFile), ACTIVITY_LOOT);
+    assertHumanGameQuest(files, USER_A);
+    assertHumanGameQuest(files, USER_B);
     const claim = service.claimXpAward(started.session.id);
     assert.strictEqual(claim.shouldAward, true);
     const extra = awardPvpWinXp(claim.winnerUserId, "Kevin", files.pointsFile);
     assert.strictEqual(extra.awarded, false);
     assert.strictEqual(loadPoints(files.pointsFile).users[String(USER_A)].points, PVP_DAILY_WIN_CAP * PVP_WIN_XP);
-    assert.strictEqual(loadPoints(files.pointsFile).users[String(USER_B)], undefined);
+    assert.strictEqual(loadPoints(files.pointsFile).users[String(USER_B)].points, 0);
   });
 
   await runTest("daily quest: C4 XP amount unchanged after resolved win", () => {

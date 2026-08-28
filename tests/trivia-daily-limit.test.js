@@ -38,6 +38,7 @@ const {
   isCommunityChallengeBusy,
 } = require("../services/communityGameState");
 const { getDailyQuestSnapshot } = require("../services/dailyQuest");
+const { assertEligibleBotGameProgress } = require("./helpers/dailyQuestAssert");
 const { setMangoShopFileForTests } = require("../services/mangoShopStore");
 const {
   setWalletFileForTests,
@@ -608,11 +609,11 @@ async function main() {
     const started = startHub(service);
     answerCorrect(service, started.session.id, USER_A, "Alice");
     const after = getDailyQuestSnapshot(USER_A, { shopFile });
-    assert.strictEqual(after.game.completed, true);
+    assertEligibleBotGameProgress(after, { trivia: true });
     service.nextHubQuestion();
     answerCorrect(service, service.getSnapshot().id, USER_A, "Alice");
     const again = getDailyQuestSnapshot(USER_A, { shopFile });
-    assert.strictEqual(again.game.completed, true);
+    assertEligibleBotGameProgress(again, { trivia: true });
   });
 
   await runTest("50. auto activity-engine Trivia uses Random", () => {

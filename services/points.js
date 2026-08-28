@@ -540,6 +540,7 @@ function formatClaimedTodayLines(user) {
   lines.push(
     `🎮 PvP wins today: ${getPvpRewardedWinsToday(user)} / ${PVP_DAILY_WIN_CAP}`
   );
+  lines.push(`⚔️ PvP games today: ${getPvpMatchesPlayedToday(user)}`);
 
   return lines.join("\n");
 }
@@ -1420,6 +1421,8 @@ function awardTriviaAttemptXp(
     walletFile: resolvedWallet,
     pointsFile,
     shopFile: payload && payload.shopFile ? payload.shopFile : undefined,
+    now: payload && Number.isFinite(payload.now) ? payload.now : undefined,
+    date: payload && payload.date ? payload.date : undefined,
   };
 
   return finalizeXpAward(
@@ -2078,6 +2081,8 @@ function ensurePvpState(user) {
     user.pvp = {
       date: null,
       rewardedWins: 0,
+      matchesPlayed: 0,
+      notedMatchIds: [],
     };
   }
   if (!Object.prototype.hasOwnProperty.call(user.pvp, "date")) {
@@ -2088,6 +2093,14 @@ function ensurePvpState(user) {
     wins = 0;
   }
   user.pvp.rewardedWins = wins;
+  let matches = user.pvp.matchesPlayed;
+  if (typeof matches !== "number" || !Number.isInteger(matches) || matches < 0) {
+    matches = 0;
+  }
+  user.pvp.matchesPlayed = matches;
+  if (!Array.isArray(user.pvp.notedMatchIds)) {
+    user.pvp.notedMatchIds = [];
+  }
   return user.pvp;
 }
 
@@ -2097,6 +2110,8 @@ function resetPvpIfNewDay(user) {
   if (user.pvp.date !== today) {
     user.pvp.date = today;
     user.pvp.rewardedWins = 0;
+    user.pvp.matchesPlayed = 0;
+    user.pvp.notedMatchIds = [];
   }
 }
 
@@ -2118,8 +2133,65 @@ function getPvpRewardedWinsToday(user) {
 }
 
 /**
+ * Read-only: completed human-vs-human PvP matches today (UTC). Missing/legacy → 0.
+ */
+function getPvpMatchesPlayedToday(user) {
+  if (!user || typeof user !== "object" || !user.pvp || typeof user.pvp !== "object") {
+    return 0;
+  }
+  if (user.pvp.date !== getTodayDate()) {
+    return 0;
+  }
+  const matches = user.pvp.matchesPlayed;
+  if (typeof matches !== "number" || !Number.isInteger(matches) || matches < 0) {
+    return 0;
+  }
+  return matches;
+}
+
+/**
  * PvP win XP with per-UTC-day cap. Call only after sync winner claim.
  */
+/**
+ * Record one completed human-vs-human PvP match for the UTC day.
+ * Idempotent per noteKey (game:matchId).
+ */
+function recordHumanPvpMatch(userId, userName, noteKey, pointsFile = POINTS_FILE) {
+  const uid = String(userId || "");
+  const key = String(noteKey || "");
+  if (!uid || !key) {
+    return { ok: false, reason: "invalid" };
+  }
+  return mutatePoints((data) => {
+    const user = ensureUserRecord(data, uid, userName || "Player");
+    resetWeeklyIfNewWeek(user, uid);
+    ensurePvpState(user);
+    resetPvpIfNewDay(user);
+    if (!Array.isArray(user.pvp.notedMatchIds)) {
+      user.pvp.notedMatchIds = [];
+    }
+    if (user.pvp.notedMatchIds.includes(key)) {
+      return {
+        ok: true,
+        already: true,
+        matchesToday: user.pvp.matchesPlayed || 0,
+        date: getTodayDate(),
+      };
+    }
+    user.pvp.notedMatchIds.push(key);
+    if (user.pvp.notedMatchIds.length > 24) {
+      user.pvp.notedMatchIds = user.pvp.notedMatchIds.slice(-24);
+    }
+    user.pvp.matchesPlayed = (user.pvp.matchesPlayed || 0) + 1;
+    return {
+      ok: true,
+      already: false,
+      matchesToday: user.pvp.matchesPlayed,
+      date: getTodayDate(),
+    };
+  }, pointsFile);
+}
+
 function awardPvpWinXp(userId, userName, pointsFile = POINTS_FILE, walletFile) {
   const pointsToAdd = PVP_WIN_XP;
   const questExtras = { game: "pvp", walletFile, pointsFile };
@@ -2350,7 +2422,10 @@ module.exports = {
   PVP_WIN_XP,
   PVP_DAILY_WIN_CAP,
   ensurePvpState,
+  resetPvpIfNewDay,
   getPvpRewardedWinsToday,
+  getPvpMatchesPlayedToday,
+  recordHumanPvpMatch,
   awardCommunityBuilderXp,
   awardSnakeGameXp,
   awardBounchGameXp,

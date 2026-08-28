@@ -46,6 +46,7 @@ const {
 const { getLootBalance } = require("../services/mangoLoot");
 const { isTrueRankUp } = require("../services/rankUpAnnounce");
 const { XP_WALLET_REQUIRED } = require("../services/xpWalletGate");
+const { assertEligibleBotGameProgress } = require("./helpers/dailyQuestAssert");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-bj-xp-"));
 let n = 0;
@@ -598,7 +599,7 @@ async function runTest(name, fn) {
       shopFile: files.shopFile,
       walletFile: files.walletFile,
     });
-    assert.strictEqual(snap.game.completed, true);
+    assertEligibleBotGameProgress(snap);
     assert.ok(GAME_SOURCES.includes("blackjack"));
   });
 
@@ -641,7 +642,7 @@ async function runTest(name, fn) {
       shopFile: files.shopFile,
       walletFile: files.walletFile,
     });
-    assert.strictEqual(snap.game.completed, true);
+    assertEligibleBotGameProgress(snap);
   });
 
   await runTest("65-66. fun-mode resolved counts, no duplicate Daily Quest Loot", () => {
@@ -658,7 +659,7 @@ async function runTest(name, fn) {
       shopFile: files.shopFile,
       walletFile: files.walletFile,
     });
-    assert.strictEqual(snap.game.completed, true);
+    assertEligibleBotGameProgress(snap);
     const loot = getLootBalance(USER_A, files.shopFile);
     awardBlackjackPassXp(
       USER_A,

@@ -123,11 +123,77 @@ function emptyActivitySlot() {
   };
 }
 
+const KNOWN_QUEST_TARGETS = Object.freeze({
+  "community-activity": 1,
+  "replies-5": 5,
+  "media-2": 2,
+  "messages-5": 5,
+  "bot-game-1": 1,
+  "pvp-game-1": 1,
+  "trivia-1": 1,
+  "earn-xp-3": 3,
+  greeting: 1,
+});
+
+const DEDUPE_KEEP = 16;
+
+function normalizeQuestSlot(raw, target) {
+  const tgt =
+    Number.isInteger(target) && target > 0
+      ? target
+      : Number.isInteger(raw && raw.target) && raw.target > 0
+        ? raw.target
+        : 1;
+  const progress = Number.isInteger(raw && raw.progress) ? Math.max(0, raw.progress) : 0;
+  return {
+    progress,
+    target: tgt,
+    completed: Boolean(raw && raw.completed) || progress >= tgt,
+    completedAt: Number.isFinite(raw && raw.completedAt) ? raw.completedAt : 0,
+    lootAwarded: Boolean(raw && raw.lootAwarded),
+    lootSkipped: Boolean(raw && raw.lootSkipped),
+  };
+}
+
+function normalizeDedupeList(raw) {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const out = [];
+  const seen = new Set();
+  for (const item of raw) {
+    const key = String(item || "").trim();
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    out.push(key);
+  }
+  return out.slice(-DEDUPE_KEEP);
+}
+
 function normalizeQuestDay(raw) {
   const community = Object.assign(emptyActivitySlot(), raw && raw.community);
   const game = Object.assign(emptyActivitySlot(), raw && raw.game);
   const xpRaw = raw && raw.xp ? raw.xp : {};
   const progress = Number.isInteger(xpRaw.progress) ? Math.max(0, xpRaw.progress) : 0;
+  const selected = [];
+  if (Array.isArray(raw && raw.selected)) {
+    for (const id of raw.selected) {
+      const key = String(id || "");
+      if (KNOWN_QUEST_TARGETS[key] && !selected.includes(key) && selected.length < 3) {
+        selected.push(key);
+      }
+    }
+  }
+  const quests = {};
+  for (const [id, slot] of Object.entries(asObjectMap(raw && raw.quests))) {
+    if (!KNOWN_QUEST_TARGETS[id]) {
+      continue;
+    }
+    quests[id] = normalizeQuestSlot(slot, KNOWN_QUEST_TARGETS[id]);
+  }
+  const dedupeRaw = raw && raw.dedupe && typeof raw.dedupe === "object" ? raw.dedupe : {};
   return {
     community: {
       completed: Boolean(community.completed),
@@ -148,6 +214,13 @@ function normalizeQuestDay(raw) {
       completedAt: Number.isFinite(xpRaw.completedAt) ? xpRaw.completedAt : 0,
       lootAwarded: Boolean(xpRaw.lootAwarded),
       lootSkipped: Boolean(xpRaw.lootSkipped),
+    },
+    selected,
+    quests,
+    dedupe: {
+      replies: normalizeDedupeList(dedupeRaw.replies),
+      media: normalizeDedupeList(dedupeRaw.media),
+      messages: normalizeDedupeList(dedupeRaw.messages),
     },
     fullCompletionAt: Number.isFinite(raw && raw.fullCompletionAt)
       ? raw.fullCompletionAt

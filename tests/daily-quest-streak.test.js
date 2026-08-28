@@ -22,6 +22,9 @@ const {
   FULL_COMPLETION_LOOT,
   ACTIVITY_LOOT,
   BASE_DAILY_MAX,
+  completeSelectedQuests,
+  fillDailyQuest,
+  selectQuestsForDate,
 } = require("../services/dailyQuest");
 const { setWalletFileForTests, registerManualWallet } = require("../services/walletLinks");
 require("../services/xpWalletGate").setXpWalletAutoLinkForTests(false);
@@ -65,23 +68,21 @@ function at(dayOffset) {
 function completeDay(f, dayOffset) {
   const now = at(dayOffset);
   const options = { shopFile: f.shopFile, walletFile: f.walletFile, now, date: utcDate(now) };
-  noteDailyQuestCommunity(USER, options);
-  noteDailyQuestGame(USER, "trivia", options);
-  return noteDailyQuestXp(USER, 3, options);
+  return completeSelectedQuests(USER, options);
 }
 
-function spawnMilestone(f, now) {
+function spawnFill(f, now, questId) {
   return new Promise((resolve) => {
     const child = spawn(
       process.execPath,
       [
         path.join(__dirname, "helpers", "daily-quest-worker.js"),
-        "xp",
+        "fill",
         f.shopFile,
         f.walletFile,
         USER,
         String(now),
-        "3",
+        questId,
       ],
       { windowsHide: true }
     );
@@ -192,11 +193,13 @@ async function main() {
     completeDay(f, 0);
     completeDay(f, 1);
     const now = at(2);
-    noteDailyQuestCommunity(USER, { shopFile: f.shopFile, walletFile: f.walletFile, now, date: utcDate(now) });
-    noteDailyQuestGame(USER, "trivia", { shopFile: f.shopFile, walletFile: f.walletFile, now, date: utcDate(now) });
+    const selected = selectQuestsForDate(utcDate(now));
+    const options = { shopFile: f.shopFile, walletFile: f.walletFile, now, date: utcDate(now) };
+    fillDailyQuest(USER, selected[0], options);
+    fillDailyQuest(USER, selected[1], options);
     const [a, b] = await Promise.all([
-      spawnMilestone(f, now),
-      spawnMilestone(f, now),
+      spawnFill(f, now, selected[2]),
+      spawnFill(f, now, selected[2]),
     ]);
     assert.strictEqual(a.status, 0, a.stderr);
     assert.strictEqual(b.status, 0, b.stderr);

@@ -1,6 +1,6 @@
 /**
- * Daily Quest "Play a Bot Game" for resolved TTT/C4 matches.
- * Independent of XP award / cap / wallet XP eligibility.
+ * Daily Quest game progress for resolved TTT/C4 matches.
+ * Bot-game slot is independent of XP. Human PvP is a separate counter.
  */
 
 const { error: logError } = require("../utils/logger");
@@ -46,17 +46,47 @@ function emitResolvedPvpDailyQuest(userIds, game, options = {}) {
       noteFn = require("./dailyQuest").noteDailyQuestGame;
     } catch (err) {
       warnQuest("[pvp] daily quest load failed:", err);
-      return;
+      noteFn = null;
+    }
+  }
+  const humanPvp = String(options.opponentType || "").toLowerCase() === "human";
+  let notePvpFn = options.noteHumanPvpMatchFn;
+  if (humanPvp && typeof notePvpFn !== "function") {
+    try {
+      notePvpFn = require("./pvpProgress").noteHumanPvpMatch;
+    } catch (err) {
+      warnQuest("[pvp] pvp progress load failed:", err);
+      notePvpFn = null;
     }
   }
   for (const uid of userIds) {
-    try {
-      noteFn(uid, game, {
-        shopFile: options.shopFile,
-        walletFile: options.walletFile,
-      });
-    } catch (err) {
-      warnQuest("[pvp] daily quest failed:", err);
+    if (typeof noteFn === "function") {
+      try {
+        noteFn(uid, game, {
+          shopFile: options.shopFile,
+          walletFile: options.walletFile,
+        });
+      } catch (err) {
+        warnQuest("[pvp] daily quest failed:", err);
+      }
+    }
+    if (humanPvp && typeof notePvpFn === "function") {
+      try {
+        notePvpFn(
+          uid,
+          {
+            game,
+            matchId: options.matchId,
+            opponentType: "human",
+            shopFile: options.shopFile,
+            walletFile: options.walletFile,
+            pointsFile: options.pointsFile,
+          },
+          options.pointsFile
+        );
+      } catch (err) {
+        warnQuest("[pvp] human match progress failed:", err);
+      }
     }
   }
 }

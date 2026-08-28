@@ -1383,7 +1383,52 @@ function createBlackjackService(options = {}) {
     }
 
     game.xpResults = results;
+    noteHumanPvpIfNeeded(game);
     return results;
+  }
+
+  function noteHumanPvpIfNeeded(game) {
+    if (!game || game.pvpProgressNoted) {
+      return;
+    }
+    if (game.opponentType !== "human") {
+      return;
+    }
+    game.pvpProgressNoted = true;
+    const humans = humanPlayers(game);
+    if (humans.length < 2) {
+      return;
+    }
+    let noteFn = options.noteHumanPvpMatchFn;
+    if (typeof noteFn !== "function") {
+      try {
+        noteFn = require("./pvpProgress").noteHumanPvpMatch;
+      } catch (_err) {
+        return;
+      }
+    }
+    for (const player of humans) {
+      try {
+        noteFn(
+          player.userId,
+          {
+            game: "blackjack",
+            matchId: game.id,
+            opponentType: "human",
+            userName: player.displayName,
+            shopFile: options.shopFile,
+            walletFile: options.walletFile,
+            pointsFile: options.pointsFile,
+          },
+          options.pointsFile
+        );
+      } catch (err) {
+        logError(
+          "[blackjack] pvp progress failed:",
+          err && err.message ? err.message : err
+        );
+      }
+    }
   }
 
   function buildResultText(game) {
@@ -1663,6 +1708,7 @@ function createBlackjackService(options = {}) {
       instanceSeq: (instanceSeq += 1),
       source,
       awardsSettled: false,
+      pvpProgressNoted: false,
       xpResults: null,
       handResult: null,
       timers: { lobby: null, countdown: null, decision: null, turn: null, bot: null },

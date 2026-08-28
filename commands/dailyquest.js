@@ -75,8 +75,21 @@ function homeKeyboard() {
   ]);
 }
 
-function markLine(done) {
-  return done ? "✅ Completed" : "❌ Not completed";
+function formatQuestBlock(quest) {
+  const lines = [
+    `${quest.emoji} ${quest.title}`,
+    quest.progressHint || quest.hint,
+    `Progress: ${quest.progress} / ${quest.target}`,
+  ];
+  if (quest.completed) {
+    lines[2] = `Progress: ${quest.progress} / ${quest.target} ✅`;
+  }
+  if (Array.isArray(quest.extraLines)) {
+    for (const extra of quest.extraLines) {
+      lines.push(extra);
+    }
+  }
+  return lines.join("\n");
 }
 
 function buildLockedText() {
@@ -94,45 +107,28 @@ function buildHomeText(userId, options) {
   if (!snap.lootUnlocked) {
     return buildLockedText();
   }
-  const xpDone = snap.xp.completed;
-  const xpLine = xpDone
-    ? `✅ ${snap.xp.progress} / ${snap.xp.target} XP`
-    : `❌ ${snap.xp.progress} / ${snap.xp.target} XP`;
+  const blocks = (snap.questList || []).map((quest) => formatQuestBlock(quest));
   return [
     "🎯 Daily Quest",
+    snap.dateLabel || snap.date,
     "",
-    "Complete today's activities and earn ManGo Loot. 🥭",
+    ...blocks.reduce((acc, block, idx) => {
+      if (idx > 0) {
+        acc.push("");
+      }
+      acc.push(block);
+      return acc;
+    }, []),
     "",
-    "💬 Community Activity",
-    markLine(snap.community.completed),
-    `Reward: +${ACTIVITY_LOOT} Loot`,
+    "🥭 ManGo Loot",
+    `Complete each quest: +${ACTIVITY_LOOT}`,
+    `Complete all 3: +${FULL_COMPLETION_LOOT} bonus`,
     "",
-    "🎮 Play a Bot Game",
-    markLine(snap.game.completed),
-    "Play one Telegram bot game:",
-    "• Trivia",
-    "• Tic-Tac-Toe",
-    "• Connect Four",
-    "• ChatFight",
-    "• ManGo Bomb",
-    "Snake and Bounch do not count for this Daily Quest.",
-    `Reward: +${ACTIVITY_LOOT} Loot`,
+    `Today: ${snap.completedToday} / 3`,
     "",
-    "⭐ Earn XP",
-    xpLine,
-    `Reward: +${ACTIVITY_LOOT} Loot`,
+    `🔥 Streak: ${snap.streak} days`,
     "",
-    "Daily completion:",
-    `${snap.completedToday} / 3`,
-    "",
-    "Full completion bonus:",
-    `🎁 +${FULL_COMPLETION_LOOT} Loot`,
-    "",
-    "🔥 Streak:",
-    `${snap.streak} days`,
-    "",
-    "Today's Loot:",
-    `${Math.min(snap.lootAwardedToday, BASE_DAILY_MAX)} / ${BASE_DAILY_MAX}`,
+    `Today's Loot: ${Math.min(snap.lootAwardedToday, BASE_DAILY_MAX)} / ${BASE_DAILY_MAX}`,
   ].join("\n");
 }
 

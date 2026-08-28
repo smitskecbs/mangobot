@@ -23,6 +23,11 @@ const {
   FULL_COMPLETION_LOOT,
   BASE_DAILY_MAX,
   GAME_SOURCES,
+  QUEST_IDS,
+  completeSelectedQuests,
+  fillDailyQuest,
+  selectQuestsForDate,
+  findUtcDateForSelection,
 } = require("../services/dailyQuest");
 const { setWalletFileForTests, registerManualWallet, disconnectWallet, mutateWalletStore, applyVerifiedWallet } = require("../services/walletLinks");
 const { awardDailyActivityPoint, awardSnakeGameXp, awardBounchGameXp, awardChatFightXp, awardMangoBombXp } = require("../services/points");
@@ -145,6 +150,22 @@ function spawnQuest(mode, files, userId, now, amount) {
   });
 }
 
+const communityDay = findUtcDateForSelection({ social: QUEST_IDS.COMMUNITY_ACTIVITY });
+const botDay = findUtcDateForSelection({ game: QUEST_IDS.BOT_GAME_1 });
+const xpDay = findUtcDateForSelection({ progression: QUEST_IDS.EARN_XP_3 });
+
+function communityOpts(files) {
+  return opts(files, communityDay.now);
+}
+
+function botOpts(files) {
+  return opts(files, botDay.now);
+}
+
+function xpOpts(files) {
+  return opts(files, xpDay.now);
+}
+
 async function runTest(name, fn) {
   try {
     await fn();
@@ -168,17 +189,17 @@ async function main() {
   await runTest("11-14. community message once; slash/bot ignored", () => {
     const files = nextFiles();
     link(files);
-    const ok = processCommunityMessage(groupCtx({ text: "hello mango" }), opts(files));
+    const ok = processCommunityMessage(groupCtx({ text: "hello mango" }), communityOpts(files));
     assert.ok(ok);
     assert.strictEqual(isEligibleDailyQuestCommunityMessage(groupCtx({ text: "hello" })), true);
     assert.strictEqual(
       isEligibleDailyQuestCommunityMessage(groupCtx({ text: "/points" })),
       false
     );
-    processCommunityMessage(groupCtx({ text: "/help" }), opts(files));
-    processCommunityMessage(groupCtx({ text: "hi", isBot: true }), opts(files));
-    processCommunityMessage(groupCtx({ text: "hello again" }), opts(files));
-    const snap = getDailyQuestSnapshot(USER, opts(files));
+    processCommunityMessage(groupCtx({ text: "/help" }), communityOpts(files));
+    processCommunityMessage(groupCtx({ text: "hi", isBot: true }), communityOpts(files));
+    processCommunityMessage(groupCtx({ text: "hello again" }), communityOpts(files));
+    const snap = getDailyQuestSnapshot(USER, communityOpts(files));
     assert.strictEqual(snap.community.completed, true);
     assert.strictEqual(getLootBalance(USER, files.shopFile), ACTIVITY_LOOT);
   });
@@ -188,37 +209,30 @@ async function main() {
     link(files);
     const ctx = groupCtx({ text: undefined, extra: { sticker: { file_id: "x" } } });
     delete ctx.message.text;
-    processCommunityMessage(ctx, opts(files));
-    const snap = getDailyQuestSnapshot(USER, opts(files));
+    processCommunityMessage(ctx, communityOpts(files));
+    const snap = getDailyQuestSnapshot(USER, communityOpts(files));
     assert.strictEqual(snap.community.completed, false);
   });
 
   await runTest("15-17. valid bot game once; snake/bounch/cancelled do not", () => {
     const files = nextFiles();
     link(files);
-    const live = { shopFile: files.shopFile, walletFile: files.walletFile };
-    awardChatFightXp(USER, "Ada", files.pointsFile, files.walletFile);
-    let snap = getDailyQuestSnapshot(USER, live);
+    noteDailyQuestGame(USER, "chatfight", botOpts(files));
+    let snap = getDailyQuestSnapshot(USER, botOpts(files));
     assert.strictEqual(snap.game.completed, true);
     assert.strictEqual(getLootBalance(USER, files.shopFile), ACTIVITY_LOOT);
     const skip = nextFiles();
     link(skip);
     awardSnakeGameXp(USER, "Ada", skip.pointsFile, skip.walletFile);
     awardBounchGameXp(USER, "Ada", 1, skip.pointsFile, skip.walletFile);
-    const skipped = getDailyQuestSnapshot(USER, {
-      shopFile: skip.shopFile,
-      walletFile: skip.walletFile,
-    });
+    const skipped = getDailyQuestSnapshot(USER, botOpts(skip));
     assert.strictEqual(skipped.game.completed, false);
     assert.ok(!GAME_SOURCES.includes("snake"));
     assert.ok(!GAME_SOURCES.includes("bounch"));
     const files2 = nextFiles();
     link(files2);
     awardMangoBombXp(USER, "Ada", 0, "", files2.pointsFile, files2.walletFile);
-    const empty = getDailyQuestSnapshot(USER, {
-      shopFile: files2.shopFile,
-      walletFile: files2.walletFile,
-    });
+    const empty = getDailyQuestSnapshot(USER, botOpts(files2));
     assert.strictEqual(empty.game.completed, false);
     assert.strictEqual(getLootBalance(USER, files2.shopFile), 0);
   });
@@ -226,13 +240,13 @@ async function main() {
   await runTest("18-21. XP progress 1/3 then 3/3 awards +5", () => {
     const files = nextFiles();
     link(files);
-    noteDailyQuestXp(USER, 1, opts(files));
-    let snap = getDailyQuestSnapshot(USER, opts(files));
+    noteDailyQuestXp(USER, 1, xpOpts(files));
+    let snap = getDailyQuestSnapshot(USER, xpOpts(files));
     assert.strictEqual(snap.xp.progress, 1);
     assert.strictEqual(snap.xp.completed, false);
     assert.strictEqual(getLootBalance(USER, files.shopFile), 0);
-    noteDailyQuestXp(USER, 2, opts(files));
-    snap = getDailyQuestSnapshot(USER, opts(files));
+    noteDailyQuestXp(USER, 2, xpOpts(files));
+    snap = getDailyQuestSnapshot(USER, xpOpts(files));
     assert.strictEqual(snap.xp.completed, true);
     assert.strictEqual(getLootBalance(USER, files.shopFile), ACTIVITY_LOOT);
   });
@@ -241,19 +255,15 @@ async function main() {
     const files = nextFiles();
     const blocked = awardDailyActivityPoint(USER, "Ada", files.pointsFile, DATE, files.walletFile);
     assert.strictEqual(blocked.awarded, false);
-    const snap = getDailyQuestSnapshot(USER, opts(files));
+    const snap = getDailyQuestSnapshot(USER, xpOpts(files));
     assert.strictEqual(snap.xp.progress, 0);
   });
 
   await runTest("22-24. all 3 gives +10; day total 25; duplicates no extra", () => {
     const files = nextFiles();
     link(files);
-    noteDailyQuestCommunity(USER, opts(files));
-    noteDailyQuestGame(USER, "trivia", opts(files));
-    noteDailyQuestXp(USER, 3, opts(files));
-    noteDailyQuestCommunity(USER, opts(files));
-    noteDailyQuestGame(USER, "trivia", opts(files));
-    noteDailyQuestXp(USER, 3, opts(files));
+    completeSelectedQuests(USER, opts(files));
+    completeSelectedQuests(USER, opts(files));
     const snap = getDailyQuestSnapshot(USER, opts(files));
     assert.strictEqual(snap.completedToday, 3);
     assert.strictEqual(snap.fullComplete, true);
@@ -264,9 +274,10 @@ async function main() {
   await runTest("25. restart no duplicate", () => {
     const files = nextFiles();
     link(files);
-    noteDailyQuestCommunity(USER, opts(files));
+    const first = selectQuestsForDate(utcDate(DAY))[0];
+    fillDailyQuest(USER, first, opts(files));
     setMangoShopFileForTests(files.shopFile);
-    noteDailyQuestCommunity(USER, opts(files));
+    fillDailyQuest(USER, first, opts(files));
     assert.strictEqual(getLootBalance(USER, files.shopFile), ACTIVITY_LOOT);
     const store = loadShopStore(files.shopFile);
     const spends = Object.values(store.transactions).filter((row) => row.reason === "daily-activity");
@@ -276,51 +287,51 @@ async function main() {
   await runTest("26-27. next UTC day fresh; previous does not leak", () => {
     const files = nextFiles();
     link(files);
-    noteDailyQuestCommunity(USER, opts(files));
+    completeSelectedQuests(USER, opts(files));
     const next = DAY + 24 * 60 * 60 * 1000;
     const snap = getDailyQuestSnapshot(USER, opts(files, next));
     assert.strictEqual(snap.completedToday, 0);
-    assert.strictEqual(snap.community.completed, false);
     const prev = getDailyQuestSnapshot(USER, opts(files, DAY));
-    assert.strictEqual(prev.community.completed, true);
+    assert.strictEqual(prev.completedToday, 3);
   });
 
   await runTest("28-32. unlinked view, no loot, registered/verified unlock, no retroactive", () => {
     const files = nextFiles();
     const ctx = mockPrivate();
-    handleDailyQuest(ctx, opts(files));
+    handleDailyQuest(ctx, communityOpts(files));
     assert.ok(ctx.replies[0].text.includes("Loot earning locked"));
-    noteDailyQuestCommunity(USER, opts(files));
+    noteDailyQuestCommunity(USER, communityOpts(files));
     assert.strictEqual(getLootBalance(USER, files.shopFile), 0);
-    const snap = getDailyQuestSnapshot(USER, opts(files));
+    const snap = getDailyQuestSnapshot(USER, communityOpts(files));
     assert.strictEqual(snap.community.completed, true);
     assert.strictEqual(snap.community.lootSkipped, true);
     link(files);
-    noteDailyQuestCommunity(USER, opts(files));
+    noteDailyQuestCommunity(USER, communityOpts(files));
     assert.strictEqual(getLootBalance(USER, files.shopFile), 0);
-    noteDailyQuestGame(USER, "trivia", opts(files));
+    noteDailyQuestGame(USER, "trivia", botOpts(files));
     assert.strictEqual(getLootBalance(USER, files.shopFile), ACTIVITY_LOOT);
     const filesV = nextFiles();
     mutateWalletStore((store) => {
       applyVerifiedWallet(store, USER, walletAddress("verified"), DAY);
     }, filesV.walletFile);
-    noteDailyQuestCommunity(USER, opts(filesV));
+    noteDailyQuestCommunity(USER, communityOpts(filesV));
     assert.strictEqual(getLootBalance(USER, filesV.shopFile), ACTIVITY_LOOT);
   });
 
   await runTest("33-34. unlink blocks future; re-link enables", () => {
     const files = nextFiles();
     link(files);
-    noteDailyQuestGame(USER, "trivia", opts(files));
+    const selected = selectQuestsForDate(utcDate(DAY));
+    fillDailyQuest(USER, selected[0], opts(files));
     assert.strictEqual(getLootBalance(USER, files.shopFile), ACTIVITY_LOOT);
     disconnectWallet(USER, files.walletFile);
-    noteDailyQuestCommunity(USER, opts(files));
+    fillDailyQuest(USER, selected[1], opts(files));
     assert.strictEqual(getLootBalance(USER, files.shopFile), ACTIVITY_LOOT);
     const skipped = getDailyQuestSnapshot(USER, opts(files));
-    assert.strictEqual(skipped.community.completed, true);
-    assert.strictEqual(skipped.community.lootSkipped, true);
+    assert.strictEqual(skipped.questList[1].completed, true);
+    assert.strictEqual(skipped.questList[1].lootSkipped, true);
     link(files);
-    noteDailyQuestXp(USER, 3, opts(files));
+    fillDailyQuest(USER, selected[2], opts(files));
     assert.strictEqual(
       getLootBalance(USER, files.shopFile),
       ACTIVITY_LOOT * 2 + FULL_COMPLETION_LOOT
@@ -339,13 +350,16 @@ async function main() {
     const priv = mockPrivate();
     handleDailyQuest(priv, opts(files));
     assert.ok(priv.replies[0].text.includes("🎯 Daily Quest"));
-    assert.ok(priv.replies[0].text.includes("🎮 Play a Bot Game"));
-    assert.ok(priv.replies[0].text.includes("Trivia"));
-    assert.ok(priv.replies[0].text.includes("Tic-Tac-Toe"));
-    assert.ok(priv.replies[0].text.includes("Connect Four"));
-    assert.ok(priv.replies[0].text.includes("ChatFight"));
-    assert.ok(priv.replies[0].text.includes("ManGo Bomb"));
-    assert.ok(priv.replies[0].text.includes("Snake and Bounch do not count"));
+    assert.ok(priv.replies[0].text.includes("UTC"));
+    assert.ok(priv.replies[0].text.includes("Today:"));
+    assert.ok(priv.replies[0].text.includes("Complete each quest: +5"));
+    const selected = selectQuestsForDate(utcDate(DAY));
+    if (selected.includes(QUEST_IDS.BOT_GAME_1)) {
+      assert.ok(priv.replies[0].text.includes("Snake and Bounch do not count"));
+    }
+    if (selected.includes(QUEST_IDS.PVP_GAME_1)) {
+      assert.ok(priv.replies[0].text.includes("another member"));
+    }
     assert.ok(!priv.replies[0].text.includes("🎮 Play a Game"));
     const group = {
       from: { id: Number(USER) },
@@ -376,8 +390,8 @@ async function main() {
   await runTest("52-53. profile compact progress; Phase 2 detail", () => {
     const files = nextFiles();
     link(files);
-    noteDailyQuestCommunity(USER, opts(files));
-    noteDailyQuestGame(USER, "trivia", opts(files));
+    fillDailyQuest(USER, selectQuestsForDate(utcDate(DAY))[0], opts(files));
+    fillDailyQuest(USER, selectQuestsForDate(utcDate(DAY))[1], opts(files));
     const block = formatShopProgressBlock(USER, opts(files));
     assert.ok(block.includes("🥭 ManGo Loot:"));
     assert.ok(block.includes("🔥 Daily Streak: 0"));
@@ -396,11 +410,12 @@ async function main() {
   await runTest("55-56. concurrent activity and full-completion bonus once", async () => {
     const files = nextFiles();
     link(files);
-    noteDailyQuestGame(USER, "trivia", opts(files));
-    noteDailyQuestXp(USER, 3, opts(files));
+    const selected = selectQuestsForDate(utcDate(DAY));
+    fillDailyQuest(USER, selected[0], opts(files));
+    fillDailyQuest(USER, selected[1], opts(files));
     const [a, b] = await Promise.all([
-      spawnQuest("community", files, USER, DAY),
-      spawnQuest("community", files, USER, DAY),
+      spawnQuest("fill", files, USER, DAY, selected[2]),
+      spawnQuest("fill", files, USER, DAY, selected[2]),
     ]);
     assert.strictEqual(a.status, 0, a.stderr);
     assert.strictEqual(b.status, 0, b.stderr);
@@ -437,7 +452,7 @@ async function main() {
       }),
       "utf8"
     );
-    noteDailyQuestCommunity(USER, opts(files));
+    completeSelectedQuests(USER, opts(files));
     purchaseTitle(USER, "supporter", {
       shopFile: files.shopFile,
       pointsFile: files.pointsFile,

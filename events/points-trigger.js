@@ -132,11 +132,79 @@ function hasDailyQuestCommunityText(msg) {
   return false;
 }
 
-function isEligibleDailyQuestCommunityMessage(ctx) {
+function isCommandMessage(msg) {
+  if (!msg) {
+    return false;
+  }
+  if (typeof msg.text === "string" && isCommandText(msg.text)) {
+    return true;
+  }
+  if (typeof msg.caption === "string" && isCommandText(msg.caption)) {
+    return true;
+  }
+  return false;
+}
+
+function communityMessageDedupeKey(ctx) {
+  if (!ctx || !ctx.chat || !ctx.message) {
+    return null;
+  }
+  if (ctx.message.message_id == null) {
+    return null;
+  }
+  return `${ctx.chat.id}:${ctx.message.message_id}`;
+}
+
+function isValidDailyQuestReply(ctx) {
+  if (!isEligibleCommunityActivityMessage(ctx)) {
+    return false;
+  }
+  const msg = ctx.message;
+  if (!msg || isCommandMessage(msg)) {
+    return false;
+  }
+  const reply = msg.reply_to_message;
+  if (!reply || !reply.from) {
+    return false;
+  }
+  if (reply.from.is_bot) {
+    return false;
+  }
+  if (ctx.from && String(reply.from.id) === String(ctx.from.id)) {
+    return false;
+  }
+  return true;
+}
+
+function isDailyQuestMediaMessage(ctx) {
+  if (!isEligibleCommunityActivityMessage(ctx)) {
+    return false;
+  }
+  const msg = ctx.message;
+  if (!msg || isCommandMessage(msg) || isServiceMessage(msg)) {
+    return false;
+  }
+  if (msg.sticker || msg.document) {
+    return false;
+  }
+  if (Array.isArray(msg.photo) && msg.photo.length > 0) {
+    return true;
+  }
+  if (msg.video || msg.animation || msg.video_note) {
+    return true;
+  }
+  return false;
+}
+
+function isDailyQuestCountableMessage(ctx) {
   if (!isEligibleCommunityActivityMessage(ctx)) {
     return false;
   }
   return hasDailyQuestCommunityText(ctx.message);
+}
+
+function isEligibleDailyQuestCommunityMessage(ctx) {
+  return isDailyQuestCountableMessage(ctx);
 }
 
 function isEligibleCommunityActivityMessage(ctx) {
@@ -200,6 +268,39 @@ function processCommunityMessage(ctx, options = {}) {
     }
   }
 
+  const dedupeKey = communityMessageDedupeKey(ctx);
+  if (!ctx.from.is_bot && dedupeKey) {
+    const questOptions = {
+      walletFile,
+      shopFile: options.shopFile,
+      now: options.now,
+      dedupeKey,
+    };
+    try {
+      const dailyQuest = require("../services/dailyQuest");
+      if (isValidDailyQuestReply(ctx)) {
+        dailyQuest.noteDailyQuestReply(userId, {
+          ...questOptions,
+          dedupeBucket: "replies",
+        });
+      }
+      if (isDailyQuestMediaMessage(ctx)) {
+        dailyQuest.noteDailyQuestMedia(userId, {
+          ...questOptions,
+          dedupeBucket: "media",
+        });
+      }
+      if (isDailyQuestCountableMessage(ctx)) {
+        dailyQuest.noteDailyQuestMessage(userId, {
+          ...questOptions,
+          dedupeBucket: "messages",
+        });
+      }
+    } catch (_err) {
+      // Quest tracking must never break the XP pipeline.
+    }
+  }
+
   const trigger = isMenuTap ? null : detectTrigger(textForTrigger);
   let triggerResult = null;
   if (trigger && !ctx.from.is_bot) {
@@ -207,6 +308,17 @@ function processCommunityMessage(ctx, options = {}) {
       pointsFile !== undefined
         ? awardTriggerPoints(userId, userName, trigger, pointsFile, walletFile)
         : awardTriggerPoints(userId, userName, trigger);
+    if (trigger === "gmango" || trigger === "gnango") {
+      try {
+        require("../services/dailyQuest").noteDailyQuestGreeting(userId, {
+          walletFile,
+          shopFile: options.shopFile,
+          now: options.now,
+        });
+      } catch (_err) {
+        // Quest tracking must never break the XP pipeline.
+      }
+    }
   }
 
   const fightAward =
@@ -258,6 +370,9 @@ module.exports.registerCommunityActivityListener = registerCommunityActivityList
 module.exports.shouldSkipCommunityActivity = shouldSkipCommunityActivity;
 module.exports.isEligibleCommunityActivityMessage = isEligibleCommunityActivityMessage;
 module.exports.isEligibleDailyQuestCommunityMessage = isEligibleDailyQuestCommunityMessage;
+module.exports.isValidDailyQuestReply = isValidDailyQuestReply;
+module.exports.isDailyQuestMediaMessage = isDailyQuestMediaMessage;
+module.exports.isDailyQuestCountableMessage = isDailyQuestCountableMessage;
 module.exports.isServiceMessage = isServiceMessage;
 module.exports.getMessageTextForTrigger = getMessageTextForTrigger;
 module.exports.processCommunityMessage = processCommunityMessage;
