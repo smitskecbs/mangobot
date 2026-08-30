@@ -116,6 +116,14 @@ function wireBlackjackRuntime(runtime, botOrTelegram, options = {}) {
       markBlackjackPvpMatchup(userId, opponentId, options.pointsFile),
   });
 
+  if (telegram && typeof telegram.deleteMessage === "function") {
+    if (typeof runtime.setDeleteMessageHandler === "function") {
+      runtime.setDeleteMessageHandler((chatId, messageId) =>
+        telegram.deleteMessage(chatId, messageId)
+      );
+    }
+  }
+
   if (telegram && typeof telegram.editMessageText === "function") {
     runtime.setEditMessageHandler((chatId, messageId, text, extra) =>
       telegram.editMessageText(

@@ -251,7 +251,12 @@ runTest("5. Back behavior", async () => {
 
   const profile = createMockCtx({ chatType: "private" });
   handlePrivateProfile(profile);
-  assert.strictEqual(profile.replies[0].text, GROUP_PROFILE_TEXT);
+  assert.ok(
+    profile.replies[0].text.startsWith(GROUP_PROFILE_TEXT),
+    "private My Profile keeps the hub intro copy"
+  );
+  assert.ok(profile.replies[0].text.includes("Community Title:"));
+  assert.ok(profile.replies[0].text.includes("ManGo Loot:"));
   const privateBack = createMockCtx({
     chatType: "private",
     callbackData: PRIVATE_HUB_CALLBACK.PROFILE_BACK,

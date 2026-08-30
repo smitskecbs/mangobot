@@ -326,6 +326,14 @@ function joinBoth(service, sessionId) {
   return j2;
 }
 
+function startVsBot(service) {
+  const started = startOpen(service);
+  const expired = service.expireJoin(started.session.id);
+  assert.strictEqual(expired.session.opponentType, "bot");
+  assert.strictEqual(expired.session.status, STATUS.ACTIVE);
+  return started;
+}
+
 async function main() {
   resetEnv();
 
@@ -1282,6 +1290,150 @@ async function main() {
     assert.strictEqual(win.session.status, STATUS.WON);
     const claim = service.claimXpAward(started.session.id);
     assert.strictEqual(claim.shouldAward, true);
+  });
+
+  await runTest("bot XP: human win vs bot awards PVP_WIN_XP once", async () => {
+    const file = pointsFile();
+    const { service } = createService();
+    const started = startVsBot(service);
+    const raw = service.manager.getSession(started.session.id);
+    raw.board = ["X", "X", null, "O", "O", null, null, null, null];
+    raw.currentPlayer = "X";
+    const ctx = createMockCtx({
+      userId: USER_A,
+      callbackData: buildMoveCallbackData(started.session.id, 2),
+    });
+    await handlePvpCallback(ctx, {
+      runtime: service,
+      awardPvpWinXpFn: (uid, name) => awardPvpWinXp(uid, name, file),
+    });
+    assert.strictEqual(service.getSession(started.session.id).status, STATUS.WON);
+    assert.strictEqual(service.getSession(started.session.id).winnerUserId, String(USER_A));
+    assert.strictEqual(loadPoints(file).users[String(USER_A)].points, PVP_WIN_XP);
+    const again = await finalizeWinXp(service, started.session.id, (uid, name) =>
+      awardPvpWinXp(uid, name, file)
+    );
+    assert.strictEqual(again.claim.shouldAward, false);
+    assert.strictEqual(again.claim.reason, "already-awarded");
+    assert.strictEqual(loadPoints(file).users[String(USER_A)].points, PVP_WIN_XP);
+  });
+
+  await runTest("bot XP: loss vs bot does not award win XP", async () => {
+    const file = pointsFile();
+    const { service } = createService();
+    const started = startVsBot(service);
+    const loss = service.resolveTurnTimeout(started.session.id);
+    assert.strictEqual(loss.session.winnerUserId, BOT_USER_ID);
+    const fin = await finalizeWinXp(service, started.session.id, (uid, name) =>
+      awardPvpWinXp(uid, name, file)
+    );
+    assert.strictEqual(fin.claim.shouldAward, false);
+    assert.strictEqual(fin.claim.reason, "bot-winner");
+    assert.strictEqual(loadPoints(file).users[String(USER_A)], undefined);
+  });
+
+  await runTest("bot XP: draw vs bot does not award win XP", async () => {
+    const file = pointsFile();
+    const { service } = createService();
+    const started = startVsBot(service);
+    const raw = service.manager.getSession(started.session.id);
+    raw.board = ["X", "O", "X", "X", "X", "O", "O", null, "O"];
+    raw.currentPlayer = "X";
+    const last = service.move({
+      sessionId: started.session.id,
+      userId: USER_A,
+      cell: 7,
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(last.session.status, STATUS.DRAW);
+    const claim = service.claimXpAward(started.session.id);
+    assert.strictEqual(claim.ok, false);
+    assert.strictEqual(claim.reason, "not-won");
+    const fin = await finalizeWinXp(service, started.session.id, (uid, name) =>
+      awardPvpWinXp(uid, name, file)
+    );
+    assert.strictEqual(fin.claim.shouldAward, undefined);
+    assert.strictEqual(loadPoints(file).users[String(USER_A)], undefined);
+  });
+
+  await runTest("bot XP: daily PvP cap also applies to bot wins", async () => {
+    const file = pointsFile();
+    for (let i = 0; i < PVP_DAILY_WIN_CAP; i += 1) {
+      const xp = awardPvpWinXp(USER_A, "Kevin", file);
+      assert.strictEqual(xp.awarded, true);
+    }
+    const { service } = createService();
+    const started = startVsBot(service);
+    const raw = service.manager.getSession(started.session.id);
+    raw.board = ["X", "X", null, "O", "O", null, null, null, null];
+    raw.currentPlayer = "X";
+    const win = service.move({
+      sessionId: started.session.id,
+      userId: USER_A,
+      cell: 2,
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(win.needsXp, true);
+    const fin = await finalizeWinXp(service, started.session.id, (uid, name) =>
+      awardPvpWinXp(uid, name, file)
+    );
+    assert.strictEqual(fin.claim.shouldAward, true);
+    assert.strictEqual(fin.xpResult.awarded, false);
+    assert.strictEqual(fin.xpResult.reason, "daily-cap");
+    assert.strictEqual(
+      loadPoints(file).users[String(USER_A)].points,
+      PVP_DAILY_WIN_CAP * PVP_WIN_XP
+    );
+  });
+
+  await runTest("bot XP: human vs human still awards after a bot match", async () => {
+    const file = pointsFile();
+    const { service } = createService({ pairCooldownMs: 0 });
+    const botMatch = startVsBot(service);
+    service.resolveTurnTimeout(botMatch.session.id);
+    await finalizeWinXp(service, botMatch.session.id, (uid, name) =>
+      awardPvpWinXp(uid, name, file)
+    );
+    assert.strictEqual(loadPoints(file).users[String(USER_A)], undefined);
+
+    const pvp = startOpen(service);
+    joinBoth(service, pvp.session.id);
+    playTttWinLine(service, pvp.session.id);
+    const fin = await finalizeWinXp(service, pvp.session.id, (uid, name) =>
+      awardPvpWinXp(uid, name, file)
+    );
+    assert.strictEqual(fin.claim.shouldAward, true);
+    assert.strictEqual(fin.xpResult.pointsToAdd, PVP_WIN_XP);
+    assert.strictEqual(loadPoints(file).users[String(USER_A)].points, PVP_WIN_XP);
+    assert.strictEqual(loadPoints(file).users[String(USER_B)], undefined);
+  });
+
+  await runTest("bot XP: owner exclusion unchanged for bot wins", async () => {
+    const file = pointsFile();
+    const prevAdmin = process.env.ADMIN_USER_ID;
+    process.env.ADMIN_USER_ID = String(USER_A);
+    try {
+      const { service } = createService();
+      const started = startVsBot(service);
+      const raw = service.manager.getSession(started.session.id);
+      raw.board = ["X", "X", null, "O", "O", null, null, null, null];
+      raw.currentPlayer = "X";
+      service.move({
+        sessionId: started.session.id,
+        userId: USER_A,
+        cell: 2,
+        chatId: COMMUNITY_CHAT,
+      });
+      const fin = await finalizeWinXp(service, started.session.id, (uid, name) =>
+        awardPvpWinXp(uid, name, file)
+      );
+      assert.strictEqual(fin.claim.shouldAward, true);
+      assert.strictEqual(fin.xpResult.awarded, false);
+      const user = loadPoints(file).users[String(USER_A)];
+      assert.ok(!user || user.points === 0);
+    } finally {
+      process.env.ADMIN_USER_ID = prevAdmin;
+    }
   });
 
   fs.rmSync(tempDir, { recursive: true, force: true });

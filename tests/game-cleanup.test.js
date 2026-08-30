@@ -52,6 +52,7 @@ const {
   FINAL_STATE,
   buildFinalGameText,
   callbackMessageHasButtons,
+  clearAllGameMessageCleanups,
 } = require("../utils/gameCleanup");
 
 const COMMUNITY_CHAT = -1001234567890;
@@ -87,6 +88,8 @@ function restoreEnv() {
 async function runTest(name, fn) {
   resetEnv();
   getMangoBombRuntime().reset();
+  clearAllExpiredMessageCleanups();
+  clearAllGameMessageCleanups();
   try {
     await fn();
     console.log(`✓ ${name}`);

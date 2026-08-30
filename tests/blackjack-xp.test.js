@@ -232,6 +232,27 @@ function decide(service, gameId, userId, choice) {
   });
 }
 
+async function playBotWin(service) {
+  const gameId = await startBotGame(service);
+  service.seedDeckForTests(gameId, [
+    createCard("K", "spades"),
+    createCard("Q", "hearts"),
+    createCard("8", "diamonds"),
+    createCard("7", "clubs"),
+  ]);
+  decide(service, gameId, USER_A, "play");
+  await service.whenIdle(COMMUNITY_CHAT);
+  service.tryStand({
+    gameId,
+    userId: USER_A,
+    isBot: false,
+    chatId: COMMUNITY_CHAT,
+    threadId: 123,
+  });
+  await service.whenIdle(COMMUNITY_CHAT);
+  return gameId;
+}
+
 async function runTest(name, fn) {
   getBlackjackRuntime().reset();
   try {
@@ -688,6 +709,90 @@ async function runTest(name, fn) {
     await service.whenIdle(COMMUNITY_CHAT);
     assert.strictEqual(pointsOf(files, USER_A), BLACKJACK_PASS_XP);
     assert.strictEqual(pointsOf(files, USER_B), BLACKJACK_STAKE_XP);
+  });
+
+  await runTest("bot XP: completed dealer game awards once", async () => {
+    const files = nextFiles();
+    link(files, USER_A);
+    const { service } = createService();
+    attachXp(service, files);
+    const gameId = await playBotWin(service);
+    assert.strictEqual(pointsOf(files, USER_A), BLACKJACK_BOT_WIN_XP);
+    service.tryStand({
+      gameId,
+      userId: USER_A,
+      isBot: false,
+      chatId: COMMUNITY_CHAT,
+      threadId: 123,
+    });
+    await service.whenIdle(COMMUNITY_CHAT);
+    assert.strictEqual(pointsOf(files, USER_A), BLACKJACK_BOT_WIN_XP);
+  });
+
+  await runTest("bot XP: daily cap applies to bot games", async () => {
+    const files = nextFiles();
+    link(files, USER_A);
+    const { service } = createService();
+    attachXp(service, files);
+    await playBotWin(service);
+    await playBotWin(service);
+    assert.strictEqual(pointsOf(files, USER_A), BLACKJACK_BOT_WIN_XP * 2);
+    assert.ok(getBlackjackStatus(USER_A, files.pointsFile).limitReached);
+    await playBotWin(service);
+    assert.strictEqual(pointsOf(files, USER_A), BLACKJACK_BOT_WIN_XP * 2);
+  });
+
+  await runTest("bot XP: owner exclusion unchanged for bot win", async () => {
+    const prev = process.env.ADMIN_USER_ID;
+    process.env.ADMIN_USER_ID = String(USER_A);
+    try {
+      const files = nextFiles();
+      link(files, USER_A);
+      const { service } = createService();
+      attachXp(service, files);
+      await playBotWin(service);
+      assert.strictEqual(pointsOf(files, USER_A), 0);
+    } finally {
+      if (prev === undefined) delete process.env.ADMIN_USER_ID;
+      else process.env.ADMIN_USER_ID = prev;
+    }
+  });
+
+  await runTest("bot XP: human vs human PvP XP still works after bot game", async () => {
+    const files = nextFiles();
+    link(files, USER_A);
+    link(files, USER_B);
+    const { service } = createService();
+    attachXp(service, files);
+    await playBotWin(service);
+    assert.strictEqual(pointsOf(files, USER_A), BLACKJACK_BOT_WIN_XP);
+    const gameId = await startPvp(service);
+    service.seedDeckForTests(gameId, [
+      createCard("K", "spades"),
+      createCard("9", "hearts"),
+      createCard("8", "diamonds"),
+      createCard("7", "clubs"),
+    ]);
+    decide(service, gameId, USER_A, "play");
+    decide(service, gameId, USER_B, "play");
+    await service.whenIdle(COMMUNITY_CHAT);
+    service.tryStand({
+      gameId,
+      userId: USER_A,
+      isBot: false,
+      chatId: COMMUNITY_CHAT,
+      threadId: 123,
+    });
+    service.tryStand({
+      gameId,
+      userId: USER_B,
+      isBot: false,
+      chatId: COMMUNITY_CHAT,
+      threadId: 123,
+    });
+    await service.whenIdle(COMMUNITY_CHAT);
+    assert.strictEqual(pointsOf(files, USER_A), BLACKJACK_BOT_WIN_XP + BLACKJACK_PVP_WIN_XP);
+    assert.strictEqual(pointsOf(files, USER_B), 0);
   });
 
   for (const [file, mtime] of Object.entries(prodMtimes)) {

@@ -22,6 +22,8 @@ const {
   logGameCleanup,
   logCleanupRenderFailed,
   emptyGameKeyboardExtra,
+  scheduleGameMessageCleanup,
+  addGameMessageIds,
 } = require("../utils/gameCleanup");
 const {
   createDeck,
@@ -222,6 +224,7 @@ function createBlackjackService(options = {}) {
   let watchdogHandle = null;
   let editMessage = null;
   let sendMessage = null;
+  let deleteMessageFn = null;
   let injectedRenderMode = null;
   let hungRender = null;
   let injectedSendMode = null;
@@ -671,7 +674,23 @@ function createBlackjackService(options = {}) {
       fallbackSent: false,
     };
     finalUiByGameId.set(game.id, ui);
+    scheduleClosedGameMessages(game);
     return ui;
+  }
+
+  function scheduleClosedGameMessages(game) {
+    if (!game || game.chatId == null || game.messageId == null) {
+      return;
+    }
+    scheduleGameMessageCleanup({
+      gameType: GAME_TYPE.BLACKJACK,
+      sessionId: game.id,
+      chatId: game.chatId,
+      messageIds: [game.messageId],
+      setTimeoutFn,
+      clearTimeoutFn,
+      deleteMessageFn,
+    });
   }
 
   function shouldApplyLateWinnerEdit(ui, revision) {
@@ -826,7 +845,12 @@ function createBlackjackService(options = {}) {
       if (ui.threadId != null) {
         extra.message_thread_id = ui.threadId;
       }
-      await sendMessage(ui.chatId, ui.text, extra);
+      const sent = await sendMessage(ui.chatId, ui.text, extra);
+      const mid =
+        sent && (sent.message_id != null ? sent.message_id : sent.messageId);
+      if (mid != null) {
+        addGameMessageIds(GAME_TYPE.BLACKJACK, ui.gameId, ui.chatId, [mid]);
+      }
       ui.winnerUiState = "visible";
     } catch (_err) {
       ui.winnerUiState = "failed";
@@ -2159,6 +2183,9 @@ function createBlackjackService(options = {}) {
     whenWinnerUiIdle: () => winnerUiWait,
     setEditMessageHandler: (fn) => {
       editMessage = typeof fn === "function" ? fn : null;
+    },
+    setDeleteMessageHandler: (fn) => {
+      deleteMessageFn = typeof fn === "function" ? fn : null;
     },
     setSendMessageHandler: (fn) => {
       sendMessage = typeof fn === "function" ? fn : null;

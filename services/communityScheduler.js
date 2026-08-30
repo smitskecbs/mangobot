@@ -653,6 +653,7 @@ function createCommunityScheduler(options = {}) {
   }
 
   async function sendSlot(slot, dayKey) {
+    // Community prompts stay in chat; never register them for gameCleanup.
     const text = pickMessage(slot.id, dayKey, {
       slot,
       avoidKey: state.lastMessageKey,
@@ -1138,6 +1139,11 @@ function startCommunityScheduler(telegram, options = {}) {
       }
       await telegram.editMessageText(chatId, messageId, undefined, text, opts);
     });
+  }
+  if (typeof fight.setDeleteMessageHandler === "function") {
+    fight.setDeleteMessageHandler((chatId, messageId) =>
+      telegram.deleteMessage(chatId, messageId)
+    );
   }
 
   try {

@@ -59,6 +59,9 @@ const {
   clearAllExpiredMessageCleanups,
   getPendingExpiredCleanupCount,
 } = require("../utils/expiredMessageCleanup");
+const {
+  clearAllGameMessageCleanups,
+} = require("../utils/gameCleanup");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-trivia-"));
 setMangoShopFileForTests(path.join(tempDir, "shop.json"));
@@ -98,6 +101,7 @@ function restoreEnv() {
 async function runTest(name, fn) {
   resetEnv();
   clearAllExpiredMessageCleanups();
+  clearAllGameMessageCleanups();
   try {
     await fn();
     console.log(`✓ ${name}`);
@@ -171,6 +175,9 @@ function createService(overrides = {}) {
       overrides.totalQuestions != null
         ? overrides.totalQuestions
         : TRIVIA_ROUND_QUESTIONS,
+    staleAfterMs: overrides.staleAfterMs,
+    cleanupDelayMs: overrides.cleanupDelayMs,
+    deleteMessageFn: overrides.deleteMessageFn,
     random: overrides.random || (() => 0),
     randomIdFn: overrides.randomIdFn || (() => "abc123"),
     questions: overrides.questions || makeBank(30),
@@ -851,6 +858,39 @@ async function main() {
     assert.strictEqual(service.getSnapshot().status, STATUS.ABORTED);
   });
 
+  await runTest("stale hub session does not permanently block a new game", () => {
+    const { service, timers } = createService({ staleAfterMs: 1_000 });
+    const first = service.startTrivia({
+      chatId: COMMUNITY_CHAT,
+      hubMode: true,
+      category: "general",
+    });
+    assert.strictEqual(first.ok, true);
+    service.setMessageId(first.session.id, 9001);
+    answerCorrect(service, first.session.id, USER_A, "Alice");
+    assert.strictEqual(service.isTriviaOpen(), true);
+    timers.advance(1_000);
+    assert.strictEqual(service.isTriviaOpen(), false);
+    const second = service.startTrivia({
+      chatId: COMMUNITY_CHAT,
+      hubMode: true,
+      category: "general",
+    });
+    assert.strictEqual(second.ok, true);
+  });
+
+  await runTest("timerless leftover after restart-like crash is recovered", () => {
+    const { service, timers } = createService();
+    startRound(service);
+    assert.strictEqual(service.isTriviaOpen(), true);
+    service.clearAllTimers();
+    assert.strictEqual(service.getPendingTimerCount(), 0);
+    assert.strictEqual(service.isTriviaOpen(), false);
+    const again = startRound(service);
+    assert.strictEqual(again.ok, true);
+    void timers;
+  });
+
   await runTest("configured group only + private rejected", async () => {
     const { service } = createService();
     const privateCtx = createMockCtx({ chatType: "private", chatId: USER_A });
@@ -864,6 +904,7 @@ async function main() {
   fs.rmSync(tempDir, { recursive: true, force: true });
   restoreEnv();
   clearAllExpiredMessageCleanups();
+  clearAllGameMessageCleanups();
   console.log("\nAll trivia tests passed.");
 }
 

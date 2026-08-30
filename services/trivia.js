@@ -30,16 +30,19 @@ const {
 const {
   GAME_TYPE,
   FINAL_STATE,
+  GAME_MESSAGE_CLEANUP_DELAY_MS,
   buildFinalGameText,
   logGameCleanup,
   logCleanupRenderFailed,
   emptyGameKeyboardExtra,
+  scheduleGameMessageCleanup,
 } = require("../utils/gameCleanup");
 
 const TRIVIA_ROUND_QUESTIONS = 5;
 const TRIVIA_QUESTION_TIMEOUT_MS = 60 * 1000;
 const TRIVIA_NEXT_QUESTION_DELAY_MS = 5 * 1000;
 const TRIVIA_WRONG_ANSWER_NEXT_DELAY_MS = 2500;
+const TRIVIA_STALE_MS = GAME_MESSAGE_CLEANUP_DELAY_MS;
 const LETTERS = Object.freeze(["A", "B", "C", "D"]);
 
 const STATUS = Object.freeze({
@@ -442,6 +445,14 @@ function createTriviaService(options = {}) {
     typeof options.antiRepeatWindow === "number"
       ? options.antiRepeatWindow
       : ANTI_REPEAT_WINDOW;
+  const staleAfterMs =
+    typeof options.staleAfterMs === "number" && options.staleAfterMs >= 0
+      ? options.staleAfterMs
+      : TRIVIA_STALE_MS;
+  const cleanupDelayMs =
+    typeof options.cleanupDelayMs === "number" && options.cleanupDelayMs >= 0
+      ? options.cleanupDelayMs
+      : GAME_MESSAGE_CLEANUP_DELAY_MS;
 
   /** @type {object|null} */
   let session = null;
@@ -451,12 +462,17 @@ function createTriviaService(options = {}) {
   let questionTimer = null;
   /** @type {*|null} */
   let advanceTimer = null;
+  /** @type {*|null} */
+  let hubIdleTimer = null;
   /** @type {Function|null} */
   let editMessage = null;
   /** @type {Function|null} */
   let onRoundComplete = null;
   /** @type {Function|null} */
   let awardXpFn = null;
+  /** @type {Function|null} */
+  let deleteMessageFn =
+    typeof options.deleteMessageFn === "function" ? options.deleteMessageFn : null;
 
   function clearQuestionTimer() {
     if (questionTimer != null) {
@@ -472,9 +488,110 @@ function createTriviaService(options = {}) {
     }
   }
 
+  function clearHubIdleTimer() {
+    if (hubIdleTimer != null) {
+      clearTimeoutFn(hubIdleTimer);
+      hubIdleTimer = null;
+    }
+  }
+
   function clearAllTimers() {
     clearQuestionTimer();
     clearAdvanceTimer();
+    clearHubIdleTimer();
+  }
+
+  function touchActivity(target) {
+    const row = target || session;
+    if (row) {
+      row.lastActivityAt = now();
+    }
+  }
+
+  function scheduleHubIdleTimeout(target) {
+    clearHubIdleTimer();
+    if (!target || !target.hubMode || target.status !== STATUS.ACTIVE) {
+      return;
+    }
+    const expectedActivity = target.lastActivityAt;
+    hubIdleTimer = setTimeoutFn(() => {
+      hubIdleTimer = null;
+      if (!session || session !== target) {
+        return;
+      }
+      if (session.status !== STATUS.ACTIVE) {
+        return;
+      }
+      if (session.lastActivityAt !== expectedActivity) {
+        return;
+      }
+      abortRound("stale-idle");
+    }, staleAfterMs);
+  }
+
+  function isTimerlessAbandoned(target) {
+    if (!target || target.status !== STATUS.ACTIVE) {
+      return false;
+    }
+    if (questionTimer != null || advanceTimer != null || hubIdleTimer != null) {
+      return false;
+    }
+    if (target.hubMode && target.questionPhase === QUESTION_PHASE.RESOLVED) {
+      return false;
+    }
+    return true;
+  }
+
+  function isSessionStale(target) {
+    const row = target || session;
+    if (!row || row.status !== STATUS.ACTIVE) {
+      return false;
+    }
+    if (isTimerlessAbandoned(row)) {
+      return true;
+    }
+    const activity =
+      typeof row.lastActivityAt === "number"
+        ? row.lastActivityAt
+        : typeof row.startedAt === "number"
+          ? row.startedAt
+          : 0;
+    if (!activity) {
+      return isTimerlessAbandoned(row);
+    }
+    return now() - activity >= staleAfterMs;
+  }
+
+  function recoverStaleSession() {
+    if (!session || session.status !== STATUS.ACTIVE) {
+      return false;
+    }
+    if (!isSessionStale(session)) {
+      return false;
+    }
+    abortRound("stale");
+    return true;
+  }
+
+  function scheduleTriviaMessageCleanup(target, { silent } = {}) {
+    if (silent) {
+      return;
+    }
+    const row = target || session;
+    if (!row || row.chatId == null || row.messageId == null) {
+      return;
+    }
+    scheduleGameMessageCleanup({
+      gameType: GAME_TYPE.TRIVIA,
+      sessionId: row.id,
+      chatId: row.chatId,
+      messageIds: [row.messageId],
+      delayMs: cleanupDelayMs,
+      setTimeoutFn,
+      clearTimeoutFn,
+      deleteMessageFn,
+      telegram: options.telegram || null,
+    });
   }
 
   function generateSessionId() {
@@ -486,6 +603,7 @@ function createTriviaService(options = {}) {
   }
 
   function isTriviaOpen() {
+    recoverStaleSession();
     return Boolean(session && session.status === STATUS.ACTIVE);
   }
 
@@ -518,6 +636,7 @@ function createTriviaService(options = {}) {
       answeredUsers: { ...session.answeredUsers },
       questionWinnerId: session.questionWinnerId,
       startedAt: session.startedAt,
+      lastActivityAt: session.lastActivityAt,
       roundStartedAt: session.roundStartedAt,
       expiresAt: session.expiresAt,
       messageId: session.messageId,
@@ -578,6 +697,7 @@ function createTriviaService(options = {}) {
     session.answeredUsers = {};
     session.questionWinnerId = null;
     session.expiresAt = now() + questionTimeoutMs;
+    touchActivity(session);
   }
 
   function scheduleQuestionTimeout(target) {
@@ -617,6 +737,9 @@ function createTriviaService(options = {}) {
     Promise.resolve(safeEdit(text, extra)).catch(() => {});
     if (!session.hubMode) {
       scheduleAdvance();
+    } else {
+      touchActivity(session);
+      scheduleHubIdleTimeout(session);
     }
   }
 
@@ -740,6 +863,7 @@ function createTriviaService(options = {}) {
     } else {
       Promise.resolve(safeEdit(text, emptyInlineKeyboardExtra())).catch(() => {});
     }
+    scheduleTriviaMessageCleanup(payload.session);
     return payload;
   }
 
@@ -784,6 +908,7 @@ function createTriviaService(options = {}) {
           logCleanupRenderFailed(GAME_TYPE.TRIVIA);
         });
       }
+      scheduleTriviaMessageCleanup(session, { silent: Boolean(options.silent) });
     }
     return { ok: false, reason: reason || "aborted", session: snapshot(true) };
   }
@@ -804,7 +929,8 @@ function createTriviaService(options = {}) {
     if (!isAllowedChatFightChat(chatId)) {
       return { ok: false, reason: "wrong-chat" };
     }
-    if (isTriviaOpen()) {
+    recoverStaleSession();
+    if (session && session.status === STATUS.ACTIVE) {
       return { ok: false, reason: "already-active" };
     }
 
@@ -844,6 +970,7 @@ function createTriviaService(options = {}) {
       answeredUsers: {},
       questionWinnerId: null,
       startedAt,
+      lastActivityAt: startedAt,
       roundStartedAt: startedAt,
       expiresAt: startedAt + questionTimeoutMs,
       messageId: null,
@@ -857,6 +984,7 @@ function createTriviaService(options = {}) {
       category: resolvedCategory || null,
     };
     applyQuestionToSession(materialized);
+    touchActivity(session);
     scheduleQuestionTimeout(session);
 
     const questionBody = buildQuestionText(session, xpStatus);
@@ -880,6 +1008,10 @@ function createTriviaService(options = {}) {
     }
     target.messageId = messageId;
     return true;
+  }
+
+  function setDeleteMessageHandler(fn) {
+    deleteMessageFn = typeof fn === "function" ? fn : null;
   }
 
   function setEditMessageHandler(fn) {
@@ -965,6 +1097,7 @@ function createTriviaService(options = {}) {
 
     const xpResult = awardAttempt(uid, name, correct);
     target.lastXpResult = xpResult;
+    touchActivity(target);
 
     if (!correct) {
       const rendered = {
@@ -973,6 +1106,8 @@ function createTriviaService(options = {}) {
       };
       if (!target.hubMode) {
         scheduleAdvance(wrongAnswerNextDelayMs);
+      } else {
+        scheduleHubIdleTimeout(target);
       }
       return {
         ok: true,
@@ -997,6 +1132,8 @@ function createTriviaService(options = {}) {
     };
     if (!target.hubMode) {
       scheduleAdvance();
+    } else {
+      scheduleHubIdleTimeout(target);
     }
 
     return {
@@ -1059,6 +1196,7 @@ function createTriviaService(options = {}) {
     editMessage = null;
     onRoundComplete = null;
     awardXpFn = null;
+    deleteMessageFn = null;
   }
 
   function getRecentQuestionIds() {
@@ -1069,6 +1207,7 @@ function createTriviaService(options = {}) {
     let n = 0;
     if (questionTimer != null) n += 1;
     if (advanceTimer != null) n += 1;
+    if (hubIdleTimer != null) n += 1;
     return n;
   }
 
@@ -1077,6 +1216,7 @@ function createTriviaService(options = {}) {
     TRIVIA_QUESTION_TIMEOUT_MS: questionTimeoutMs,
     TRIVIA_NEXT_QUESTION_DELAY_MS: nextQuestionDelayMs,
     TRIVIA_WRONG_ANSWER_NEXT_DELAY_MS: wrongAnswerNextDelayMs,
+    TRIVIA_STALE_MS: staleAfterMs,
     TRIVIA_ROUND_WIN_XP,
     TRIVIA_TIE_XP,
     TRIVIA_DAILY_REWARD_CAP,
@@ -1087,6 +1227,7 @@ function createTriviaService(options = {}) {
     claimRoundXp,
     setMessageId,
     setEditMessageHandler,
+    setDeleteMessageHandler,
     setRoundCompleteHandler,
     setAwardXpHandler,
     isTriviaOpen,
@@ -1098,6 +1239,8 @@ function createTriviaService(options = {}) {
     nextHubQuestion,
     abortRound,
     releaseHubSession,
+    recoverStaleSession,
+    isSessionStale: () => isSessionStale(session),
     reset,
     clearAllTimers,
     getRecentQuestionIds,
@@ -1121,6 +1264,7 @@ module.exports = {
   TRIVIA_NEXT_QUESTION_DELAY_MS,
   TRIVIA_WRONG_ANSWER_NEXT_DELAY_MS,
   TRIVIA_TIMEOUT_MS: TRIVIA_QUESTION_TIMEOUT_MS,
+  TRIVIA_STALE_MS,
   TRIVIA_ROUND_WIN_XP,
   TRIVIA_TIE_XP,
   TRIVIA_DAILY_REWARD_CAP,

@@ -1,10 +1,17 @@
 /**
  * Shared final-message + stale-button cleanup for Telegram group games.
  * Rendering is output-only; callers must already have closed gameplay state.
+ *
+ * Message deletion is best-effort, keyed by gameType+sessionId, and only
+ * deletes Telegram IDs that were explicitly registered for that session.
+ * Community/scheduler open-question posts must never be registered here.
  */
 
 const { emptyInlineKeyboardExtra } = require("./expiredMessageCleanup");
-const { log } = require("./logger");
+const { log, error: logError } = require("./logger");
+
+/** Wait after a game has definitively ended before deleting bot game messages. */
+const GAME_MESSAGE_CLEANUP_DELAY_MS = 5 * 60 * 1000;
 
 const GAME_OVER_TOAST = "This game is over.";
 
@@ -141,8 +148,193 @@ async function answerGameOver(ctx, toast = GAME_OVER_TOAST) {
   }
 }
 
+function gameCleanupKey(gameType, sessionId) {
+  return `${String(gameType)}:${String(sessionId)}`;
+}
+
+function normalizeMessageIds(messageIds) {
+  const raw = Array.isArray(messageIds)
+    ? messageIds
+    : messageIds != null
+      ? [messageIds]
+      : [];
+  const ids = [];
+  const seen = new Set();
+  for (const id of raw) {
+    if (id == null || id === "") {
+      continue;
+    }
+    const key = String(id);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    ids.push(id);
+  }
+  return ids;
+}
+
+function resolveDeleteMessageFn(options) {
+  if (typeof options.deleteMessageFn === "function") {
+    return options.deleteMessageFn;
+  }
+  if (options.telegram && typeof options.telegram.deleteMessage === "function") {
+    return (chatId, messageId) => options.telegram.deleteMessage(chatId, messageId);
+  }
+  return null;
+}
+
+/** @type {Map<string, { handle: *, clear: Function, chatId: *, messageIds: Map<string, *>, gameType: string, sessionId: * }>} */
+const pendingGameCleanups = new Map();
+
+function rememberMessageIds(store, ids) {
+  for (const id of ids) {
+    store.set(String(id), id);
+  }
+}
+
+function addGameMessageIds(gameType, sessionId, chatId, messageIds) {
+  const key = gameCleanupKey(gameType, sessionId);
+  const existing = pendingGameCleanups.get(key);
+  const ids = normalizeMessageIds(messageIds);
+  if (!existing || !ids.length) {
+    return { added: false, key };
+  }
+  if (chatId != null) {
+    existing.chatId = chatId;
+  }
+  rememberMessageIds(existing.messageIds, ids);
+  return { added: true, key };
+}
+
+function getScheduledGameCleanupIds(gameType, sessionId) {
+  const existing = pendingGameCleanups.get(gameCleanupKey(gameType, sessionId));
+  if (!existing) {
+    return [];
+  }
+  return Array.from(existing.messageIds.keys());
+}
+
+/**
+ * After a game is already closed, delete only that session's registered
+ * bot message IDs. Delete failures are logged once and never retried.
+ * Cleanup timers are unref'd so they cannot keep the Node process open.
+ *
+ * @returns {{ scheduled: boolean, key: string|null, merged?: boolean, clear: Function }}
+ */
+function scheduleGameMessageCleanup(options = {}) {
+  const gameType = options.gameType || "game";
+  const sessionId = options.sessionId;
+  const chatId = options.chatId;
+  const ids = normalizeMessageIds(options.messageIds);
+  if (sessionId == null || sessionId === "" || chatId == null || ids.length === 0) {
+    return { scheduled: false, key: null, clear: () => {} };
+  }
+
+  const key = gameCleanupKey(gameType, sessionId);
+  const existing = pendingGameCleanups.get(key);
+  if (existing) {
+    existing.chatId = chatId;
+    rememberMessageIds(existing.messageIds, ids);
+    return { scheduled: true, key, merged: true, clear: existing.clear };
+  }
+
+  const delayMs =
+    typeof options.delayMs === "number" && options.delayMs >= 0
+      ? options.delayMs
+      : GAME_MESSAGE_CLEANUP_DELAY_MS;
+  const setTimeoutFn =
+    typeof options.setTimeoutFn === "function"
+      ? options.setTimeoutFn
+      : (fn, ms) => setTimeout(fn, ms);
+  const clearTimeoutFn =
+    typeof options.clearTimeoutFn === "function"
+      ? options.clearTimeoutFn
+      : (id) => clearTimeout(id);
+  const logErrorFn =
+    typeof options.logErrorFn === "function" ? options.logErrorFn : logError;
+  const shouldUnref = options.unref !== false;
+  const deleteMessageFn = resolveDeleteMessageFn(options);
+
+  const messageIds = new Map();
+  rememberMessageIds(messageIds, ids);
+
+  const handle = setTimeoutFn(() => {
+    const row = pendingGameCleanups.get(key);
+    pendingGameCleanups.delete(key);
+    const toDelete = row
+      ? Array.from(row.messageIds.values())
+      : Array.from(messageIds.values());
+    const targetChatId = row && row.chatId != null ? row.chatId : chatId;
+    if (typeof deleteMessageFn !== "function") {
+      return;
+    }
+    for (const messageId of toDelete) {
+      Promise.resolve(deleteMessageFn(targetChatId, messageId)).catch((err) => {
+        try {
+          logErrorFn(
+            `[game-cleanup] deleteMessage failed game=${gameType} session=${sessionId}:`,
+            err && err.message ? err.message : err
+          );
+        } catch (_err) {
+          /* ignore logging failures */
+        }
+      });
+    }
+  }, delayMs);
+
+  if (
+    shouldUnref &&
+    handle &&
+    typeof handle === "object" &&
+    typeof handle.unref === "function"
+  ) {
+    try {
+      handle.unref();
+    } catch (_err) {
+      /* ignore */
+    }
+  }
+
+  const clear = () => {
+    clearTimeoutFn(handle);
+    pendingGameCleanups.delete(key);
+  };
+
+  pendingGameCleanups.set(key, {
+    handle,
+    clear,
+    chatId,
+    messageIds,
+    gameType,
+    sessionId,
+  });
+  return { scheduled: true, key, clear };
+}
+
+function clearGameMessageCleanup(gameType, sessionId) {
+  const existing = pendingGameCleanups.get(gameCleanupKey(gameType, sessionId));
+  if (existing && typeof existing.clear === "function") {
+    existing.clear();
+  }
+}
+
+function clearAllGameMessageCleanups() {
+  for (const entry of pendingGameCleanups.values()) {
+    if (entry && typeof entry.clear === "function") {
+      entry.clear();
+    }
+  }
+  pendingGameCleanups.clear();
+}
+
+function getPendingGameMessageCleanupCount() {
+  return pendingGameCleanups.size;
+}
+
 module.exports = {
   GAME_OVER_TOAST,
+  GAME_MESSAGE_CLEANUP_DELAY_MS,
   FINAL_STATE,
   GAME_TYPE,
   emptyGameKeyboardExtra,
@@ -154,4 +346,10 @@ module.exports = {
   stripStaleCallbackButtons,
   answerGameOver,
   isMessageNotModifiedError,
+  scheduleGameMessageCleanup,
+  addGameMessageIds,
+  getScheduledGameCleanupIds,
+  clearGameMessageCleanup,
+  clearAllGameMessageCleanups,
+  getPendingGameMessageCleanupCount,
 };

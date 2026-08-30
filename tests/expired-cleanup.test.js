@@ -12,6 +12,11 @@ const {
   getPendingExpiredCleanupCount,
 } = require("../utils/expiredMessageCleanup");
 const {
+  GAME_MESSAGE_CLEANUP_DELAY_MS,
+  clearAllGameMessageCleanups,
+  getPendingGameMessageCleanupCount,
+} = require("../utils/gameCleanup");
+const {
   createChatFightService,
   buildTimeoutMessage,
   buildRevealTimeoutMessage,
@@ -64,6 +69,7 @@ function createFakeTimers() {
 async function runTest(name, fn) {
   resetEnv();
   clearAllExpiredMessageCleanups();
+  clearAllGameMessageCleanups();
   try {
     await fn();
     console.log(`✓ ${name}`);
@@ -78,6 +84,7 @@ async function main() {
     const extra = emptyInlineKeyboardExtra();
     assert.deepStrictEqual(extra.reply_markup.inline_keyboard, []);
     assert.strictEqual(EXPIRED_MESSAGE_CLEANUP_MS, 30_000);
+    assert.strictEqual(GAME_MESSAGE_CLEANUP_DELAY_MS, 5 * 60 * 1000);
   });
 
   await runTest("ChatFight timeout edits expired + schedules cleanup", async () => {
@@ -113,13 +120,14 @@ async function main() {
     assert.ok(edits[0].text.includes("CHAT FIGHT EXPIRED"));
     assert.ok(edits[0].text.includes("Nobody solved it in time"));
     assert.deepStrictEqual(edits[0].extra.reply_markup.inline_keyboard, []);
-    timers.advance(30_000);
+    timers.advance(GAME_MESSAGE_CLEANUP_DELAY_MS);
     await Promise.resolve();
     assert.ok(deleted.some((d) => d.messageId === 77));
+    assert.strictEqual(getPendingGameMessageCleanupCount(), 0);
     fight.reset();
   });
 
-  await runTest("ChatFight winner is not cleanup-deleted", async () => {
+  await runTest("ChatFight winner board is cleaned after delay, not immediately", async () => {
     const timers = createFakeTimers();
     const deleted = [];
     const fight = createChatFightService({
@@ -143,6 +151,9 @@ async function main() {
     timers.advance(90_000);
     await Promise.resolve();
     assert.strictEqual(deleted.length, 0);
+    timers.advance(GAME_MESSAGE_CLEANUP_DELAY_MS);
+    await Promise.resolve();
+    assert.ok(deleted.includes(88));
     fight.reset();
   });
 

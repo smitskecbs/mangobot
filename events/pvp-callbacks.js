@@ -16,13 +16,36 @@ const {
   getConnectFourRuntime,
 } = require("../services/connectFour");
 const {
-  scheduleExpiredMessageCleanup,
-} = require("../utils/expiredMessageCleanup");
-const {
   GAME_OVER_TOAST,
   GAME_TYPE,
   stripStaleCallbackButtons,
+  scheduleGameMessageCleanup,
 } = require("../utils/gameCleanup");
+
+function pvpCleanupGameType(runtime, session) {
+  const id = (session && session.game) || (runtime && runtime.GAME_ID);
+  return id === "connect4" ? GAME_TYPE.CONNECT4 : GAME_TYPE.TICTACTOE;
+}
+
+function isPvpTerminalStatus(status) {
+  return status === "won" || status === "draw" || status === "expired";
+}
+
+function schedulePvpSessionCleanup(session, telegram, gameType) {
+  if (!session || !isPvpTerminalStatus(session.status)) {
+    return;
+  }
+  if (session.messageId == null || session.chatId == null) {
+    return;
+  }
+  scheduleGameMessageCleanup({
+    gameType,
+    sessionId: session.id,
+    chatId: session.chatId,
+    messageIds: [session.messageId],
+    telegram,
+  });
+}
 
 function pvpGameType(parsed) {
   return parsed && parsed.game === "connect4"
@@ -148,18 +171,11 @@ function wireTimeoutMessageEdits(runtime, telegram, awardXpFn) {
     if (rendered) {
       await editSessionMessage(result.session, rendered);
     }
-    const status = result.session.status;
-    if (
-      status === "expired" &&
-      result.session.messageId != null &&
-      result.session.chatId != null
-    ) {
-      scheduleExpiredMessageCleanup({
-        telegram,
-        chatId: result.session.chatId,
-        messageId: result.session.messageId,
-      });
-    }
+    schedulePvpSessionCleanup(
+      result.session,
+      telegram,
+      pvpCleanupGameType(runtime, result.session)
+    );
   };
 
   if (typeof runtime.setRenderHandler === "function") {
@@ -307,6 +323,11 @@ async function handlePvpCallback(ctx, options = {}) {
     if (rendered) {
       await safeEdit(ctx, rendered.text, rendered.extra);
     }
+    schedulePvpSessionCleanup(
+      result.session,
+      ctx.telegram,
+      pvpGameType(parsed)
+    );
   }
 }
 

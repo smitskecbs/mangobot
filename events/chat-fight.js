@@ -14,6 +14,7 @@ const {
   tryClaimWinner,
   buildWinnerReply,
   isAllowedChatFightChat,
+  registerFightBotMessage,
 } = require("../services/chatFight");
 
 /**
@@ -76,7 +77,18 @@ function registerChatFightListener(bot, options = {}) {
     ctx.state.chatFightWinnerName = userName;
 
     const reply = buildWinnerReply(userName, awardResult);
-    ctx.reply(reply);
+    const sentPromise = Promise.resolve(ctx.reply(reply));
+    sentPromise
+      .then((sent) => {
+        const mid = sent && sent.message_id;
+        if (mid == null || !claim.fight || claim.fight.id == null) {
+          return;
+        }
+        if (typeof registerFightBotMessage === "function") {
+          registerFightBotMessage(mid, claim.fight);
+        }
+      })
+      .catch(() => {});
 
     return continueChain();
   });

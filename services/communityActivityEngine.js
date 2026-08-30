@@ -880,6 +880,7 @@ async function processCommunityActivitySlot({
     const text = formatCommunityQuestionMessage(picked.question);
     try {
       // Always General / root chat — never attach Games topic thread.
+      // Open questions are not game-session messages; do not register cleanup.
       const ok = await sendMessage(chatId, text);
       if (!ok) {
         return { ok: false, reason: "send-failed" };

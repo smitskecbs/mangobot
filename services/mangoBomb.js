@@ -18,6 +18,8 @@ const {
   logGameCleanup,
   logCleanupRenderFailed,
   emptyGameKeyboardExtra,
+  scheduleGameMessageCleanup,
+  addGameMessageIds,
 } = require("../utils/gameCleanup");
 
 const STATUS = Object.freeze({
@@ -236,6 +238,7 @@ function createMangoBombService(options = {}) {
   let editMessage = null;
   let awardXpFn = null;
   let walletReminderFn = null;
+  let deleteMessageFn = null;
   let injectedQueueStage = null;
   let injectedQueueHangStage = null;
   let queueHang = null;
@@ -732,7 +735,23 @@ function createMangoBombService(options = {}) {
       fallbackSent: false,
     };
     finalUiByGameId.set(game.id, ui);
+    scheduleClosedGameMessages(game);
     return ui;
+  }
+
+  function scheduleClosedGameMessages(game) {
+    if (!game || game.chatId == null || game.messageId == null) {
+      return;
+    }
+    scheduleGameMessageCleanup({
+      gameType: GAME_TYPE.MANGOBOMB,
+      sessionId: game.id,
+      chatId: game.chatId,
+      messageIds: [game.messageId],
+      setTimeoutFn,
+      clearTimeoutFn,
+      deleteMessageFn,
+    });
   }
 
   function trackWinnerUi(promise) {
@@ -911,7 +930,12 @@ function createMangoBombService(options = {}) {
       if (ui.threadId != null) {
         extra.message_thread_id = ui.threadId;
       }
-      await sendMessage(ui.chatId, ui.text, extra);
+      const sent = await sendMessage(ui.chatId, ui.text, extra);
+      const mid =
+        sent && (sent.message_id != null ? sent.message_id : sent.messageId);
+      if (mid != null) {
+        addGameMessageIds(GAME_TYPE.MANGOBOMB, ui.gameId, ui.chatId, [mid]);
+      }
       ui.winnerUiState = "visible";
       log("[mango-bomb] winner fallback sent");
     } catch (_err) {
@@ -1775,6 +1799,9 @@ function createMangoBombService(options = {}) {
     },
     setEditMessageHandler(fn) {
       editMessage = typeof fn === "function" ? fn : null;
+    },
+    setDeleteMessageHandler(fn) {
+      deleteMessageFn = typeof fn === "function" ? fn : null;
     },
     setSendMessageHandler(fn) {
       sendMessage = typeof fn === "function" ? fn : null;

@@ -5,12 +5,14 @@
  */
 
 const { Markup } = require("telegraf");
-const { scheduleExpiredMessageCleanup } = require("../utils/expiredMessageCleanup");
 const {
   GAME_TYPE,
   FINAL_STATE,
+  GAME_MESSAGE_CLEANUP_DELAY_MS,
   logGameCleanup,
   emptyGameKeyboardExtra,
+  scheduleGameMessageCleanup,
+  addGameMessageIds,
 } = require("../utils/gameCleanup");
 
 const CHAT_FIGHT_DURATION_MS = 60 * 1000;
@@ -426,6 +428,9 @@ function createChatFightService(options = {}) {
     typeof options.sendMessage === "function" ? options.sendMessage : null;
   let editMessage =
     typeof options.editMessage === "function" ? options.editMessage : null;
+  let deleteMessageFn =
+    typeof options.deleteMessageFn === "function" ? options.deleteMessageFn : null;
+  let telegramRef = options.telegram || null;
 
   let fight = null;
   let lastStartedAt = null;
@@ -491,6 +496,50 @@ function createChatFightService(options = {}) {
     return getCooldownRemainingMs() > 0;
   }
 
+  function scheduleFightMessageCleanup(target) {
+    const row = target || fight;
+    if (!row || row.chatId == null || row.messageId == null || row.id == null) {
+      return;
+    }
+    scheduleGameMessageCleanup({
+      gameType: GAME_TYPE.CHATFIGHT,
+      sessionId: row.id,
+      chatId: row.chatId,
+      messageIds: [row.messageId],
+      delayMs: GAME_MESSAGE_CLEANUP_DELAY_MS,
+      setTimeoutFn,
+      clearTimeoutFn,
+      deleteMessageFn,
+      telegram: telegramRef,
+    });
+  }
+
+  function registerFightBotMessage(messageId, target) {
+    const row = target || fight;
+    if (!row || row.id == null || row.chatId == null || messageId == null) {
+      return;
+    }
+    const added = addGameMessageIds(
+      GAME_TYPE.CHATFIGHT,
+      row.id,
+      row.chatId,
+      [messageId]
+    );
+    if (!added.added) {
+      scheduleGameMessageCleanup({
+        gameType: GAME_TYPE.CHATFIGHT,
+        sessionId: row.id,
+        chatId: row.chatId,
+        messageIds: [messageId],
+        delayMs: GAME_MESSAGE_CLEANUP_DELAY_MS,
+        setTimeoutFn,
+        clearTimeoutFn,
+        deleteMessageFn,
+        telegram: telegramRef,
+      });
+    }
+  }
+
   function notifyTimeout(text) {
     if (!fight) {
       return;
@@ -499,26 +548,10 @@ function createChatFightService(options = {}) {
     const chatId = fight.chatId;
     const messageId = fight.messageId;
     logGameCleanup(GAME_TYPE.CHATFIGHT, FINAL_STATE.EXPIRED);
-
-    const afterEdit = () => {
-      if (messageId != null) {
-        scheduleExpiredMessageCleanup({
-          chatId,
-          messageId,
-          setTimeoutFn,
-          clearTimeoutFn,
-          deleteMessageFn:
-            typeof options.deleteMessageFn === "function"
-              ? options.deleteMessageFn
-              : null,
-          telegram: options.telegram || null,
-        });
-      }
-    };
+    scheduleFightMessageCleanup(fight);
 
     if (typeof editMessage === "function" && messageId != null) {
       Promise.resolve(editMessage(chatId, messageId, text, extra))
-        .then(afterEdit)
         .catch(() => {
           const notify =
             typeof fight.sendMessage === "function"
@@ -810,6 +843,7 @@ function createChatFightService(options = {}) {
     fight.status = FIGHT_STATUS.WON;
     fight.winnerUserId = String(userId);
     clearFightTimer();
+    scheduleFightMessageCleanup(fight);
 
     return {
       claimed: true,
@@ -861,6 +895,10 @@ function createChatFightService(options = {}) {
     editMessage = typeof fn === "function" ? fn : null;
   }
 
+  function setDeleteMessageHandler(fn) {
+    deleteMessageFn = typeof fn === "function" ? fn : null;
+  }
+
   function setLastStartedAt(ts) {
     lastStartedAt = ts;
   }
@@ -885,6 +923,8 @@ function createChatFightService(options = {}) {
     setLastStartedAt,
     setFightMessageId,
     setEditMessageHandler,
+    setDeleteMessageHandler,
+    registerFightBotMessage,
     abortUnpublishedFight,
     getRuntimeStatus,
     clearFightTimer,
@@ -950,6 +990,10 @@ module.exports = {
   setFightMessageId: (...args) => defaultService.setFightMessageId(...args),
   setEditMessageHandler: (...args) =>
     defaultService.setEditMessageHandler(...args),
+  setDeleteMessageHandler: (...args) =>
+    defaultService.setDeleteMessageHandler(...args),
+  registerFightBotMessage: (...args) =>
+    defaultService.registerFightBotMessage(...args),
   abortUnpublishedFight: (...args) =>
     defaultService.abortUnpublishedFight(...args),
   getRuntimeStatus: (...args) => defaultService.getRuntimeStatus(...args),

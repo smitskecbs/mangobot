@@ -105,6 +105,12 @@ function startBotRuntime({
       /* ignore */
     }
     try {
+      const { clearAllGameMessageCleanups } = require("./gameCleanup");
+      clearAllGameMessageCleanups();
+    } catch (_err) {
+      /* ignore */
+    }
+    try {
       const { getTriviaRuntime } = require("../services/trivia");
       const runtime = getTriviaRuntime();
       if (runtime && typeof runtime.clearAllTimers === "function") {

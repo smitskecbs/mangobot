@@ -12,6 +12,7 @@ const {
   startFight,
   revealFight,
   setFightMessageId,
+  setDeleteMessageHandler,
   REVEAL_CALLBACK_DATA,
   buildRevealTimeoutMessage,
   buildTimeoutMessage,
@@ -242,6 +243,11 @@ async function handleChatFightReveal(ctx, options = {}) {
 }
 
 module.exports = (bot) => {
+  if (bot && bot.telegram && typeof bot.telegram.deleteMessage === "function") {
+    setDeleteMessageHandler((chatId, messageId) =>
+      bot.telegram.deleteMessage(chatId, messageId)
+    );
+  }
   bot.command("chatfight", (ctx) =>
     Promise.resolve(handleChatFight(ctx)).catch(() => undefined)
   );
