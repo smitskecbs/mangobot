@@ -851,12 +851,20 @@ async function main() {
     }
   });
 
-  await runTest("25. client still only sends token + signature", () => {
-    const api = fs.readFileSync("C:\\Users\\kevin\\cbs-projects\\mango\\src\\adminDeliveryApi.ts", "utf8");
-    assert.ok(api.includes("{ token }"));
-    assert.ok(api.includes("{ token, signature }") || api.includes("token, signature"));
-    assert.ok(!api.includes("mint:"));
-    assert.ok(!api.includes("amountBaseUnits:"));
+  await runTest("25. delivery API only reads token + signature from the client body", () => {
+    // Do not read the website repo (that path does not exist on Hetzner).
+    // Bot-side contract: status/payment/confirm use body.token / body.signature
+    // and ignoreClientOverrides rejects client mint/amount.
+    const api = fs.readFileSync(
+      path.join(__dirname, "..", "services", "deliveryApi.js"),
+      "utf8"
+    );
+    assert.ok(api.includes("body && body.token"));
+    assert.ok(api.includes("body && body.signature"));
+    assert.ok(api.includes("ignoreClientOverrides"));
+    assert.ok(!api.includes("body.mint"));
+    assert.ok(!api.includes("body.amountBaseUnits"));
+    assert.ok(!api.includes("body.destination"));
   });
 
   await runTest("26. SPL reconcile uses frozen mint not MANGO", async () => {

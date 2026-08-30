@@ -573,50 +573,27 @@ async function main() {
     assert.ok(resolved.includes("mango-ww-isolate-") || resolved.includes(os.tmpdir()));
   });
 
-  await runTest("award path does not mutate production weekly-winners sentinel", () => {
+  await runTest("award path writes isolated weekly-winners, not the production path", () => {
     setWeeklyWinnersFileForTests(null);
     delete process.env.WEEKLY_WINNERS_FILE;
+    const isolated = resolveWinnersFile();
+    assert.notStrictEqual(path.resolve(isolated), path.resolve(DEFAULT_WINNERS_FILE));
+    assert.ok(isolated.includes("mango-ww-isolate-") || isolated.includes(os.tmpdir()));
 
-    const dir = path.dirname(DEFAULT_WINNERS_FILE);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    const existed = fs.existsSync(DEFAULT_WINNERS_FILE);
-    const stamp = `SENTINEL_POLLUTION_GUARD_${Date.now()}`;
-    const previous = existed
-      ? fs.readFileSync(DEFAULT_WINNERS_FILE, "utf8")
-      : null;
-    if (!existed) {
-      fs.writeFileSync(
-        DEFAULT_WINNERS_FILE,
-        `${JSON.stringify({ sentinel: stamp, latest: null }, null, 2)}\n`,
-        "utf8"
-      );
-    }
-    const before = fs.readFileSync(DEFAULT_WINNERS_FILE, "utf8");
+    // These fixture IDs previously polluted production standings when the
+    // default path was used. Never open data/weekly-winners.json here — on
+    // Hetzner that file is live runtime state.
+    awardDailyActivityPoint(42, "Kevin", pointsFile());
+    awardDailyActivityPoint(99, "Ada", pointsFile());
+    awardDailyActivityPoint(111, "Player", pointsFile());
+    awardDailyActivityPoint(222, "Alice", pointsFile());
+    awardDailyActivityPoint(111111111, "Ada", pointsFile());
+    noteWeeklyStanding(42, "Kevin", getWeekId(), 3);
 
-    try {
-      // These fixture IDs previously polluted production standings.
-      awardDailyActivityPoint(42, "Kevin", pointsFile());
-      awardDailyActivityPoint(99, "Ada", pointsFile());
-      awardDailyActivityPoint(111, "Player", pointsFile());
-      awardDailyActivityPoint(222, "Alice", pointsFile());
-      awardDailyActivityPoint(111111111, "Ada", pointsFile());
-      noteWeeklyStanding(42, "Kevin", getWeekId(), 3);
-
-      const after = fs.readFileSync(DEFAULT_WINNERS_FILE, "utf8");
-      assert.strictEqual(after, before);
-    } finally {
-      if (!existed) {
-        try {
-          fs.unlinkSync(DEFAULT_WINNERS_FILE);
-        } catch (_err) {
-          /* ignore */
-        }
-      } else if (previous != null) {
-        // Leave production content untouched (we asserted equality).
-      }
-    }
+    const state = readWinnersState(isolated);
+    assert.ok(state.current && state.current.standings);
+    assert.strictEqual(state.current.standings["42"].weeklyPoints, 3);
+    assert.strictEqual(state.current.standings["42"].name, "Kevin");
   });
 
   await runTest("reconstruct current standings from points; preserve latest", () => {

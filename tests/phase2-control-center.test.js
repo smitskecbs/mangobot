@@ -73,19 +73,11 @@ const TODAY = getTodayDate(new Date(NOW));
 const originalAdmin = process.env.ADMIN_USER_ID;
 process.env.ADMIN_USER_ID = ADMIN_ID;
 
-const prodRoots = [
-  path.join(__dirname, "..", "points.json"),
-  path.join(__dirname, "..", "data", "wallet-links.json"),
-  path.join(__dirname, "..", "data", "community-builders.json"),
-  path.join(__dirname, "..", "data", "member-rewards.json"),
-  path.join(__dirname, "..", "data", "mango-shop.json"),
-];
-const prodMtimes = {};
-for (const file of prodRoots) {
-  if (fs.existsSync(file)) {
-    prodMtimes[file] = fs.statSync(file).mtimeMs;
-  }
-}
+const PROD_POINTS = path.resolve(__dirname, "..", "points.json");
+const PROD_WALLETS = path.resolve(__dirname, "..", "data", "wallet-links.json");
+const PROD_BUILDERS = path.resolve(__dirname, "..", "data", "community-builders.json");
+const PROD_REWARDS = path.resolve(__dirname, "..", "data", "member-rewards.json");
+const PROD_SHOP = path.resolve(__dirname, "..", "data", "mango-shop.json");
 
 let n = 0;
 
@@ -334,6 +326,17 @@ function harness() {
     shopFile,
     wallets: [aliceWallet, bobWallet, lojayWallet],
   };
+}
+
+function assertHarnessIsolated(h) {
+  assert.notStrictEqual(path.resolve(h.pointsFile), PROD_POINTS);
+  assert.notStrictEqual(path.resolve(h.walletFile), PROD_WALLETS);
+  assert.notStrictEqual(path.resolve(h.storeFile), PROD_BUILDERS);
+  assert.notStrictEqual(path.resolve(h.rewardsFile), PROD_REWARDS);
+  assert.notStrictEqual(path.resolve(h.shopFile), PROD_SHOP);
+  for (const file of [h.pointsFile, h.walletFile, h.rewardsFile, h.storeFile, h.shopFile]) {
+    assert.ok(file.startsWith(tempDir), file);
+  }
 }
 
 async function main() {
@@ -684,6 +687,7 @@ async function main() {
 
   await runTest("37-40. callback security, no xp/bp browse mutation, no prod files", async () => {
   const h = harness();
+  assertHarnessIsolated(h);
   const pointsBefore = fs.readFileSync(h.pointsFile, "utf8");
   const builderBefore = fs.readFileSync(h.storeFile, "utf8");
   const ctx = mockCtx();
@@ -743,16 +747,6 @@ async function main() {
     assert.strictEqual(isAdmin(ALICE), false);
   });
 
-  for (const file of prodRoots) {
-    if (!fs.existsSync(file)) {
-      continue;
-    }
-    assert.strictEqual(
-      fs.statSync(file).mtimeMs,
-      prodMtimes[file],
-      `production file mutated: ${file}`
-    );
-  }
   console.log("\nAll phase2-control-center tests passed.");
 }
 
