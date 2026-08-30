@@ -90,6 +90,23 @@ function utcDate(iso) {
   return new Date(iso);
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function resetGameSingletons() {
+  try {
+    require("../services/trivia").getTriviaRuntime().reset();
+  } catch (_err) {
+    /* optional in early boot */
+  }
+  try {
+    require("../services/chatFight").chatFightRuntime.reset();
+  } catch (_err) {
+    /* optional in early boot */
+  }
+}
+
 async function runTest(name, fn) {
   try {
     await fn();
@@ -97,6 +114,18 @@ async function runTest(name, fn) {
   } catch (err) {
     console.error(`✗ ${name}`);
     throw err;
+  } finally {
+    const live = getLiveCommunityScheduler();
+    if (live && typeof live.stop === "function") {
+      live.stop("test-teardown");
+    }
+    if (live && typeof live.isTickInFlight === "function") {
+      const deadline = Date.now() + 500;
+      while (live.isTickInFlight() && Date.now() < deadline) {
+        await sleep(10);
+      }
+    }
+    resetGameSingletons();
   }
 }
 
@@ -947,6 +976,7 @@ async function main() {
     const dup = (again.activity.results || []).filter((r) => r.slot === "act1830");
     assert.ok(dup.every((r) => r.reason === "already-processed" || !r.sent));
     sched.stop();
+    service.reset();
   });
 
   await runTest("engine-only: reminders+auto off still processes slot", async () => {
@@ -1363,10 +1393,6 @@ async function main() {
     sched.stop();
   });
 
-  function sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
   await runTest("REAL setInterval pulses tickCount (production path)", async () => {
     const {
       parseActivityEngineConfig,
@@ -1391,6 +1417,7 @@ async function main() {
       timeZone: "UTC",
       stateFile: file,
       tickMs: 25,
+      probeDelayMs: 0,
       activityEngineConfig: cfg,
       autoChatFightConfig: {
         enabled: false,
@@ -1580,6 +1607,7 @@ async function main() {
         chatId: "1",
         stateFile: stateFile(),
         tickMs: 25,
+        probeDelayMs: 0,
         activityEngineConfig: cfg,
         autoChatFightConfig: {
           enabled: false,
@@ -1708,7 +1736,9 @@ async function main() {
       {
         stateFile: file,
         tickMs: 25,
+        probeDelayMs: 0,
         timeZone: "Europe/Amsterdam",
+        activityRandom: () => 0.99,
       }
     );
     try {
@@ -1990,6 +2020,7 @@ async function main() {
   });
 
   fs.rmSync(tempDir, { recursive: true, force: true });
+  resetGameSingletons();
   console.log("\nAll community-scheduler tests passed.");
 }
 

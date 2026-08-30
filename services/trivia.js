@@ -409,7 +409,13 @@ function createTriviaService(options = {}) {
   const setTimeoutFn =
     typeof options.setTimeoutFn === "function"
       ? options.setTimeoutFn
-      : (fn, ms) => setTimeout(fn, ms);
+      : (fn, ms) => {
+          const handle = setTimeout(fn, ms);
+          if (handle && typeof handle.unref === "function") {
+            handle.unref();
+          }
+          return handle;
+        };
   const clearTimeoutFn =
     typeof options.clearTimeoutFn === "function"
       ? options.clearTimeoutFn

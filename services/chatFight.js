@@ -403,10 +403,18 @@ function getRevealKeyboard() {
   ]);
 }
 
+function nativeTimeoutUnref(fn, ms) {
+  const handle = setTimeout(fn, ms);
+  if (handle && typeof handle.unref === "function") {
+    handle.unref();
+  }
+  return handle;
+}
+
 function createChatFightService(options = {}) {
   const now = typeof options.now === "function" ? options.now : () => Date.now();
   const setTimeoutFn =
-    typeof options.setTimeout === "function" ? options.setTimeout : setTimeout;
+    typeof options.setTimeout === "function" ? options.setTimeout : nativeTimeoutUnref;
   const clearTimeoutFn =
     typeof options.clearTimeout === "function"
       ? options.clearTimeout

@@ -78,6 +78,12 @@ async function runTest(name, fn) {
   } catch (err) {
     console.error(`✗ ${name}`);
     throw err;
+  } finally {
+    try {
+      require("../services/trivia").getTriviaRuntime().reset();
+    } catch (_err) {
+      /* ignore */
+    }
   }
 }
 
@@ -87,6 +93,13 @@ function createService() {
     durationMs: 60_000,
     revealWaitMs: 300_000,
     cooldownMs: CHAT_FIGHT_COOLDOWN_MS,
+    setTimeout: (fn, ms) => {
+      const handle = setTimeout(fn, ms);
+      if (handle && typeof handle.unref === "function") {
+        handle.unref();
+      }
+      return handle;
+    },
   });
 }
 
