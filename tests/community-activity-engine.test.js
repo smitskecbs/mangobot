@@ -23,13 +23,18 @@ const {
   chooseAction,
 } = require("../services/communityActivityEngine");
 const {
-  createCommunityScheduler,
+  createCommunityScheduler: createCommunitySchedulerImpl,
   getZonedClock,
 } = require("../services/communityScheduler");
 const {
   resetCommunityActivityPulse,
   noteCommunityActivity,
 } = require("../utils/communityActivityPulse");
+const { savePoints } = require("../services/points");
+const {
+  writeWinnersState,
+  emptyState,
+} = require("../services/weeklyWinners");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-acteng-"));
 let n = 0;
@@ -42,6 +47,28 @@ function stateFile() {
 
 function utcDate(iso) {
   return new Date(iso);
+}
+
+/**
+ * Same isolation as community-scheduler tests: enabled ticks always run
+ * weekly-boundary sync. Without empty temp points/winners, Hetzner reads
+ * production points.json and announces an extra winners message — which
+ * would fail "no catch-up" sent.length === 0.
+ */
+function hermeticWeeklyDeps() {
+  n += 1;
+  const pointsFile = path.join(tempDir, `hermetic-points-${n}.json`);
+  const weeklyWinnersFile = path.join(tempDir, `hermetic-winners-${n}.json`);
+  savePoints({ users: {} }, pointsFile);
+  writeWinnersState(emptyState(), weeklyWinnersFile);
+  return { pointsFile, weeklyWinnersFile };
+}
+
+function createCommunityScheduler(options = {}) {
+  return createCommunitySchedulerImpl({
+    ...hermeticWeeklyDeps(),
+    ...options,
+  });
 }
 
 async function runTest(name, fn) {
