@@ -12,6 +12,7 @@ const {
   createTriviaService,
   parseTriviaCallbackData,
   buildAnswerCallbackData,
+  buildHubNavCallbackData,
   STATUS,
   TRIVIA_ROUND_QUESTIONS,
   TRIVIA_ROUND_WIN_XP,
@@ -37,6 +38,7 @@ const {
 const {
   handleTrivia,
   handleTriviaAnswer,
+  handleTriviaHubCallback,
 } = require("../commands/trivia");
 const {
   isCommunityChallengeBusy,
@@ -227,6 +229,7 @@ function createMockCtx({
   memberStatus = "member",
   callbackData,
   messageThreadId,
+  messageId = 9001,
 } = {}) {
   const replies = [];
   const replyExtras = [];
@@ -241,7 +244,7 @@ function createMockCtx({
         data: callbackData,
         from: { id: userId, is_bot: isBot },
         message: {
-          message_id: 9001,
+          message_id: messageId,
           chat: { id: chatId, type: chatType },
           ...(messageThreadId != null
             ? { message_thread_id: messageThreadId }
@@ -899,6 +902,492 @@ async function main() {
       canManageGroupFn: async () => true,
     });
     assert.ok(privateCtx.replies[0].includes("community group"));
+  });
+
+  function createPersonalService(overrides = {}) {
+    return createService({ questions: TRIVIA_QUESTIONS, ...overrides });
+  }
+
+  function startPersonal(
+    service,
+    {
+      userId,
+      category,
+      messageId,
+      displayName,
+      randomId,
+    } = {}
+  ) {
+    const started = service.startTrivia({
+      chatId: COMMUNITY_CHAT,
+      source: "manual",
+      hubMode: true,
+      category,
+      userId,
+      displayName,
+    });
+    assert.strictEqual(started.ok, true, randomId || "personal start");
+    if (messageId != null) {
+      service.setMessageId(started.session.id, messageId);
+    }
+    return started;
+  }
+
+  function answerSession(service, sessionId, userId, name, correct = true) {
+    const snap = service.getSnapshot(sessionId);
+    assert.ok(snap);
+    return service.tryAnswer({
+      sessionId,
+      userId,
+      answerIndex: correct ? snap.correctIndex : (snap.correctIndex + 1) % 4,
+      chatId: COMMUNITY_CHAT,
+      displayName: name,
+    });
+  }
+
+  await runTest("A-C. parallel personal Trivia stays isolated by owner", () => {
+    const { service } = createPersonalService();
+    const kevin = startPersonal(service, {
+      userId: USER_A,
+      category: "math",
+      messageId: 101,
+      displayName: "Kevin",
+    });
+    const piet = startPersonal(service, {
+      userId: USER_B,
+      category: "geography",
+      messageId: 202,
+      displayName: "Piet",
+    });
+    assert.strictEqual(service.isPersonalTriviaOpen(COMMUNITY_CHAT, USER_A), true);
+    assert.strictEqual(service.isPersonalTriviaOpen(COMMUNITY_CHAT, USER_B), true);
+    assert.strictEqual(kevin.session.category, "math");
+    assert.strictEqual(piet.session.category, "geography");
+    assert.notStrictEqual(kevin.session.id, piet.session.id);
+
+    const aAnswer = answerSession(service, kevin.session.id, USER_A, "Kevin");
+    assert.strictEqual(aAnswer.ok, true);
+    assert.strictEqual(
+      service.getSnapshot(piet.session.id).questionPhase,
+      "open"
+    );
+    assert.strictEqual(
+      service.getSnapshot(piet.session.id).category,
+      "geography"
+    );
+
+    const bAnswer = answerSession(service, piet.session.id, USER_B, "Piet");
+    assert.strictEqual(bAnswer.ok, true);
+    assert.strictEqual(
+      service.getSnapshot(kevin.session.id).questionPhase,
+      "resolved"
+    );
+    assert.strictEqual(service.getSnapshot(kevin.session.id).category, "math");
+  });
+
+  await runTest("D. outsider personal answer is denied without XP or state change", () => {
+    const file = pointsFile();
+    const awards = [];
+    const { service } = createPersonalService();
+    service.setAwardXpHandler((uid, name, payload) => {
+      awards.push({ uid, name, payload });
+      return awardTriviaAttemptXp(uid, name, payload, file);
+    });
+    const kevin = startPersonal(service, {
+      userId: USER_A,
+      category: "math",
+      messageId: 101,
+      displayName: "Kevin",
+    });
+    const before = service.getSnapshot(kevin.session.id);
+    const denied = service.tryAnswer({
+      sessionId: kevin.session.id,
+      userId: USER_B,
+      answerIndex: before.correctIndex,
+      chatId: COMMUNITY_CHAT,
+      displayName: "Piet",
+    });
+    assert.strictEqual(denied.ok, false);
+    assert.strictEqual(denied.reason, "not-owner");
+    assert.strictEqual(awards.length, 0);
+    const after = service.getSnapshot(kevin.session.id);
+    assert.strictEqual(after.questionPhase, before.questionPhase);
+    assert.deepStrictEqual(after.answeredUsers, before.answeredUsers);
+    assert.strictEqual(Object.keys(loadPoints(file).users || {}).length, 0);
+  });
+
+  await runTest("D-handler. outsider callback does not edit or reward", async () => {
+    const file = pointsFile();
+    const { service } = createPersonalService();
+    service.setAwardXpHandler((uid, name, payload) =>
+      awardTriviaAttemptXp(uid, name, payload, file)
+    );
+    const kevin = startPersonal(service, {
+      userId: USER_A,
+      category: "math",
+      messageId: 101,
+      displayName: "Kevin",
+    });
+    const snap = service.getSnapshot(kevin.session.id);
+    const piet = createMockCtx({
+      userId: USER_B,
+      firstName: "Piet",
+      callbackData: buildAnswerCallbackData(kevin.session.id, snap.correctIndex),
+      messageId: 101,
+    });
+    await handleTriviaAnswer(piet, { runtime: service });
+    assert.ok(
+      String(piet.cbAnswers[0]).includes("belongs to Kevin")
+    );
+    assert.strictEqual(piet.edited.length, 0);
+    assert.strictEqual(
+      service.getSnapshot(kevin.session.id).questionPhase,
+      "open"
+    );
+    assert.strictEqual(Object.keys(loadPoints(file).users || {}).length, 0);
+  });
+
+  await runTest("E. Next only advances the owning personal session", async () => {
+    const { service } = createPersonalService();
+    const kevin = startPersonal(service, {
+      userId: USER_A,
+      category: "math",
+      messageId: 101,
+      displayName: "Kevin",
+    });
+    const piet = startPersonal(service, {
+      userId: USER_B,
+      category: "geography",
+      messageId: 202,
+      displayName: "Piet",
+    });
+    answerSession(service, kevin.session.id, USER_A, "Kevin");
+    const pietBefore = service.getSnapshot(piet.session.id);
+    const ctx = createMockCtx({
+      userId: USER_A,
+      firstName: "Kevin",
+      callbackData: buildHubNavCallbackData("next", kevin.session.id),
+      messageId: 101,
+    });
+    await handleTriviaHubCallback(ctx, { runtime: service, isBusyFn: () => false });
+    const kevinAfter = service.getSnapshot(kevin.session.id);
+    const pietAfter = service.getSnapshot(piet.session.id);
+    assert.strictEqual(kevinAfter.questionNumber, 2);
+    assert.strictEqual(kevinAfter.questionPhase, "open");
+    assert.strictEqual(pietAfter.questionId, pietBefore.questionId);
+    assert.strictEqual(pietAfter.questionNumber, pietBefore.questionNumber);
+    assert.strictEqual(pietAfter.category, "geography");
+  });
+
+  await runTest("F. Change Category only ends the owning personal session", async () => {
+    const { service } = createPersonalService();
+    const kevin = startPersonal(service, {
+      userId: USER_A,
+      category: "math",
+      messageId: 101,
+      displayName: "Kevin",
+    });
+    const piet = startPersonal(service, {
+      userId: USER_B,
+      category: "geography",
+      messageId: 202,
+      displayName: "Piet",
+    });
+    const ctx = createMockCtx({
+      userId: USER_A,
+      firstName: "Kevin",
+      callbackData: buildHubNavCallbackData("change", kevin.session.id),
+      messageId: 101,
+    });
+    await handleTriviaHubCallback(ctx, { runtime: service, isBusyFn: () => false });
+    assert.strictEqual(service.isPersonalTriviaOpen(COMMUNITY_CHAT, USER_A), false);
+    assert.strictEqual(service.isPersonalTriviaOpen(COMMUNITY_CHAT, USER_B), true);
+    assert.strictEqual(service.getSnapshot(piet.session.id).category, "geography");
+  });
+
+  await runTest("G. personal timeout does not end the other session", () => {
+    const { service, timers } = createPersonalService({ questionTimeoutMs: 1_000 });
+    const kevin = startPersonal(service, {
+      userId: USER_A,
+      category: "math",
+      messageId: 101,
+      displayName: "Kevin",
+    });
+    timers.advance(500);
+    const piet = startPersonal(service, {
+      userId: USER_B,
+      category: "geography",
+      messageId: 202,
+      displayName: "Piet",
+    });
+    timers.advance(500);
+    assert.strictEqual(
+      service.getSnapshot(kevin.session.id).questionPhase,
+      "resolved"
+    );
+    assert.strictEqual(service.isPersonalTriviaOpen(COMMUNITY_CHAT, USER_B), true);
+    assert.strictEqual(
+      service.getSnapshot(piet.session.id).questionPhase,
+      "open"
+    );
+  });
+
+  await runTest("H. ending one personal session leaves the other active", async () => {
+    const { service } = createPersonalService();
+    const kevin = startPersonal(service, {
+      userId: USER_A,
+      category: "math",
+      messageId: 101,
+      displayName: "Kevin",
+    });
+    const piet = startPersonal(service, {
+      userId: USER_B,
+      category: "geography",
+      messageId: 202,
+      displayName: "Piet",
+    });
+    const ctx = createMockCtx({
+      userId: USER_A,
+      firstName: "Kevin",
+      callbackData: buildHubNavCallbackData("games", kevin.session.id),
+      messageId: 101,
+    });
+    await handleTriviaHubCallback(ctx, { runtime: service, isBusyFn: () => false });
+    assert.strictEqual(service.isPersonalTriviaOpen(COMMUNITY_CHAT, USER_A), false);
+    assert.strictEqual(service.isPersonalTriviaOpen(COMMUNITY_CHAT, USER_B), true);
+    assert.strictEqual(service.getSession(piet.session.id).status, STATUS.ACTIVE);
+  });
+
+  await runTest("I. personal Trivia does not set community busy", async () => {
+    const { service } = createPersonalService();
+    startPersonal(service, {
+      userId: USER_A,
+      category: "math",
+      messageId: 101,
+      displayName: "Kevin",
+    });
+    assert.strictEqual(service.isCommunityTriviaOpen(), false);
+    assert.strictEqual(
+      isCommunityChallengeBusy({
+        isChatFightOpenFn: () => false,
+        isTicTacToeOpenFn: () => false,
+        isConnectFourOpenFn: () => false,
+        isTriviaOpenFn: () => service.isCommunityTriviaOpen(),
+        isMangoBombOpenFn: () => false,
+      }),
+      false
+    );
+    const piet = createMockCtx({ userId: USER_B, firstName: "Piet" });
+    await handleTrivia(piet, {
+      runtime: service,
+      startTriviaFn: (p) => service.startTrivia(p),
+      isBusyFn: () =>
+        isCommunityChallengeBusy({
+          isChatFightOpenFn: () => false,
+          isTriviaOpenFn: () => service.isCommunityTriviaOpen(),
+          isMangoBombOpenFn: () => false,
+        }),
+    });
+    assert.ok(String(piet.replies[0]).includes("Choose a category"));
+    const started = service.startTrivia({
+      chatId: COMMUNITY_CHAT,
+      hubMode: true,
+      category: "history",
+      userId: USER_B,
+      displayName: "Piet",
+    });
+    assert.strictEqual(started.ok, true);
+  });
+
+  await runTest("J-K. personal and community Trivia coexist; community race stays open", () => {
+    const { service } = createPersonalService();
+    const kevin = startPersonal(service, {
+      userId: USER_A,
+      category: "math",
+      messageId: 101,
+      displayName: "Kevin",
+    });
+    const community = service.startTrivia({
+      chatId: COMMUNITY_CHAT,
+      source: "auto",
+      autoIntro: true,
+      category: "random",
+      hubMode: false,
+    });
+    assert.strictEqual(community.ok, true);
+    service.setMessageId(community.session.id, 303);
+    assert.strictEqual(service.isPersonalTriviaOpen(COMMUNITY_CHAT, USER_A), true);
+    assert.strictEqual(service.isCommunityTriviaOpen(COMMUNITY_CHAT), true);
+    assert.strictEqual(kevin.session.hubMode, true);
+    assert.strictEqual(community.session.hubMode, false);
+
+    const snap = service.getSnapshot(community.session.id);
+    const first = service.tryAnswer({
+      sessionId: community.session.id,
+      userId: USER_B,
+      answerIndex: snap.correctIndex,
+      chatId: COMMUNITY_CHAT,
+      displayName: "Piet",
+    });
+    assert.strictEqual(first.ok, true);
+    const second = service.tryAnswer({
+      sessionId: community.session.id,
+      userId: USER_A,
+      answerIndex: snap.correctIndex,
+      chatId: COMMUNITY_CHAT,
+      displayName: "Kevin",
+    });
+    assert.strictEqual(second.ok, false);
+    assert.ok(
+      second.reason === "question-closed" || second.reason === "already-answered"
+    );
+    assert.strictEqual(service.isPersonalTriviaOpen(COMMUNITY_CHAT, USER_A), true);
+    assert.strictEqual(
+      service.getSnapshot(kevin.session.id).questionPhase,
+      "open"
+    );
+  });
+
+  await runTest("L. owner earns personal Trivia XP but cannot drive another player's game", () => {
+    const file = pointsFile();
+    const awards = [];
+    const { service } = createPersonalService();
+    service.setAwardXpHandler((uid, name, payload) => {
+      awards.push({ uid, payload });
+      return awardTriviaAttemptXp(uid, name, payload, file);
+    });
+    const ownerGame = startPersonal(service, {
+      userId: OWNER_ID,
+      category: "math",
+      messageId: 101,
+      displayName: "Kevin",
+    });
+    const piet = startPersonal(service, {
+      userId: USER_B,
+      category: "geography",
+      messageId: 202,
+      displayName: "Piet",
+    });
+    const own = answerSession(service, ownerGame.session.id, OWNER_ID, "Kevin");
+    assert.strictEqual(own.ok, true);
+    assert.ok(awards.some((row) => String(row.uid) === String(OWNER_ID)));
+    assert.ok(loadPoints(file).users[String(OWNER_ID)]);
+
+    const beforePiet = service.getSnapshot(piet.session.id);
+    const hijack = service.tryAnswer({
+      sessionId: piet.session.id,
+      userId: OWNER_ID,
+      answerIndex: beforePiet.correctIndex,
+      chatId: COMMUNITY_CHAT,
+      displayName: "Kevin",
+    });
+    assert.strictEqual(hijack.ok, false);
+    assert.strictEqual(hijack.reason, "not-owner");
+    assert.strictEqual(
+      service.getSnapshot(piet.session.id).questionPhase,
+      "open"
+    );
+    assert.strictEqual(awards.filter((row) => String(row.uid) === String(OWNER_ID)).length, 1);
+  });
+
+  await runTest("M. parallel personal Trivia edits only the owning message", async () => {
+    const edits = [];
+    const { service } = createPersonalService();
+    service.setEditMessageHandler((chatId, messageId, text) => {
+      edits.push({ chatId, messageId, text });
+    });
+    const kevin = startPersonal(service, {
+      userId: USER_A,
+      category: "math",
+      messageId: 101,
+      displayName: "Kevin",
+    });
+    const piet = startPersonal(service, {
+      userId: USER_B,
+      category: "geography",
+      messageId: 202,
+      displayName: "Piet",
+    });
+    assert.strictEqual(service.getSession(kevin.session.id).messageId, 101);
+    assert.strictEqual(service.getSession(piet.session.id).messageId, 202);
+    assert.notStrictEqual(kevin.session.id, piet.session.id);
+
+    answerSession(service, kevin.session.id, USER_A, "Kevin");
+    const next = service.nextHubQuestion(kevin.session.id, USER_A);
+    assert.strictEqual(next.ok, true);
+    await Promise.resolve();
+    assert.ok(edits.some((row) => row.messageId === 101));
+    assert.ok(!edits.some((row) => row.messageId === 202));
+
+    const timed = service.forceQuestionTimeout(piet.session.id);
+    assert.strictEqual(timed.timedOut, true);
+    await Promise.resolve();
+    assert.ok(edits.some((row) => row.messageId === 202));
+    assert.ok(
+      edits.every((row) => row.messageId === 101 || row.messageId === 202)
+    );
+    assert.strictEqual(service.getSnapshot(kevin.session.id).questionPhase, "open");
+    assert.strictEqual(
+      service.getSnapshot(piet.session.id).questionPhase,
+      "resolved"
+    );
+  });
+
+  await runTest("ended sessions and choosers leave no leftover maps or timers", async () => {
+    const { service } = createPersonalService();
+    const kevin = startPersonal(service, {
+      userId: USER_A,
+      category: "math",
+      messageId: 101,
+      displayName: "Kevin",
+    });
+    const piet = startPersonal(service, {
+      userId: USER_B,
+      category: "geography",
+      messageId: 202,
+      displayName: "Piet",
+    });
+    assert.ok(service.getPendingTimerCount() >= 2);
+    service.abortRound("hub-nav", {
+      silent: true,
+      session: service.getSession(kevin.session.id),
+    });
+    assert.strictEqual(service.getSession(kevin.session.id), null);
+    assert.ok(service.getSession(piet.session.id));
+    assert.strictEqual(service.isPersonalTriviaOpen(COMMUNITY_CHAT, USER_A), false);
+    assert.strictEqual(service.isPersonalTriviaOpen(COMMUNITY_CHAT, USER_B), true);
+    assert.ok(service.getPendingTimerCount() >= 1);
+    service.releaseHubSession("back-games", {
+      session: service.getSession(piet.session.id),
+    });
+    assert.strictEqual(service.getSession(piet.session.id), null);
+    assert.strictEqual(service.getPendingTimerCount(), 0);
+
+    const community = service.startTrivia({
+      chatId: COMMUNITY_CHAT,
+      source: "manual",
+      hubMode: false,
+    });
+    assert.strictEqual(community.ok, true);
+    service.setMessageId(community.session.id, 303);
+    service.forceCompleteRound(community.session.id);
+    assert.strictEqual(service.getSession(community.session.id), null);
+    assert.strictEqual(service.isCommunityTriviaOpen(COMMUNITY_CHAT), false);
+    assert.strictEqual(service.getPendingTimerCount(), 0);
+
+    service.rememberChooserOwner(COMMUNITY_CHAT, 9001, USER_A, "Kevin");
+    assert.ok(service.getChooserOwner(COMMUNITY_CHAT, 9001));
+    const ctx = createMockCtx({
+      userId: USER_A,
+      firstName: "Kevin",
+      callbackData: "trivia:games",
+      messageId: 9001,
+    });
+    await handleTriviaHubCallback(ctx, {
+      runtime: service,
+      isBusyFn: () => false,
+    });
+    assert.strictEqual(service.getChooserOwner(COMMUNITY_CHAT, 9001), null);
   });
 
   fs.rmSync(tempDir, { recursive: true, force: true });

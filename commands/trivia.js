@@ -1,15 +1,16 @@
 /**
- * /trivia | /quiz — Trivia Hub category chooser, then community questions.
- * Auto Trivia uses the same runtime via Activity Engine (Random, 5-question round).
+ * /trivia | /quiz — Trivia Hub category chooser, then personal or community questions.
+ * Personal hub: Games → category → unlimited questions (chatId + userId session).
+ * Auto Trivia uses a separate community runtime via Activity Engine (Random, 5-question round).
  * Answer callbacks: trivia:<sessionId>:<answerIndex>
- * Hub callbacks: trivia:hub | trivia:next | trivia:change | trivia:games | trivia:cat:<id>
+ * Hub callbacks: trivia:hub | trivia:next[:id] | trivia:change[:id] | trivia:games[:id] | trivia:cat:<id>
  */
 
 const {
   isPrivateChat,
   isGroupChat,
   getGroupGamesMenuExtra,
-  GROUP_GAMES_TEXT,
+  formatGroupGamesText,
 } = require("../utils/botMenu");
 const {
   isCommunityChallengeBusy,
@@ -23,6 +24,7 @@ const {
   sanitizePvpDisplayName,
   buildTriviaChooserText,
   buildTriviaChooserKeyboard,
+  formatTriviaUnauthorizedToast,
 } = require("../services/trivia");
 const { isHubCategoryId } = require("../services/triviaQuestions");
 const {
@@ -53,6 +55,86 @@ function busyOptions(options = {}) {
     isMangoBombOpenFn: options.isMangoBombOpenFn,
     isBlackjackOpenFn: options.isBlackjackOpenFn,
   };
+}
+
+function personalStartBusyOptions(options = {}) {
+  return {
+    ...busyOptions(options),
+    isTriviaOpenFn: () => false,
+  };
+}
+
+function resolveTriviaRuntime(options = {}) {
+  if (options.runtime) {
+    return options.runtime;
+  }
+  if (typeof options.getRuntimeFn === "function") {
+    return options.getRuntimeFn();
+  }
+  return getTriviaRuntime();
+}
+
+function callbackMessageId(ctx) {
+  return (
+    ctx &&
+    ctx.callbackQuery &&
+    ctx.callbackQuery.message &&
+    ctx.callbackQuery.message.message_id
+  );
+}
+
+function forgetChooserOwner(runtime, ctx, sent) {
+  if (!runtime || typeof runtime.forgetChooserOwner !== "function") {
+    return;
+  }
+  if (!ctx || !ctx.chat) {
+    return;
+  }
+  const messageId =
+    sent && sent.message_id != null ? sent.message_id : callbackMessageId(ctx);
+  if (messageId == null) {
+    return;
+  }
+  runtime.forgetChooserOwner(ctx.chat.id, messageId);
+}
+
+function bindChooserOwner(runtime, ctx, sent) {
+  if (!runtime || typeof runtime.rememberChooserOwner !== "function") {
+    return;
+  }
+  if (!ctx || !ctx.from || !ctx.chat) {
+    return;
+  }
+  const messageId =
+    sent && sent.message_id != null ? sent.message_id : callbackMessageId(ctx);
+  if (messageId == null) {
+    return;
+  }
+  runtime.rememberChooserOwner(ctx.chat.id, messageId, ctx.from.id, ctx.from);
+}
+
+function chooserOwnerMismatch(runtime, ctx) {
+  if (!runtime || typeof runtime.getChooserOwner !== "function") {
+    return null;
+  }
+  if (!ctx || !ctx.from || !ctx.chat) {
+    return null;
+  }
+  const owner = runtime.getChooserOwner(ctx.chat.id, callbackMessageId(ctx));
+  if (!owner) {
+    return null;
+  }
+  if (String(owner.userId) === String(ctx.from.id)) {
+    return null;
+  }
+  return owner;
+}
+
+function personalSessionOwnerMismatch(session, userId) {
+  if (!session || !session.hubMode || !session.ownerUserId) {
+    return false;
+  }
+  return String(session.ownerUserId) !== String(userId);
 }
 
 function wireTriviaRuntime(runtime, botOrTelegram, options = {}) {
@@ -178,10 +260,11 @@ function busyReply(ctx, options = {}) {
     typeof options.getBusyReasonFn === "function"
       ? options.getBusyReasonFn
       : getCommunityBusyReason;
-  if (!busyFn(busyOptions(options))) {
+  const opts = personalStartBusyOptions(options);
+  if (!busyFn(opts)) {
     return null;
   }
-  const reason = busyReasonFn(busyOptions(options));
+  const reason = busyReasonFn(opts);
   if (reason === "chatfight") {
     return "⚔️ A ChatFight is already running.";
   }
@@ -212,7 +295,9 @@ async function handleTrivia(ctx, options = {}) {
   }
 
   const chooser = chooserPayload(ctx.from.id, options);
-  return presentTriviaView(ctx, chooser.text, chooser.extra);
+  const sent = await presentTriviaView(ctx, chooser.text, chooser.extra);
+  bindChooserOwner(resolveTriviaRuntime(options), ctx, sent);
+  return sent;
 }
 
 async function handleTriviaCategoryStart(ctx, options = {}) {
@@ -220,11 +305,11 @@ async function handleTriviaCategoryStart(ctx, options = {}) {
     typeof options.startTriviaFn === "function"
       ? options.startTriviaFn
       : startTrivia;
+  const runtime = resolveTriviaRuntime(options);
   const setMessageIdFn =
     typeof options.setMessageIdFn === "function"
       ? options.setMessageIdFn
-      : (sessionId, messageId) =>
-          getTriviaRuntime().setMessageId(sessionId, messageId);
+      : (sessionId, messageId) => runtime.setMessageId(sessionId, messageId);
 
   const parsed =
     ctx && ctx.callbackQuery
@@ -247,6 +332,25 @@ async function handleTriviaCategoryStart(ctx, options = {}) {
     return;
   }
 
+  const chooserDenied = chooserOwnerMismatch(runtime, ctx);
+  if (chooserDenied) {
+    await answer(formatTriviaUnauthorizedToast(chooserDenied.displayName));
+    return;
+  }
+  if (
+    runtime &&
+    typeof runtime.rememberChooserOwner === "function" &&
+    ctx.from &&
+    ctx.chat
+  ) {
+    runtime.rememberChooserOwner(
+      ctx.chat.id,
+      callbackMessageId(ctx),
+      ctx.from.id,
+      ctx.from
+    );
+  }
+
   const gate = await assertTriviaStart(ctx, options);
   if (!gate.ok) {
     return;
@@ -265,6 +369,8 @@ async function handleTriviaCategoryStart(ctx, options = {}) {
     category,
     hubMode: true,
     xpStatus,
+    userId: ctx.from.id,
+    displayName: sanitizePvpDisplayName(ctx.from),
   });
   if (!result.ok) {
     if (result.reason === "already-active") {
@@ -294,15 +400,12 @@ async function handleTriviaCategoryStart(ctx, options = {}) {
   if (messageId != null && result.session) {
     setMessageIdFn(result.session.id, messageId);
   }
+  forgetChooserOwner(runtime, ctx, sent);
   return sent;
 }
 
 async function handleTriviaHubCallback(ctx, options = {}) {
-  const runtime =
-    options.runtime ||
-    (typeof options.getRuntimeFn === "function"
-      ? options.getRuntimeFn()
-      : getTriviaRuntime());
+  const runtime = resolveTriviaRuntime(options);
   const data =
     ctx && ctx.callbackQuery && typeof ctx.callbackQuery.data === "string"
       ? ctx.callbackQuery.data
@@ -323,13 +426,20 @@ async function handleTriviaHubCallback(ctx, options = {}) {
   }
 
   if (parsed.action === "hub") {
+    const denied = chooserOwnerMismatch(runtime, ctx);
+    if (denied) {
+      await answer(formatTriviaUnauthorizedToast(denied.displayName));
+      return;
+    }
     const gate = await assertTriviaStart(ctx, options);
     if (!gate.ok) {
       return;
     }
     await answer();
     const chooser = chooserPayload(ctx.from.id, options);
-    return presentTriviaView(ctx, chooser.text, chooser.extra);
+    const sent = await presentTriviaView(ctx, chooser.text, chooser.extra);
+    bindChooserOwner(runtime, ctx, sent);
+    return sent;
   }
 
   if (parsed.action === "next") {
@@ -337,8 +447,32 @@ async function handleTriviaHubCallback(ctx, options = {}) {
       await answer("Bots cannot play.");
       return;
     }
-    const result = runtime.nextHubQuestion();
+    if (!parsed.sessionId) {
+      await answer(GAME_OVER_TOAST);
+      await stripStaleCallbackButtons(ctx, { gameType: GAME_TYPE.TRIVIA });
+      return;
+    }
+    const session = runtime.getSession(parsed.sessionId);
+    if (!session) {
+      await answer(GAME_OVER_TOAST);
+      await stripStaleCallbackButtons(ctx, { gameType: GAME_TYPE.TRIVIA });
+      return;
+    }
+    if (!session.hubMode || personalSessionOwnerMismatch(session, ctx.from && ctx.from.id)) {
+      if (personalSessionOwnerMismatch(session, ctx.from && ctx.from.id)) {
+        await answer(formatTriviaUnauthorizedToast(session.ownerDisplayName));
+        return;
+      }
+      await answer(GAME_OVER_TOAST);
+      await stripStaleCallbackButtons(ctx, { gameType: GAME_TYPE.TRIVIA });
+      return;
+    }
+    const result = runtime.nextHubQuestion(parsed.sessionId, ctx.from.id);
     if (!result.ok) {
+      if (result.reason === "not-owner") {
+        await answer(formatTriviaUnauthorizedToast(result.ownerDisplayName));
+        return;
+      }
       if (result.reason === "question-open") {
         await answer("Answer this question first.");
         return;
@@ -365,8 +499,28 @@ async function handleTriviaHubCallback(ctx, options = {}) {
   }
 
   if (parsed.action === "change") {
-    if (runtime.isTriviaOpen()) {
-      runtime.releaseHubSession("change-category");
+    if (!parsed.sessionId) {
+      await answer(GAME_OVER_TOAST);
+      await stripStaleCallbackButtons(ctx, { gameType: GAME_TYPE.TRIVIA });
+      return;
+    }
+    const session = runtime.getSession(parsed.sessionId);
+    if (!session) {
+      await answer(GAME_OVER_TOAST);
+      await stripStaleCallbackButtons(ctx, { gameType: GAME_TYPE.TRIVIA });
+      return;
+    }
+    if (!session.hubMode) {
+      await answer(GAME_OVER_TOAST);
+      await stripStaleCallbackButtons(ctx, { gameType: GAME_TYPE.TRIVIA });
+      return;
+    }
+    if (personalSessionOwnerMismatch(session, ctx.from && ctx.from.id)) {
+      await answer(formatTriviaUnauthorizedToast(session.ownerDisplayName));
+      return;
+    }
+    if (session.status === "active" && session.hubMode) {
+      runtime.releaseHubSession("change-category", { session });
     }
     const gate = await assertTriviaStart(ctx, options);
     if (!gate.ok) {
@@ -374,19 +528,56 @@ async function handleTriviaHubCallback(ctx, options = {}) {
     }
     await answer();
     const chooser = chooserPayload(ctx.from.id, options);
-    return presentTriviaView(ctx, chooser.text, chooser.extra);
+    const sent = await presentTriviaView(ctx, chooser.text, chooser.extra);
+    bindChooserOwner(runtime, ctx, sent);
+    return sent;
   }
 
   if (parsed.action === "games") {
-    if (runtime.isTriviaOpen()) {
-      runtime.releaseHubSession("back-games");
+    if (parsed.sessionId) {
+      const session = runtime.getSession(parsed.sessionId);
+      if (!session) {
+        await answer(GAME_OVER_TOAST);
+        await stripStaleCallbackButtons(ctx, { gameType: GAME_TYPE.TRIVIA });
+        return;
+      }
+      if (!session.hubMode) {
+        await answer(GAME_OVER_TOAST);
+        await stripStaleCallbackButtons(ctx, { gameType: GAME_TYPE.TRIVIA });
+        return;
+      }
+      if (personalSessionOwnerMismatch(session, ctx.from && ctx.from.id)) {
+        await answer(formatTriviaUnauthorizedToast(session.ownerDisplayName));
+        return;
+      }
+      if (session.status === "active" && session.hubMode) {
+        runtime.releaseHubSession("back-games", { session });
+      }
+    } else {
+      const denied = chooserOwnerMismatch(runtime, ctx);
+      if (denied) {
+        await answer(formatTriviaUnauthorizedToast(denied.displayName));
+        return;
+      }
+      const personal =
+        runtime.getPersonalSession && ctx.from
+          ? runtime.getPersonalSession(ctx.chat.id, ctx.from.id)
+          : null;
+      if (personal && personal.status === "active") {
+        runtime.releaseHubSession("back-games", { session: personal });
+      }
     }
     await answer();
-    return presentTriviaView(
+    const gamesText = formatGroupGamesText(
+      ctx.from ? sanitizePvpDisplayName(ctx.from) : ""
+    );
+    const sent = await presentTriviaView(
       ctx,
-      GROUP_GAMES_TEXT,
+      gamesText,
       getGroupGamesMenuExtra(ctx)
     );
+    forgetChooserOwner(runtime, ctx, sent);
+    return sent;
   }
 }
 
@@ -448,6 +639,10 @@ async function handleTriviaAnswer(ctx, options = {}) {
     ) {
       await answer(GAME_OVER_TOAST);
       await stripStaleCallbackButtons(ctx, { gameType: GAME_TYPE.TRIVIA });
+    } else if (result.reason === "not-owner") {
+      await answer(
+        formatTriviaUnauthorizedToast(result.ownerDisplayName)
+      );
     } else if (result.reason === "wrong-chat") {
       await answer("Wrong chat.");
     } else if (result.reason === "bot") {
@@ -488,7 +683,7 @@ module.exports = (bot) => {
   bot.action(/^trivia:[a-f0-9]+:[0-3]$/i, (ctx) =>
     Promise.resolve(handleTriviaAnswer(ctx)).catch(() => undefined)
   );
-  bot.action(/^trivia:(hub|next|change|games)$/, (ctx) =>
+  bot.action(/^trivia:(hub|next|change|games)(?::[a-f0-9]+)?$/i, (ctx) =>
     Promise.resolve(handleTriviaHubCallback(ctx)).catch(() => undefined)
   );
   bot.action(

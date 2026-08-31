@@ -14,8 +14,8 @@ require("../services/xpWalletGate").setXpWalletAutoLinkForTests(true);
 const {
   createTriviaService,
   buildAnswerCallbackData,
-  TRIVIA_HUB_ACTION,
   QUESTION_PHASE,
+  buildHubNavCallbackData,
 } = require("../services/trivia");
 const { TRIVIA_QUESTIONS } = require("../services/triviaQuestions");
 const {
@@ -552,7 +552,9 @@ async function main() {
     const { pointsFile, shopFile } = store;
     const { service } = createService(store);
     startHub(service, "history");
-    const ctx = createMockCtx({ callbackData: TRIVIA_HUB_ACTION.CHANGE });
+    const ctx = createMockCtx({
+      callbackData: buildHubNavCallbackData("change", service.getSnapshot().id),
+    });
     await handleTriviaHubCallback(ctx, {
       runtime: service,
       isBusyFn: () => false,
@@ -583,9 +585,27 @@ async function main() {
     const result = answerCorrect(service, started.session.id, USER_A, "Alice");
     const buttons = resultButtons(result.rendered.extra);
     assert.ok(!buttons.some((b) => /^trivia:[a-f0-9]+:[0-3]$/i.test(b.callback_data)));
-    assert.ok(buttons.some((b) => b.callback_data === TRIVIA_HUB_ACTION.NEXT));
-    assert.ok(buttons.some((b) => b.callback_data === TRIVIA_HUB_ACTION.CHANGE));
-    assert.ok(buttons.some((b) => b.callback_data === TRIVIA_HUB_ACTION.GAMES));
+    assert.ok(
+      buttons.some(
+        (b) =>
+          b.callback_data ===
+          buildHubNavCallbackData("next", started.session.id)
+      )
+    );
+    assert.ok(
+      buttons.some(
+        (b) =>
+          b.callback_data ===
+          buildHubNavCallbackData("change", started.session.id)
+      )
+    );
+    assert.ok(
+      buttons.some(
+        (b) =>
+          b.callback_data ===
+          buildHubNavCallbackData("games", started.session.id)
+      )
+    );
     assert.strictEqual(service.getSnapshot().questionPhase, QUESTION_PHASE.RESOLVED);
   });
 
@@ -645,15 +665,17 @@ async function main() {
   await runTest("52-53. cleanup and busy-state release preserved", () => {
     const { service } = createService();
     startHub(service);
+    assert.strictEqual(service.isTriviaOpen(), true);
+    assert.strictEqual(service.isCommunityTriviaOpen(), false);
     assert.strictEqual(
       isCommunityChallengeBusy({
         isChatFightOpenFn: () => false,
         isTicTacToeOpenFn: () => false,
         isConnectFourOpenFn: () => false,
-        isTriviaOpenFn: () => service.isTriviaOpen(),
+        isTriviaOpenFn: () => service.isCommunityTriviaOpen(),
         isMangoBombOpenFn: () => false,
       }),
-      true
+      false
     );
     service.abortRound("edit-failed");
     assert.strictEqual(service.isTriviaOpen(), false);

@@ -279,6 +279,14 @@ async function main() {
     assert.ok(viewText(ctx).includes("Choose a category"));
     assert.ok(parseTriviaHubCallback("trivia:cat:math").category === "math");
     assert.strictEqual(parseTriviaHubCallback("trivia:hub").action, "hub");
+    assert.deepStrictEqual(parseTriviaHubCallback("trivia:next:abc123"), {
+      action: "next",
+      sessionId: "abc123",
+    });
+    assert.deepStrictEqual(parseTriviaHubCallback("trivia:change"), {
+      action: "change",
+      sessionId: null,
+    });
     const chooser = buildTriviaChooserKeyboard();
     assert.ok(chooser.reply_markup.inline_keyboard.length >= 8);
   });

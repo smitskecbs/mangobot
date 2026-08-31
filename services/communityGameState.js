@@ -1,5 +1,6 @@
 /**
- * Shared community exclusive busy flag (ChatFight + Trivia + ManGo Bomb).
+ * Shared community exclusive busy flag (ChatFight + community Trivia + ManGo Bomb).
+ * Personal Trivia hub sessions do not occupy the group.
  * Parallel PvP (Tic-Tac-Toe, Connect Four, Blackjack) does not occupy the group.
  * Lazy requires avoid circular init issues.
  */
@@ -40,6 +41,9 @@ function isConnectFourBusy() {
 function isTriviaBusy() {
   try {
     const trivia = require("./trivia");
+    if (typeof trivia.isCommunityTriviaOpen === "function") {
+      return Boolean(trivia.isCommunityTriviaOpen());
+    }
     return typeof trivia.isTriviaOpen === "function"
       ? Boolean(trivia.isTriviaOpen())
       : false;
