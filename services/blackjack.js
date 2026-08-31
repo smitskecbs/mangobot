@@ -1828,6 +1828,17 @@ function createBlackjackService(options = {}) {
     }
     game.players.set(uid, makePlayer(uid, displayName));
     noteProgress(game, "join");
+    if (humanPlayers(game).length >= MAX_HUMAN_PLAYERS) {
+      const closed = closeLobby(game.id, null, game.instanceSeq);
+      return {
+        ok: Boolean(closed && closed.ok),
+        started: true,
+        status: closed && closed.status,
+        text: closed && closed.ok ? buildDecisionText(game, []) : undefined,
+        extra: closed && closed.ok ? decisionKeyboard(game.id) : undefined,
+        snapshot: snapshot(game),
+      };
+    }
     bumpRevision(game);
     const text = buildLobbyText(snapshotPlayers(game), lobbyDisplaySeconds(game));
     queueRender(game, text, joinKeyboard(game.id), "join");

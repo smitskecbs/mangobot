@@ -750,6 +750,93 @@ async function main() {
     assert.ok(rendered.extra.reply_markup.inline_keyboard.length > 0);
   });
 
+  await runTest("lobby. player 2 join starts immediately", () => {
+    const { service } = createService({ joinTimeoutMs: 5000 });
+    const started = startOpen(service);
+    const before = service.manager.getSession(started.session.id);
+    assert.ok(before.timers.joinTimeoutId != null);
+    const joined = service.join({
+      sessionId: started.session.id,
+      userId: USER_B,
+      displayName: "Alice",
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(joined.ok, true);
+    assert.strictEqual(joined.started, true);
+    const session = service.getSession(started.session.id);
+    assert.strictEqual(session.status, STATUS.ACTIVE);
+    assert.strictEqual(session.opponentType, "human");
+    assert.ok(session.startedAt);
+    const raw = service.manager.getSession(started.session.id);
+    assert.strictEqual(raw.timers.joinTimeoutId, null);
+    assert.strictEqual(raw.timers.countdownTimeoutId, null);
+    assert.ok(raw.timers.turnTimeoutId != null);
+  });
+
+  await runTest("lobby. join timeout is cleared and stale expire is a no-op", () => {
+    const { service, timers } = createService({ joinTimeoutMs: 5000 });
+    const started = startOpen(service);
+    service.join({
+      sessionId: started.session.id,
+      userId: USER_B,
+      displayName: "Alice",
+      chatId: COMMUNITY_CHAT,
+    });
+    const expired = service.expireJoin(started.session.id);
+    assert.strictEqual(expired.ok, false);
+    assert.strictEqual(expired.reason, "not-waiting");
+    timers.advance(5000);
+    const session = service.getSession(started.session.id);
+    assert.strictEqual(session.status, STATUS.ACTIVE);
+    assert.strictEqual(session.opponentType, "human");
+    assert.ok(!session.players.O.isBot);
+    assert.strictEqual(session.players.O.userId, String(USER_B));
+  });
+
+  await runTest("lobby. without player 2 existing timeout remains", () => {
+    const { service, timers } = createService({ joinTimeoutMs: 5000 });
+    const started = startOpen(service);
+    assert.ok(service.manager.getSession(started.session.id).timers.joinTimeoutId != null);
+    timers.advance(4000);
+    assert.strictEqual(service.getSession(started.session.id).status, STATUS.WAITING);
+    timers.advance(1000);
+    const session = service.getSession(started.session.id);
+    assert.strictEqual(session.status, STATUS.ACTIVE);
+    assert.strictEqual(session.opponentType, "bot");
+  });
+
+  await runTest("lobby. duplicate join starts the game exactly once", () => {
+    const { service } = createService();
+    const started = startOpen(service);
+    const first = service.join({
+      sessionId: started.session.id,
+      userId: USER_B,
+      displayName: "Alice",
+      chatId: COMMUNITY_CHAT,
+    });
+    const second = service.join({
+      sessionId: started.session.id,
+      userId: USER_B,
+      displayName: "Alice",
+      chatId: COMMUNITY_CHAT,
+    });
+    const third = service.join({
+      sessionId: started.session.id,
+      userId: USER_C,
+      displayName: "Bob",
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(first.ok, true);
+    assert.strictEqual(first.started, true);
+    assert.strictEqual(second.ok, false);
+    assert.strictEqual(third.ok, false);
+    const session = service.getSession(started.session.id);
+    assert.strictEqual(session.status, STATUS.ACTIVE);
+    assert.strictEqual(session.opponentType, "human");
+    assert.strictEqual(session.players.O.userId, String(USER_B));
+    assert.strictEqual(session.players.X.userId, String(USER_A));
+  });
+
   await runTest("UX. active board remains visible in message text", () => {
     const { service } = createService();
     const started = startOpen(service);

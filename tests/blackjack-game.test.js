@@ -274,8 +274,15 @@ function createMockCtx(opts = {}) {
     const started = start(service);
     const joined = service.tryJoin(joinInput(started.gameId, USER_B, "Bob"));
     assert.strictEqual(joined.ok, true);
-    assert.ok(joined.text.includes("Bob"));
-    assert.ok(joined.text.includes("Players:"));
+    assert.strictEqual(joined.started, true);
+    const game = service.getGame(started.gameId);
+    assert.strictEqual(game.status, STATUS.DECISION);
+    assert.strictEqual(game.opponentType, "human");
+    assert.ok(game.players.some((p) => p.userId === String(USER_B)));
+    assert.ok(String(joined.text || "").includes("Bob"));
+    assert.ok(!String(joined.text || "").includes("Waiting for an opponent"));
+    assert.strictEqual(service.hasActiveLobbyTimer(started.gameId), false);
+    assert.strictEqual(service.hasActiveCountdownTimer(started.gameId), false);
   });
 
   await runTest("14. third reject", () => {
@@ -284,7 +291,7 @@ function createMockCtx(opts = {}) {
     assert.strictEqual(service.tryJoin(joinInput(started.gameId, USER_B, "Bob")).ok, true);
     const third = service.tryJoin(joinInput(started.gameId, USER_C, "Cara"));
     assert.strictEqual(third.ok, false);
-    assert.strictEqual(third.reason, "full");
+    assert.strictEqual(third.reason, "late");
   });
 
   await runTest("15. duplicate join reject", () => {
@@ -315,6 +322,70 @@ function createMockCtx(opts = {}) {
     assert.strictEqual(game.status, STATUS.DECISION);
     assert.strictEqual(game.opponentType, "bot");
     assert.ok(game.players.some((p) => p.userId === BOT_ID));
+  });
+
+  await runTest("lobby. player 2 join starts immediately", () => {
+    const { service } = createService({ lobbyMs: 5000 });
+    const started = start(service);
+    assert.strictEqual(service.getGame(started.gameId).status, STATUS.LOBBY);
+    assert.strictEqual(service.hasActiveLobbyTimer(started.gameId), true);
+    const joined = service.tryJoin(joinInput(started.gameId, USER_B, "Bob"));
+    assert.strictEqual(joined.ok, true);
+    assert.strictEqual(joined.started, true);
+    const game = service.getGame(started.gameId);
+    assert.strictEqual(game.status, STATUS.DECISION);
+    assert.strictEqual(game.opponentType, "human");
+    assert.ok(!game.players.some((p) => p.isBot || p.userId === BOT_ID));
+  });
+
+  await runTest("lobby. join clears timeout so stale timer cannot bot-fill", async () => {
+    const { service, timers } = createService({ lobbyMs: 5000, decisionMs: 30_000 });
+    const started = start(service);
+    service.tryJoin(joinInput(started.gameId, USER_B, "Bob"));
+    assert.strictEqual(service.hasActiveLobbyTimer(started.gameId), false);
+    assert.strictEqual(service.hasActiveCountdownTimer(started.gameId), false);
+    const closed = await service.forceLobbyEnd(started.gameId);
+    assert.strictEqual(closed.ok, false);
+    timers.advance(5000);
+    await service.whenIdle(COMMUNITY_CHAT);
+    const game = service.getGame(started.gameId);
+    assert.strictEqual(game.status, STATUS.DECISION);
+    assert.strictEqual(game.opponentType, "human");
+    assert.ok(!game.players.some((p) => p.isBot || p.userId === BOT_ID));
+  });
+
+  await runTest("lobby. without player 2 existing timeout remains", async () => {
+    const { service, timers } = createService({ lobbyMs: 5000 });
+    const started = start(service);
+    assert.strictEqual(service.hasActiveLobbyTimer(started.gameId), true);
+    timers.advance(4000);
+    await service.whenIdle(COMMUNITY_CHAT);
+    assert.strictEqual(service.getGame(started.gameId).status, STATUS.LOBBY);
+    timers.advance(1000);
+    await service.whenIdle(COMMUNITY_CHAT);
+    const game = service.getGame(started.gameId);
+    assert.strictEqual(game.status, STATUS.DECISION);
+    assert.strictEqual(game.opponentType, "bot");
+    assert.ok(game.players.some((p) => p.userId === BOT_ID));
+  });
+
+  await runTest("lobby. duplicate second join starts exactly once", async () => {
+    const { service } = createService();
+    const started = start(service);
+    const [first, second] = await Promise.all([
+      service.enqueueJoin(joinInput(started.gameId, USER_B, "Bob")),
+      service.enqueueJoin(joinInput(started.gameId, USER_C, "Cara")),
+    ]);
+    const wins = [first, second].filter((row) => row && row.ok);
+    const losses = [first, second].filter((row) => !row || !row.ok);
+    assert.strictEqual(wins.length, 1);
+    assert.strictEqual(losses.length, 1);
+    await service.whenIdle(COMMUNITY_CHAT);
+    const game = service.getGame(started.gameId);
+    assert.strictEqual(game.status, STATUS.DECISION);
+    assert.strictEqual(game.opponentType, "human");
+    assert.strictEqual(game.players.filter((p) => !p.isBot).length, 2);
+    assert.ok(!game.players.some((p) => p.isBot || p.userId === BOT_ID));
   });
 
   await runTest("18. human opponent → PvP", async () => {
