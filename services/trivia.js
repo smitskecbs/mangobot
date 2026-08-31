@@ -1332,6 +1332,7 @@ function createTriviaService(options = {}) {
     chatId,
     displayName,
     isBot,
+    deferXp = false,
   } = {}) {
     if (isBot) {
       return { ok: false, reason: "bot" };
@@ -1377,8 +1378,14 @@ function createTriviaService(options = {}) {
     target.questionPhase = QUESTION_PHASE.RESOLVED;
     clearSessionTimer(target, "questionTimer");
 
-    const xpResult = awardAttempt(uid, name, correct);
-    target.lastXpResult = xpResult;
+    let xpResult = null;
+    if (deferXp) {
+      target.pendingXp = { uid, name, correct };
+    } else {
+      target.pendingXp = null;
+      xpResult = awardAttempt(uid, name, correct);
+      target.lastXpResult = xpResult;
+    }
     touchActivity(target);
     lastSession = target;
 
@@ -1397,6 +1404,7 @@ function createTriviaService(options = {}) {
         correct: false,
         toast: "❌ Wrong answer!",
         xpResult,
+        xpDeferred: Boolean(deferXp),
         session: snapshot(true, target),
         rendered,
       };
@@ -1424,8 +1432,44 @@ function createTriviaService(options = {}) {
       correct: true,
       questionWon: true,
       xpResult,
+      xpDeferred: Boolean(deferXp),
       session: snapshot(true, target),
       rendered,
+    };
+  }
+
+  function settleDeferredXp(sessionId) {
+    const target = getSession(sessionId);
+    if (!target) {
+      return { ok: false, reason: "invalid-session" };
+    }
+    const pending = target.pendingXp;
+    if (!pending) {
+      return {
+        ok: true,
+        alreadySettled: true,
+        xpResult: target.lastXpResult || null,
+        session: snapshot(true, target),
+      };
+    }
+    target.pendingXp = null;
+    const xpResult = awardAttempt(pending.uid, pending.name, pending.correct);
+    target.lastXpResult = xpResult;
+    lastSession = target;
+    const rendered = pending.correct
+      ? {
+          text: buildQuestionWonText(target, pending.name, xpResult),
+          extra: resultExtra(target),
+        }
+      : {
+          text: buildQuestionWrongText(target, xpResult),
+          extra: resultExtra(target),
+        };
+    return {
+      ok: true,
+      xpResult,
+      rendered,
+      session: snapshot(true, target),
     };
   }
 
@@ -1520,6 +1564,7 @@ function createTriviaService(options = {}) {
     QUESTION_PHASE,
     startTrivia,
     tryAnswer,
+    settleDeferredXp,
     claimRoundXp,
     setMessageId,
     setEditMessageHandler,

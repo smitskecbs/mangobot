@@ -1390,6 +1390,122 @@ async function main() {
     assert.strictEqual(service.getChooserOwner(COMMUNITY_CHAT, 9001), null);
   });
 
+  await runTest("callback ACK happens before Trivia XP persistence", async () => {
+    const file = pointsFile();
+    const order = [];
+    const { service } = createPersonalService();
+    service.setAwardXpHandler((uid, name, payload) => {
+      order.push("xp");
+      return awardTriviaAttemptXp(uid, name, payload, file);
+    });
+    const kevin = startPersonal(service, {
+      userId: USER_A,
+      category: "math",
+      messageId: 101,
+      displayName: "Kevin",
+    });
+    const snap = service.getSnapshot(kevin.session.id);
+    const ctx = createMockCtx({
+      userId: USER_A,
+      firstName: "Kevin",
+      callbackData: buildAnswerCallbackData(
+        kevin.session.id,
+        snap.correctIndex
+      ),
+      messageId: 101,
+    });
+    const inner = ctx.answerCbQuery.bind(ctx);
+    ctx.answerCbQuery = (msg) => {
+      order.push("ack");
+      return inner(msg);
+    };
+    await handleTriviaAnswer(ctx, { runtime: service });
+    assert.ok(order.indexOf("ack") >= 0);
+    assert.ok(order.indexOf("xp") >= 0);
+    assert.ok(order.indexOf("ack") < order.indexOf("xp"));
+    assert.ok(ctx.cbAnswers[0].includes("Correct"));
+    assert.ok(loadPoints(file).users[String(USER_A)]);
+  });
+
+  await runTest("unauthorized Trivia callback is still denied without XP", async () => {
+    const file = pointsFile();
+    const awards = [];
+    const { service } = createPersonalService();
+    service.setAwardXpHandler((uid, name, payload) => {
+      awards.push(uid);
+      return awardTriviaAttemptXp(uid, name, payload, file);
+    });
+    const kevin = startPersonal(service, {
+      userId: USER_A,
+      category: "math",
+      messageId: 101,
+      displayName: "Kevin",
+    });
+    const snap = service.getSnapshot(kevin.session.id);
+    const piet = createMockCtx({
+      userId: USER_B,
+      firstName: "Piet",
+      callbackData: buildAnswerCallbackData(
+        kevin.session.id,
+        snap.correctIndex
+      ),
+      messageId: 101,
+    });
+    await handleTriviaAnswer(piet, { runtime: service });
+    assert.ok(String(piet.cbAnswers[0]).includes("belongs to Kevin"));
+    assert.strictEqual(awards.length, 0);
+    assert.strictEqual(piet.edited.length, 0);
+    assert.strictEqual(
+      service.getSnapshot(kevin.session.id).questionPhase,
+      "open"
+    );
+  });
+
+  await runTest("duplicate Trivia answer callback does not double XP", async () => {
+    const file = pointsFile();
+    const awards = [];
+    const { service } = createPersonalService();
+    service.setAwardXpHandler((uid, name, payload) => {
+      awards.push(uid);
+      return awardTriviaAttemptXp(uid, name, payload, file);
+    });
+    const kevin = startPersonal(service, {
+      userId: USER_A,
+      category: "math",
+      messageId: 101,
+      displayName: "Kevin",
+    });
+    const snap = service.getSnapshot(kevin.session.id);
+    const ctx = createMockCtx({
+      userId: USER_A,
+      firstName: "Kevin",
+      callbackData: buildAnswerCallbackData(
+        kevin.session.id,
+        snap.correctIndex
+      ),
+      messageId: 101,
+    });
+    await handleTriviaAnswer(ctx, { runtime: service });
+    await handleTriviaAnswer(ctx, { runtime: service });
+    assert.strictEqual(awards.length, 1);
+    assert.strictEqual(
+      loadPoints(file).users[String(USER_A)].trivia.attemptsUsed,
+      1
+    );
+    assert.strictEqual(ctx.cbAnswers[1], "This question is already finished.");
+  });
+
+  await runTest("two sequential XP mutations both persist", () => {
+    const file = pointsFile();
+    const a = awardTriviaAttemptXp(USER_A, "Kevin", { correct: true }, file);
+    const b = awardTriviaAttemptXp(USER_B, "Piet", { correct: true }, file);
+    assert.strictEqual(a.awarded, true);
+    assert.strictEqual(b.awarded, true);
+    const data = loadPoints(file);
+    assert.ok(data.users[String(USER_A)].points >= 1);
+    assert.ok(data.users[String(USER_B)].points >= 1);
+  });
+
   fs.rmSync(tempDir, { recursive: true, force: true });
   restoreEnv();
   clearAllExpiredMessageCleanups();

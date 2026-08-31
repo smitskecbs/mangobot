@@ -1425,6 +1425,8 @@ function awardTriviaAttemptXp(
     date: payload && payload.date ? payload.date : undefined,
   };
 
+  const walletOk = canEarnXp(userId, resolvedWallet);
+
   return finalizeXpAward(
     userId,
     userName,
@@ -1449,7 +1451,6 @@ function awardTriviaAttemptXp(
         });
       }
 
-      const walletOk = canEarnXp(userId, resolvedWallet);
       if (!eligible || !correct || !walletOk) {
         let reason = "incorrect";
         if (!eligible) {

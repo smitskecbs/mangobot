@@ -624,6 +624,7 @@ async function handleTriviaAnswer(ctx, options = {}) {
     chatId,
     displayName,
     isBot: Boolean(ctx.from.is_bot),
+    deferXp: true,
   });
 
   if (!result.ok) {
@@ -659,11 +660,19 @@ async function handleTriviaAnswer(ctx, options = {}) {
     await answer(result.toast || "❌ Wrong answer!");
   }
 
-  if (result.rendered && typeof ctx.editMessageText === "function") {
+  let rendered = result.rendered;
+  if (result.xpDeferred && typeof runtime.settleDeferredXp === "function") {
+    const settled = runtime.settleDeferredXp(parsed.sessionId);
+    if (settled && settled.rendered) {
+      rendered = settled.rendered;
+    }
+  }
+
+  if (rendered && typeof ctx.editMessageText === "function") {
     try {
       await ctx.editMessageText(
-        result.rendered.text,
-        result.rendered.extra || emptyInlineKeyboardExtra()
+        rendered.text,
+        rendered.extra || emptyInlineKeyboardExtra()
       );
     } catch (err) {
       logError(

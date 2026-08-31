@@ -98,6 +98,35 @@ runTest("legacy records blijven werken", () => {
   assert.strictEqual(typeof user.weeklyPoints, "number");
 });
 
+runTest("twee opeenvolgende mutations blijven beide behouden", () => {
+  mutatePoints((data) => {
+    data.users["111"] = {
+      points: 1,
+      weeklyPoints: 1,
+      weekId: "2026-08-04",
+      name: "Ada",
+      triggerDate: null,
+      triggersUsed: [],
+      activityDate: null,
+    };
+  }, testFile);
+  mutatePoints((data) => {
+    data.users["222"] = {
+      points: 2,
+      weeklyPoints: 2,
+      weekId: "2026-08-04",
+      name: "Bob",
+      triggerDate: null,
+      triggersUsed: [],
+      activityDate: null,
+    };
+    data.users["111"].points += 4;
+  }, testFile);
+  const users = loadPoints(testFile).users;
+  assert.strictEqual(users["111"].points, 5);
+  assert.strictEqual(users["222"].points, 2);
+});
+
 runTest("atomic write resulteert in valide JSON", () => {
   writeJsonFileAtomic(testFile, { users: { a: { points: 1 } } });
   const raw = fs.readFileSync(testFile, "utf8");
