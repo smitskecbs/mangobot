@@ -1,5 +1,5 @@
 /**
- * Owner (ADMIN_USER_ID) hidden from public leaderboards via verified uid.
+ * Owner (ADMIN_USER_ID) participates on public XP boards.
  * Snake/Bounch: telegramUserId from signed game identity only — never name filter.
  * Run: node tests/leaderboard-privacy.test.js
  */
@@ -143,27 +143,27 @@ function createMockCtx({
 process.env.ADMIN_USER_ID = OWNER_ID;
 seedPoints();
 
-runTest("1. owner uid verborgen uit lifetime", () => {
+runTest("1. owner uid zichtbaar op lifetime", () => {
   const top = getLifetimeTop(loadPoints(pointsFile).users);
   assert.deepStrictEqual(
     top.map((u) => u.name),
-    ["Alice", "Bob"]
+    ["Kevin", "Alice", "Bob"]
   );
   const lines = formatLifetimeLines(top, getRank);
-  assert.ok(lines[0].startsWith("🥇 Alice"));
-  assert.ok(!lines.some((l) => l.includes("Kevin")));
+  assert.ok(lines[0].startsWith("🥇 Kevin"));
+  assert.ok(lines.some((l) => l.includes("Alice")));
 });
 
-runTest("2. owner uid verborgen uit weekly", () => {
+runTest("2. owner uid zichtbaar op weekly", () => {
   const top = getWeeklyTop(
     loadPoints(pointsFile).users,
     getEffectiveWeeklyPoints
   );
   assert.deepStrictEqual(
     top.map((u) => u.name),
-    ["Alice", "Bob"]
+    ["Kevin", "Alice", "Bob"]
   );
-  assert.ok(formatWeeklyLines(top)[0].startsWith("🥇 Alice"));
+  assert.ok(formatWeeklyLines(top)[0].startsWith("🥇 Kevin"));
 });
 
 runTest("3. verified owner uid blijft zichtbaar op Snake", () => {
@@ -392,35 +392,30 @@ runTest("12. /points voor eigenaar blijft werken", () => {
   assert.ok(ctx.replies[0].text.includes("500") || ctx.replies[0].text.length > 10);
 });
 
-runTest("13. owner krijgt geen nieuwe community competition XP", () => {
+runTest("13. owner kan community competition XP verdienen", () => {
   const before = loadPoints(pointsFile).users[OWNER_ID].points;
   assert.strictEqual(
     awardDailyActivityPoint(OWNER_ID, "Kevin", pointsFile).awarded,
-    false
+    true
   );
   assert.strictEqual(
     awardTriggerPoints(OWNER_ID, "Kevin", "gm", pointsFile).awarded,
-    false
+    true
   );
-  assert.strictEqual(
-    loadPoints(pointsFile).users[OWNER_ID].points,
-    before
-  );
+  assert.ok(loadPoints(pointsFile).users[OWNER_ID].points > before);
 });
 
-runTest("14. ranks hernummeren na filtering", () => {
+runTest("14. ranks include owner without hiding", () => {
   const ctxLb = createMockCtx();
   handleLeaderboard(ctxLb, { pointsFile });
-  assert.ok(ctxLb.replies[0].text.includes("🥇 Alice"));
-  assert.ok(ctxLb.replies[0].text.includes("🥈 Bob"));
-  assert.ok(!ctxLb.replies[0].text.includes("Kevin"));
+  assert.ok(ctxLb.replies[0].text.includes("Kevin"));
+  assert.ok(ctxLb.replies[0].text.includes("Alice"));
 
   const ctxW = createMockCtx();
   handleWeekly(ctxW, { pointsFile });
-  assert.ok(ctxW.replies[0].text.includes("🥇 Alice"));
-  assert.ok(!ctxW.replies[0].text.includes("Kevin"));
+  assert.ok(ctxW.replies[0].text.includes("Kevin"));
 
-  assert.strictEqual(shouldHideFromLeaderboards(OWNER_ID), true);
+  assert.strictEqual(shouldHideFromLeaderboards(OWNER_ID), false);
   assert.strictEqual(shouldHideFromLeaderboards(ALICE_ID), false);
 });
 

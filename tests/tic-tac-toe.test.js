@@ -1495,7 +1495,7 @@ async function main() {
     assert.strictEqual(loadPoints(file).users[String(USER_B)], undefined);
   });
 
-  await runTest("bot XP: owner exclusion unchanged for bot wins", async () => {
+  await runTest("bot XP: owner can earn XP for bot wins", async () => {
     const file = pointsFile();
     const prevAdmin = process.env.ADMIN_USER_ID;
     process.env.ADMIN_USER_ID = String(USER_A);
@@ -1515,9 +1515,9 @@ async function main() {
         awardPvpWinXp(uid, name, file)
       );
       assert.strictEqual(fin.claim.shouldAward, true);
-      assert.strictEqual(fin.xpResult.awarded, false);
+      assert.strictEqual(fin.xpResult.awarded, true);
       const user = loadPoints(file).users[String(USER_A)];
-      assert.ok(!user || user.points === 0);
+      assert.strictEqual(user.points, PVP_WIN_XP);
     } finally {
       process.env.ADMIN_USER_ID = prevAdmin;
     }

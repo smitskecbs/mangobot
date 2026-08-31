@@ -422,9 +422,9 @@ async function main() {
     assert.strictEqual(builderSummary(OTHER, h.opts).builderPoints, 0);
   });
 
-  await runTest("admin/dev inviter earns BP, 0 XP, appears on leaderboard", async () => {
+  await runTest("admin/dev inviter earns BP and XP, appears on leaderboard", async () => {
     const h = harness();
-    assert.strictEqual(isCommunityCompetitionExcluded(ADMIN_ID), true);
+    assert.strictEqual(isCommunityCompetitionExcluded(ADMIN_ID), false);
     registerManualWallet(ADMIN_ID, generateSolanaWallet().address, h.walletFile);
     const created = await getOrCreateInviteLink(
       { id: ADMIN_ID, first_name: "Kevin" },
@@ -441,10 +441,10 @@ async function main() {
     assert.strictEqual(joined.ok, true);
     assert.strictEqual(joined.reason, JOIN_EVENT.ATTRIBUTED);
     assert.strictEqual(joined.builderPointsAwarded, 1);
-    assert.strictEqual(joined.xpAwarded, false);
-    assert.strictEqual(joined.xpReason, "excluded");
+    assert.strictEqual(joined.xpAwarded, true);
+    assert.notStrictEqual(joined.xpReason, "excluded");
     assert.strictEqual(builderSummary(ADMIN_ID, h.opts).builderPoints, 1);
-    assert.strictEqual(pointsOf(h.pointsFile, ADMIN_ID), 0);
+    assert.strictEqual(pointsOf(h.pointsFile, ADMIN_ID), 1);
     const board = getBuilderLeaderboard(h.opts);
     assert.ok(board.some((row) => row.displayName === "Kevin" && row.points === 1));
     assert.ok(!leaderboardText(board).includes(ADMIN_ID));
@@ -494,7 +494,7 @@ async function main() {
     assert.strictEqual(builderSummary(INVITER, h.opts).builderPoints, 1);
   });
 
-  await runTest("game XP admin exclusion unchanged", async () => {
+  await runTest("game XP admin can earn", async () => {
     const h = harness();
     registerManualWallet(ADMIN_ID, generateSolanaWallet().address, h.walletFile);
     const bomb = awardMangoBombXp(
@@ -505,8 +505,8 @@ async function main() {
       h.pointsFile,
       h.walletFile
     );
-    assert.strictEqual(bomb.awarded, false);
-    assert.strictEqual(bomb.reason, "excluded");
+    assert.strictEqual(bomb.awarded, true);
+    assert.notStrictEqual(bomb.reason, "excluded");
     const daily = awardDailyActivityPoint(
       ADMIN_ID,
       "Kevin",
@@ -514,8 +514,8 @@ async function main() {
       undefined,
       h.walletFile
     );
-    assert.strictEqual(daily.awarded, false);
-    assert.strictEqual(daily.reason, "excluded");
+    assert.strictEqual(daily.awarded, true);
+    assert.notStrictEqual(daily.reason, "excluded");
     const src = fs.readFileSync(
       path.join(__dirname, "..", "services", "communityBuilder.js"),
       "utf8"

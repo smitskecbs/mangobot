@@ -140,7 +140,7 @@ async function main() {
     assert.strictEqual(getPreviousWeekId("2026-08-10"), "2026-08-03");
   });
 
-  await runTest("Top 3 correct; owner excluded; max 3 stored", () => {
+  await runTest("Top 3 correct; owner included; max 3 stored", () => {
     const standings = {
       1: { name: "Alice", weeklyPoints: 40 },
       2: { name: "Bob", weeklyPoints: 30 },
@@ -148,14 +148,14 @@ async function main() {
       4: { name: "Dave", weeklyPoints: 10 },
       [OWNER_ID]: { name: "Kevin", weeklyPoints: 999 },
     };
-    assert.strictEqual(isCommunityCompetitionExcluded(OWNER_ID), true);
+    assert.strictEqual(isCommunityCompetitionExcluded(OWNER_ID), false);
     const top = rankWeeklyStandings(standings, TOP_N);
     assert.strictEqual(top.length, 3);
     assert.deepStrictEqual(
       top.map((w) => w.name),
-      ["Alice", "Bob", "Charlie"]
+      ["Kevin", "Alice", "Bob"]
     );
-    assert.ok(!top.some((w) => String(w.telegramUserId) === OWNER_ID));
+    assert.ok(top.some((w) => String(w.telegramUserId) === OWNER_ID));
   });
 
   await runTest("1 / 2 / 0 participants", () => {
@@ -356,10 +356,11 @@ async function main() {
     });
     assert.strictEqual(result.finalized, true);
     assert.strictEqual(result.posted, true);
-    assert.strictEqual(result.winners.length, 2);
-    assert.strictEqual(result.winners[0].name, "Alice");
+    assert.strictEqual(result.winners.length, 3);
+    assert.strictEqual(result.winners[0].name, "Kevin");
+    assert.strictEqual(result.winners[1].name, "Alice");
+    assert.ok(posts[0].includes("Kevin"));
     assert.ok(posts[0].includes("Alice"));
-    assert.ok(!posts[0].includes("Kevin"));
   });
 
   await runTest("noteWeeklyStanding before wipe preserves score", () => {
@@ -378,7 +379,7 @@ async function main() {
     noteWeeklyStanding(OWNER_ID, "Kevin", closedWeek, 999, wf);
     const state = readWinnersState(wf);
     assert.strictEqual(state.current.standings["1"].weeklyPoints, 40);
-    assert.strictEqual(state.current.standings[OWNER_ID], undefined);
+    assert.strictEqual(state.current.standings[OWNER_ID].weeklyPoints, 999);
   });
 
   await runTest("/weeklywinners public text; empty / filled", async () => {
@@ -670,23 +671,23 @@ async function main() {
     assert.strictEqual(state.current.standings["42"], undefined);
     assert.strictEqual(state.current.standings["99"], undefined);
     assert.strictEqual(state.current.standings["111"], undefined);
-    assert.strictEqual(state.current.standings[OWNER_ID], undefined);
+    assert.strictEqual(state.current.standings[OWNER_ID].weeklyPoints, 999);
 
     // Match /weekly semantics.
     const top = getWeeklyTop(loadPoints(pf).users, getEffectiveWeeklyPoints, 10);
     assert.deepStrictEqual(
       top.map((u) => u.name).sort(),
-      ["KronicGrimm", "Pippi"].sort()
+      ["Kevin", "KronicGrimm", "Pippi"].sort()
     );
-    assert.strictEqual(isCommunityCompetitionExcluded(OWNER_ID), true);
+    assert.strictEqual(isCommunityCompetitionExcluded(OWNER_ID), false);
   });
 
   await runTest(
-    "reconstruct excludes production owner id (string + number); keeps peers",
+    "reconstruct includes production owner id (string + number); keeps peers",
     async () => {
       assert.strictEqual(process.env.ADMIN_USER_ID, OWNER_ID);
-      assert.strictEqual(isCommunityCompetitionExcluded("1238384546"), true);
-      assert.strictEqual(isCommunityCompetitionExcluded(1238384546), true);
+      assert.strictEqual(isCommunityCompetitionExcluded("1238384546"), false);
+      assert.strictEqual(isCommunityCompetitionExcluded(1238384546), false);
 
       const pf = pointsFile();
       const wf = winnersFile();
@@ -733,15 +734,14 @@ async function main() {
         pointsFile: pf,
       });
       assert.strictEqual(result.ok, true);
-      assert.strictEqual(result.standingCount, 2);
+      assert.strictEqual(result.standingCount, 3);
       assert.strictEqual(result.preservedLatest, true);
       assert.strictEqual(result.preservedFinalized, true);
 
       const state = readWinnersState(wf);
       assert.strictEqual(state.lastFinalizedWeek, "2026-08-03");
       assert.strictEqual(state.latest.announced, true);
-      assert.strictEqual(state.current.standings["1238384546"], undefined);
-      assert.strictEqual(state.current.standings[1238384546], undefined);
+      assert.strictEqual(state.current.standings["1238384546"].weeklyPoints, 21);
       assert.strictEqual(state.current.standings["6170961561"].weeklyPoints, 14);
       assert.strictEqual(state.current.standings["8388586967"].weeklyPoints, 12);
 
@@ -749,7 +749,7 @@ async function main() {
       await handleWeekly(weeklyCtx, { pointsFile: pf });
       assert.ok(weeklyCtx.replies[0].text.includes("KronicGrimm"));
       assert.ok(weeklyCtx.replies[0].text.includes("Pippi"));
-      assert.ok(!weeklyCtx.replies[0].text.includes("Kevin"));
+      assert.ok(weeklyCtx.replies[0].text.includes("Kevin"));
 
       const winnersCtx = mockCtx();
       await handleWeeklyWinners(winnersCtx, { winnersFile: wf, pointsFile: pf });

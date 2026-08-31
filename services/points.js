@@ -211,7 +211,7 @@ function applySameDayStreakRepair(user, today = getTodayDate()) {
 
 /**
  * One-shot startup repair: activityDate === today + no streak → streak 1.
- * No XP. Skips owner/admin. No write when nothing changes.
+ * No XP. No write when nothing changes.
  * @param {string} [pointsFile]
  * @param {string} [todayDate]
  * @returns {{ repaired: number, written: boolean }}

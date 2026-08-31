@@ -765,7 +765,7 @@ async function runTest(name, fn) {
     assert.strictEqual(pointsOf(files, USER_A), BLACKJACK_BOT_WIN_XP * 2);
   });
 
-  await runTest("bot XP: owner exclusion unchanged for bot win", async () => {
+  await runTest("bot XP: owner can earn bot win XP", async () => {
     const prev = process.env.ADMIN_USER_ID;
     process.env.ADMIN_USER_ID = String(USER_A);
     try {
@@ -774,7 +774,7 @@ async function runTest(name, fn) {
       const { service } = createService();
       attachXp(service, files);
       await playBotWin(service);
-      assert.strictEqual(pointsOf(files, USER_A), 0);
+      assert.strictEqual(pointsOf(files, USER_A), BLACKJACK_BOT_WIN_XP);
     } finally {
       if (prev === undefined) delete process.env.ADMIN_USER_ID;
       else process.env.ADMIN_USER_ID = prev;
@@ -921,7 +921,7 @@ async function runTest(name, fn) {
     assert.strictEqual(botLoss.pointsToAdd, BLACKJACK_FIRST_COMPLETED_BOT_MIN_XP);
   });
 
-  await runTest("first-completed: owner exclusion does not grant floor", () => {
+  await runTest("first-completed: owner loss still grants floor", () => {
     const prev = process.env.ADMIN_USER_ID;
     process.env.ADMIN_USER_ID = String(USER_A);
     try {
@@ -934,8 +934,9 @@ async function runTest(name, fn) {
         files.pointsFile,
         files.walletFile
       );
-      assert.strictEqual(loss.awarded, false);
-      assert.strictEqual(pointsOf(files, USER_A), 0);
+      assert.strictEqual(loss.awarded, true);
+      assert.strictEqual(loss.pointsToAdd, BLACKJACK_FIRST_COMPLETED_BOT_MIN_XP);
+      assert.strictEqual(pointsOf(files, USER_A), BLACKJACK_FIRST_COMPLETED_BOT_MIN_XP);
     } finally {
       if (prev === undefined) delete process.env.ADMIN_USER_ID;
       else process.env.ADMIN_USER_ID = prev;

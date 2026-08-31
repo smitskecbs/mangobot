@@ -1,5 +1,5 @@
 /**
- * Daily activity types, streaks, GM interaction, owner exclusion.
+ * Daily activity types, streaks, GM interaction, owner participation.
  * Run: node tests/streak-activity.test.js
  */
 
@@ -242,13 +242,13 @@ runTest("11. concurrent same-day messages increment streak once", () => {
   assert.strictEqual(readStreak(loadPoints(file).users[String(ALICE)]).current, 1);
 });
 
-runTest("12. owner excluded / no community award", () => {
+runTest("12. owner can earn community award", () => {
   const file = pointsFile();
-  assert.strictEqual(isCommunityCompetitionExcluded(OWNER_ID), true);
+  assert.strictEqual(isCommunityCompetitionExcluded(OWNER_ID), false);
   const r = awardDailyActivityPoint(OWNER_ID, "Kevin", file, "2026-08-10");
-  assert.strictEqual(r.awarded, false);
-  assert.strictEqual(r.reason, "excluded");
-  assert.strictEqual(loadPoints(file).users[OWNER_ID], undefined);
+  assert.strictEqual(r.awarded, true);
+  assert.notStrictEqual(r.reason, "excluded");
+  assert.strictEqual(loadPoints(file).users[OWNER_ID].points, 1);
 });
 
 runTest("13. normal text counts", () => {
@@ -445,7 +445,7 @@ runTest("27. max one rank-up reply", () => {
   assert.strictEqual(result.reply, reply);
 });
 
-runTest("28-31. owner filtered from lifetime/weekly/streak boards", () => {
+runTest("28-31. owner included on lifetime/weekly/streak boards", () => {
   const file = pointsFile();
   savePoints(
     {
@@ -476,13 +476,13 @@ runTest("28-31. owner filtered from lifetime/weekly/streak boards", () => {
     file
   );
   const users = loadPoints(file).users;
-  assert.deepStrictEqual(getLifetimeTop(users).map((u) => u.name), ["Alice", "Bob"]);
+  assert.deepStrictEqual(getLifetimeTop(users).map((u) => u.name), ["Kevin", "Alice", "Bob"]);
   assert.deepStrictEqual(
     getWeeklyTop(users, getEffectiveWeeklyPoints).map((u) => u.name),
-    ["Alice", "Bob"]
+    ["Kevin", "Alice", "Bob"]
   );
-  assert.deepStrictEqual(getCurrentStreakTop(users).map((u) => u.name), ["Alice", "Bob"]);
-  assert.deepStrictEqual(getLongestStreakTop(users).map((u) => u.name), ["Bob", "Alice"]);
+  assert.deepStrictEqual(getCurrentStreakTop(users).map((u) => u.name), ["Kevin", "Alice", "Bob"]);
+  assert.deepStrictEqual(getLongestStreakTop(users).map((u) => u.name), ["Kevin", "Bob", "Alice"]);
   const ctx = {
     chat: { type: "group" },
     from: { id: ALICE, first_name: "Alice" },
@@ -492,24 +492,22 @@ runTest("28-31. owner filtered from lifetime/weekly/streak boards", () => {
     },
   };
   handleStreak(ctx, { pointsFile: file });
-  assert.ok(ctx.replies[0].text.includes("🥇 Alice — 3 days"));
-  assert.ok(!ctx.replies[0].text.includes("Kevin"));
+  assert.ok(ctx.replies[0].text.includes("🥇 Kevin — 40 days"));
   const ctx2 = { ...ctx, replies: [] };
   ctx2.reply = function (text) {
     this.replies.push({ text });
   };
   handleStreakRecord(ctx2, { pointsFile: file });
-  assert.ok(ctx2.replies[0].text.includes("🥇 Bob — 12 days"));
-  assert.ok(!ctx2.replies[0].text.includes("Kevin"));
+  assert.ok(ctx2.replies[0].text.includes("🥇 Kevin — 40 days"));
 });
 
-runTest("32-35. owner no new daily/GM/PvP/ChatFight XP", () => {
+runTest("32-35. owner can earn daily/GM/PvP/ChatFight XP", () => {
   const file = pointsFile();
-  assert.strictEqual(awardDailyActivityPoint(OWNER_ID, "Kevin", file).awarded, false);
-  assert.strictEqual(awardTriggerPoints(OWNER_ID, "Kevin", "gmango", file).awarded, false);
-  assert.strictEqual(awardPvpWinXp(OWNER_ID, "Kevin", file).awarded, false);
-  assert.strictEqual(awardChatFightXp(OWNER_ID, "Kevin", file).awarded, false);
-  assert.strictEqual(loadPoints(file).users[OWNER_ID], undefined);
+  assert.strictEqual(awardDailyActivityPoint(OWNER_ID, "Kevin", file).awarded, true);
+  assert.strictEqual(awardTriggerPoints(OWNER_ID, "Kevin", "gmango", file).awarded, true);
+  assert.strictEqual(awardPvpWinXp(OWNER_ID, "Kevin", file).awarded, true);
+  assert.strictEqual(awardChatFightXp(OWNER_ID, "Kevin", file).awarded, true);
+  assert.ok(loadPoints(file).users[OWNER_ID].points > 0);
 });
 
 runTest("36-37. Snake and Bounch owner scores stay visible", () => {
@@ -627,7 +625,7 @@ runTest("streak sort: current desc then longest then XP; ranks renumbered", () =
   };
   assert.deepStrictEqual(
     getCurrentStreakTop(users).map((u) => u.name),
-    ["C", "B", "A"]
+    ["Kevin", "C", "B", "A"]
   );
 });
 
@@ -736,7 +734,7 @@ runTest("legacy: second message today keeps streak 1 and no extra XP", () => {
   assert.strictEqual(readStreak(user).longest, 1);
 });
 
-runTest("legacy: owner with activityDate today is never repaired", () => {
+runTest("legacy: owner with activityDate today can repair streak without extra XP", () => {
   const file = pointsFile();
   const today = getTodayDate();
   savePoints(
@@ -760,14 +758,14 @@ runTest("legacy: owner with activityDate today is never repaired", () => {
     { pointsFile: file }
   );
   assert.strictEqual(result.activityResult.awarded, false);
-  assert.strictEqual(result.activityResult.reason, "excluded");
+  assert.notStrictEqual(result.activityResult.reason, "excluded");
   const owner = loadPoints(file).users[OWNER_ID];
   assert.strictEqual(owner.points, 20);
   assert.strictEqual(owner.weeklyPoints, 4);
   assert.deepStrictEqual(readStreak(owner), {
-    current: 0,
-    longest: 0,
-    lastActiveDate: null,
+    current: 1,
+    longest: 1,
+    lastActiveDate: today,
   });
 });
 
@@ -954,7 +952,7 @@ runTest("startup repair: activityDate=today + no streak → board visible, no XP
   );
 
   const result = repairCurrentDayStreaks(file, today);
-  assert.strictEqual(result.repaired, 2);
+  assert.strictEqual(result.repaired, 3);
   assert.strictEqual(result.written, true);
 
   const data = loadPoints(file);
@@ -971,9 +969,9 @@ runTest("startup repair: activityDate=today + no streak → board visible, no XP
     lastActiveDate: today,
   });
   assert.deepStrictEqual(readStreak(data.users[OWNER_ID]), {
-    current: 0,
-    longest: 0,
-    lastActiveDate: null,
+    current: 1,
+    longest: 1,
+    lastActiveDate: today,
   });
   assert.deepStrictEqual(readStreak(data.users.legacy), {
     current: 0,
@@ -992,7 +990,7 @@ runTest("startup repair: activityDate=today + no streak → board visible, no XP
   handleStreak(streakCtx, { pointsFile: file });
   assert.ok(streakCtx.replies[0].text.includes("Alice — 1 days"));
   assert.ok(streakCtx.replies[0].text.includes("Bob — 1 days"));
-  assert.ok(!streakCtx.replies[0].text.includes("Kevin"));
+  assert.ok(streakCtx.replies[0].text.includes("Kevin — 1 days"));
 
   const recordCtx = { ...streakCtx, replies: [] };
   recordCtx.reply = function (text) {

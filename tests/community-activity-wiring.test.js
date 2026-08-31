@@ -258,7 +258,7 @@ async function main() {
     assertNoUser(file);
   });
 
-  await runTest("negative: owner/admin excluded (+0)", async () => {
+  await runTest("owner/admin can earn activity XP", async () => {
     const file = pointsFile();
     const bot = createBot(file);
     await sendUpdate(
@@ -269,7 +269,8 @@ async function main() {
       })
     );
     const users = loadPoints(file).users || {};
-    assert.strictEqual(users[String(OWNER_ID)], undefined);
+    assert.ok(users[String(OWNER_ID)]);
+    assert.ok(users[String(OWNER_ID)].points >= 1);
   });
 
   await runTest("regression proof: omitting next() blocks points-trigger for text", async () => {

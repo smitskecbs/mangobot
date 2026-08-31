@@ -416,21 +416,21 @@ async function main() {
   const ctx = mockCtx();
   await handlePhase2Open(ctx, h.opts);
   const text = viewText(ctx);
+  assert.ok(text.includes("Owner — 50 XP"));
   assert.ok(text.includes("Alice — 18 XP"));
   assert.ok(text.includes("Bob — 15 XP"));
-  assert.ok(text.includes("Lojay — 12 XP"));
-  assert.ok(!text.includes("50 XP"));
+  assert.ok(!text.includes("Lojay — 12 XP"));
   assert.ok(text.includes("Alice — 8 BP"));
   assert.ok(text.includes("Kevin — 6 BP"));
   assert.ok(text.includes("Bob — 4 BP"));
-  assert.ok(text.includes("3 active this week"));
+  assert.ok(text.includes("4 active this week"));
   assert.ok(text.includes("Pending: 0"));
   assert.ok(text.includes("Sent this week: 0"));
   const ranked = getWeeklyRanked(loadPoints(h.pointsFile).users, (user) =>
     weeklyPointsAt(user, NOW)
   );
-  assert.strictEqual(ranked[0].name, "Alice");
-  assert.strictEqual(ranked[0].weeklyPoints, 18);
+  assert.strictEqual(ranked[0].name, "Owner");
+  assert.strictEqual(ranked[0].weeklyPoints, 50);
   const board = getBuilderLeaderboard({
     period: "weekly",
     now: NOW,
@@ -447,11 +447,11 @@ async function main() {
   await handlePhase2Callback(ctx, h.opts);
   const text = viewText(ctx);
   assert.ok(text.includes("🏆 Weekly XP Leaders"));
-  assert.ok(text.includes("1. Alice — 18 XP"));
-  assert.ok(text.includes("2. Bob — 15 XP"));
-  assert.ok(text.includes("3. Lojay — 12 XP"));
+  assert.ok(text.includes("1. Owner — 50 XP"));
+  assert.ok(text.includes("2. Alice — 18 XP"));
+  assert.ok(text.includes("3. Bob — 15 XP"));
   assert.ok(!text.includes("143"));
-  assert.ok(!text.includes("Owner"));
+  assert.ok(text.includes("Owner"));
   const top = getWeeklyTop(
     loadPoints(h.pointsFile).users,
     (user) => weeklyPointsAt(user, NOW),
@@ -459,7 +459,7 @@ async function main() {
   );
   assert.deepStrictEqual(
     top.map((row) => row.weeklyPoints),
-    [18, 15, 12]
+    [50, 18, 15, 12]
   );
 });
 
@@ -493,11 +493,11 @@ async function main() {
   assert.ok(text.includes("Weekly XP: 18"));
   assert.ok(text.includes("Rank: Tree"));
   assert.ok(text.includes("Wallet:"));
-  assert.ok(!text.includes("Owner"));
+  assert.ok(text.includes("Owner"));
   assertNoSecrets(text, viewExtra(ctx), h.wallets);
   const active = collectActiveMembers(h.opts);
-  assert.strictEqual(active.length, 3);
-  assert.strictEqual(active[0].activeDays, 5);
+  assert.strictEqual(active.length, 4);
+  assert.strictEqual(active[0].displayName, "Owner");
 });
 
   await runTest("16-18. candidates ordered, no winner/auto-reward", async () => {
@@ -521,7 +521,7 @@ async function main() {
   const ordered = collectCandidates(h.opts);
   assert.deepStrictEqual(
     ordered.map((row) => row.displayName),
-    ["Alice", "Bob", "Lojay", "Kevin"]
+    ["Owner", "Alice", "Bob", "Lojay", "Kevin"]
   );
   assert.ok(CANDIDATE_ORDER.includes("weekly XP"));
 });
@@ -735,7 +735,7 @@ async function main() {
     loadPoints(h.pointsFile).users,
     (user) => weeklyPointsAt(user, NOW)
   );
-  assert.strictEqual(weekly[0].name, "Alice");
+  assert.strictEqual(weekly[0].name, "Owner");
   const detail = loadMemberDetail(ALICE, h.opts);
   assert.strictEqual(detail.weeklyXp, 18);
   assert.strictEqual(detail.lifetimeXp, 143);

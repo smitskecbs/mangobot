@@ -1,7 +1,7 @@
 /**
  * Group management authorization for Telegram commands.
  * Allowlist (ADMIN_USER_ID) OR Telegram creator/administrator status.
- * Leaderboard privacy uses ADMIN_USER_ID (and verified score telegramUserId).
+ * Competition boards no longer hide ADMIN_USER_ID; isAdmin() stays permission-only.
  */
 
 const { isAdmin } = require("../services/points");
@@ -12,7 +12,7 @@ const MANAGE_STATUSES = new Set(["creator", "administrator"]);
 
 /**
  * Community competition boards (lifetime, weekly, streaks).
- * Delegates to the single ADMIN_USER_ID helper.
+ * Delegates to the shared participation helper (currently excludes nobody).
  * @param {string|number|null|undefined} userId
  * @returns {boolean}
  */

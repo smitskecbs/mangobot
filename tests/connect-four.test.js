@@ -1010,7 +1010,7 @@ async function main() {
     );
   });
 
-  await runTest("owner TTT and Connect Four wins award no XP", () => {
+  await runTest("owner TTT and Connect Four wins award XP", () => {
     process.env.ADMIN_USER_ID = String(USER_A);
     const file = pointsFile();
     const { service } = createService({ pairCooldownMs: 0 });
@@ -1020,8 +1020,8 @@ async function main() {
     const c4Claim = service.claimXpAward(started.session.id);
     assert.strictEqual(c4Claim.shouldAward, true);
     const c4Xp = awardPvpWinXp(c4Claim.winnerUserId, "Kevin", file);
-    assert.strictEqual(c4Xp.awarded, false);
-    assert.strictEqual(c4Xp.reason, "excluded");
+    assert.strictEqual(c4Xp.awarded, true);
+    assert.strictEqual(c4Xp.pointsToAdd, PVP_WIN_XP);
 
     const timers = createFakeTimers();
     const ttt = createTicTacToeService({
@@ -1048,9 +1048,9 @@ async function main() {
     const tttClaim = ttt.claimXpAward(s.session.id);
     assert.strictEqual(tttClaim.shouldAward, true);
     const tttXp = awardPvpWinXp(tttClaim.winnerUserId, "Kevin", file);
-    assert.strictEqual(tttXp.awarded, false);
-    assert.strictEqual(tttXp.reason, "excluded");
-    assert.strictEqual(loadPoints(file).users[String(USER_A)], undefined);
+    assert.strictEqual(tttXp.awarded, true);
+    assert.strictEqual(tttXp.pointsToAdd, PVP_WIN_XP);
+    assert.ok(loadPoints(file).users[String(USER_A)].points >= PVP_WIN_XP);
   });
 
   await runTest("daily quest: GAME_SOURCES includes connect4 and pvp", () => {
@@ -1377,7 +1377,7 @@ async function main() {
     assert.strictEqual(loadPoints(file).users[String(USER_B)], undefined);
   });
 
-  await runTest("bot XP: owner exclusion unchanged for bot wins", async () => {
+  await runTest("bot XP: owner can earn XP for bot wins", async () => {
     const file = pointsFile();
     const prevAdmin = process.env.ADMIN_USER_ID;
     process.env.ADMIN_USER_ID = String(USER_A);
@@ -1399,9 +1399,9 @@ async function main() {
         awardPvpWinXp(uid, name, file)
       );
       assert.strictEqual(fin.claim.shouldAward, true);
-      assert.strictEqual(fin.xpResult.awarded, false);
+      assert.strictEqual(fin.xpResult.awarded, true);
       const user = loadPoints(file).users[String(USER_A)];
-      assert.ok(!user || user.points === 0);
+      assert.strictEqual(user.points, PVP_WIN_XP);
     } finally {
       process.env.ADMIN_USER_ID = prevAdmin;
     }

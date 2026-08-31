@@ -110,13 +110,13 @@ runTest("2. unverified profile", () => {
   assert.strictEqual(isRewardEligible(202, file), false);
 });
 
-runTest("3. owner profile still readable; competition flag set", () => {
+runTest("3. owner profile still readable; competition flag unset", () => {
   const prev = process.env.ADMIN_USER_ID;
   process.env.ADMIN_USER_ID = "303";
   try {
     const file = walletFile();
     const profile = getMemberActivityProfile(303, { walletFile: file, pointsFile });
-    assert.strictEqual(profile.competitionExcluded, true);
+    assert.strictEqual(profile.competitionExcluded, false);
     assert.strictEqual(profile.wallet.verified, false);
   } finally {
     if (prev === undefined) delete process.env.ADMIN_USER_ID;

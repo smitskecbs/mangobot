@@ -18,7 +18,7 @@ function competitionEntries(users) {
 }
 
 /**
- * Top lifetime leaders. Owner (ADMIN_USER_ID) excluded before sort/slice.
+ * Top lifetime leaders.
  * @param {Record<string, object>} users
  * @param {number} [limit]
  */
@@ -30,7 +30,7 @@ function getLifetimeTop(users, limit = 10) {
 }
 
 /**
- * Weekly XP standings. Owner excluded before sort. No slice.
+ * Weekly XP standings. No slice.
  * @param {Record<string, object>} users
  * @param {(user: object) => number} getEffectiveWeeklyPoints
  */
@@ -46,7 +46,7 @@ function getWeeklyRanked(users, getEffectiveWeeklyPoints) {
 }
 
 /**
- * Top weekly leaders. Owner excluded before sort/slice.
+ * Top weekly leaders.
  * @param {Record<string, object>} users
  * @param {(user: object) => number} getEffectiveWeeklyPoints
  * @param {number} [limit]
@@ -66,7 +66,7 @@ function withStreakFields(user) {
 }
 
 /**
- * Current community-active streak board. Owner filtered before sort.
+ * Current community-active streak board.
  * @param {Record<string, object>} users
  * @param {number} [limit]
  */
@@ -84,7 +84,7 @@ function getCurrentStreakTop(users, limit = 10) {
 }
 
 /**
- * All-time longest streak board. Owner filtered before sort.
+ * All-time longest streak board.
  * @param {Record<string, object>} users
  * @param {number} [limit]
  */

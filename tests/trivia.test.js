@@ -461,7 +461,7 @@ async function main() {
     assert.ok(edits.some((e) => e.text.includes("TRIVIA COMPLETE")));
   });
 
-  await runTest("sole winner +3 XP; tie +2 XP; owner +0; daily cap", () => {
+  await runTest("sole winner +3 XP; tie +2 XP; owner earns; daily cap", () => {
     const file = pointsFile();
     assert.strictEqual(TRIVIA_ROUND_WIN_XP, 3);
     assert.strictEqual(TRIVIA_TIE_XP, 2);
@@ -478,8 +478,8 @@ async function main() {
     assert.strictEqual(tie.pointsToAdd, 2);
 
     const owner = awardTriviaRoundXp(OWNER_ID, "Kevin", TRIVIA_ROUND_WIN_XP, file);
-    assert.strictEqual(owner.awarded, false);
-    assert.strictEqual(owner.reason, "excluded");
+    assert.strictEqual(owner.awarded, true);
+    assert.strictEqual(owner.pointsToAdd, 3);
 
     awardTriviaRoundXp(USER_A, "Alice", TRIVIA_ROUND_WIN_XP, file);
     const capped = awardTriviaRoundXp(USER_A, "Alice", TRIVIA_ROUND_WIN_XP, file);
