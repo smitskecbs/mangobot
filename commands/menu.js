@@ -30,9 +30,6 @@ const {
 } = require("./streak");
 const {
   MENU_LABELS,
-  GROUP_MENU_TEXT,
-  GROUP_RANKINGS_TEXT,
-  GROUP_GAMES_TEXT,
   GROUP_PROFILE_TEXT,
   PRIVATE_MENU_HINT,
   GROUP_MENU_CALLBACK,
@@ -48,7 +45,18 @@ const {
   isGroupMenuCallback,
   isGroupMenuNavCallback,
   isPrivateHubCallback,
+  formatGroupMenuText,
+  formatGroupRankingsText,
+  formatGroupGamesText,
+  formatGroupProfileText,
 } = require("../utils/botMenu");
+const { sanitizePvpDisplayName } = require("../services/pvpSessionManager");
+const {
+  rememberSentGroupMenu,
+  getGroupMenuOwner,
+  callbackMenuMessageId,
+  formatMenuUnauthorizedToast,
+} = require("../utils/menuOwnership");
 
 const GROUP_MENU_ACTION_RE = new RegExp(
   `^(${[
@@ -87,6 +95,17 @@ const PRIVATE_HUB_ACTION_RE = new RegExp(
   ].join("|")})$`
 );
 
+function attachSentMenuOwnership(ctx, result) {
+  if (result && typeof result.then === "function") {
+    return result.then((sent) => {
+      rememberSentGroupMenu(ctx, sent);
+      return sent;
+    });
+  }
+  rememberSentGroupMenu(ctx, result);
+  return result;
+}
+
 /**
  * Edit the menu message in place; fall back to a new reply if edit fails.
  * @param {object} ctx
@@ -101,7 +120,28 @@ async function showMenuView(ctx, text, extra) {
       // Message not editable (e.g. too old) — reply instead.
     }
   }
-  return ctx.reply(text, extra);
+  const sent = await ctx.reply(text, extra);
+  rememberSentGroupMenu(ctx, sent);
+  return sent;
+}
+
+async function assertGroupMenuOwner(ctx) {
+  const clickerId = ctx && ctx.from ? ctx.from.id : null;
+  const chatId = ctx && ctx.chat ? ctx.chat.id : null;
+  const messageId = callbackMenuMessageId(ctx);
+  const record = getGroupMenuOwner(chatId, messageId);
+  if (
+    record &&
+    clickerId != null &&
+    String(record.ownerUserId) === String(clickerId)
+  ) {
+    return { ok: true, record };
+  }
+  const toast = formatMenuUnauthorizedToast(record && record.displayName);
+  if (ctx && typeof ctx.answerCbQuery === "function") {
+    await ctx.answerCbQuery(toast).catch(() => {});
+  }
+  return { ok: false };
 }
 
 /**
@@ -112,11 +152,15 @@ function handleMenu(ctx) {
     return ctx.reply(PRIVATE_MENU_HINT, getPrivateMenuKeyboard(ctx));
   }
 
+  const displayName = sanitizePvpDisplayName(ctx && ctx.from);
   if (isGroupChat(ctx)) {
-    return ctx.reply(GROUP_MENU_TEXT, getGroupMenuExtra(ctx));
+    return attachSentMenuOwnership(
+      ctx,
+      ctx.reply(formatGroupMenuText(displayName), getGroupMenuExtra(ctx))
+    );
   }
 
-  return ctx.reply(GROUP_MENU_TEXT);
+  return ctx.reply(formatGroupMenuText(displayName));
 }
 
 /**
@@ -192,6 +236,12 @@ async function handleGroupMenuCallback(ctx, options = {}) {
     return;
   }
 
+  const gate = await assertGroupMenuOwner(ctx);
+  if (!gate.ok) {
+    return;
+  }
+  const displayName = gate.record.displayName;
+
   try {
     if (typeof ctx.answerCbQuery === "function") {
       await ctx.answerCbQuery();
@@ -202,10 +252,18 @@ async function handleGroupMenuCallback(ctx, options = {}) {
 
   if (isGroupMenuNavCallback(data)) {
     if (data === GROUP_MENU_CALLBACK.RANKINGS) {
-      return showMenuView(ctx, GROUP_RANKINGS_TEXT, getGroupRankingsMenuExtra());
+      return showMenuView(
+        ctx,
+        formatGroupRankingsText(displayName),
+        getGroupRankingsMenuExtra()
+      );
     }
     if (data === GROUP_MENU_CALLBACK.GAMES) {
-      return showMenuView(ctx, GROUP_GAMES_TEXT, getGroupGamesMenuExtra(ctx));
+      return showMenuView(
+        ctx,
+        formatGroupGamesText(displayName),
+        getGroupGamesMenuExtra(ctx)
+      );
     }
     if (
       data === GROUP_MENU_CALLBACK.PROFILE ||
@@ -213,12 +271,16 @@ async function handleGroupMenuCallback(ctx, options = {}) {
     ) {
       return showMenuView(
         ctx,
-        GROUP_PROFILE_TEXT,
+        formatGroupProfileText(displayName),
         getGroupProfileMenuExtra(ctx)
       );
     }
     if (data === GROUP_MENU_CALLBACK.BACK) {
-      return showMenuView(ctx, GROUP_MENU_TEXT, getGroupMenuExtra(ctx));
+      return showMenuView(
+        ctx,
+        formatGroupMenuText(displayName),
+        getGroupMenuExtra(ctx)
+      );
     }
   }
 

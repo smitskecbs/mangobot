@@ -46,6 +46,7 @@ const {
 } = require("../commands/communitybuilder");
 const { handleStart } = require("../commands/start");
 const { handleGroupMenuCallback } = require("../commands/menu");
+const { bindGroupMenuOwnerFromCtx } = require("../utils/menuOwnership");
 const {
   MENU_LABELS,
   GROUP_MENU_CALLBACK,
@@ -884,6 +885,7 @@ async function main() {
       chatId: Number(COMMUNITY_CHAT),
       callbackData: GROUP_MENU_CALLBACK.BUILDER,
     });
+    bindGroupMenuOwnerFromCtx(ctx);
     await handleGroupMenuCallback(ctx);
     assert.ok(ctx.replies[0].text.includes("privately"));
   });

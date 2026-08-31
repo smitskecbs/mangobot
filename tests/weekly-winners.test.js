@@ -50,6 +50,7 @@ const {
   isGroupMenuCallback,
 } = require("../utils/botMenu");
 const { handleGroupMenuCallback } = require("../commands/menu");
+const { bindGroupMenuOwnerFromCtx } = require("../utils/menuOwnership");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-weekly-winners-"));
 const OWNER_ID = "1238384546";
@@ -463,6 +464,7 @@ async function main() {
     );
     const ctx = mockCtx();
     ctx.callbackQuery = { data: GROUP_MENU_CALLBACK.WEEKLY_WINNERS };
+    bindGroupMenuOwnerFromCtx(ctx);
     await handleGroupMenuCallback(ctx, { winnersFile: wf });
     assert.ok(ctx.replies.some((r) => r.text.includes("Alice — 9 XP")));
   });

@@ -39,6 +39,10 @@ const {
   getGroupProgressMenuExtra,
   getGroupProfileMenuExtra,
   getPrivateProfileMenuExtra,
+  formatGroupMenuText,
+  formatGroupRankingsText,
+  formatGroupGamesText,
+  formatGroupProfileText,
 } = require("../utils/botMenu");
 const { handleSnake } = require("../commands/snake");
 const { handleBounch } = require("../commands/bounch");
@@ -53,6 +57,12 @@ const {
   handlePrivateProfile,
   handlePrivateHubCallback,
 } = require("../commands/menu");
+const {
+  bindGroupMenuOwnerFromCtx,
+  forgetGroupMenuOwner,
+  resetGroupMenuOwnersForTests,
+  MENU_UNAUTHORIZED_GENERIC,
+} = require("../utils/menuOwnership");
 const {
   shouldSkipCommunityActivity,
 } = require("../events/points-trigger");
@@ -73,6 +83,7 @@ const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-bot-menu-test-"));
 const testPointsFile = path.join(tempDir, "points.json");
 
 const pendingAsyncTests = [];
+let nextTestMessageId = 1;
 
 function runTest(name, fn) {
   try {
@@ -105,6 +116,7 @@ function createMockCtx({
   startPayload,
   callbackData,
   chatId = -1003916996602,
+  messageId,
 } = {}) {
   const replies = [];
   const answered = [];
@@ -114,13 +126,23 @@ function createMockCtx({
     from: { id: userId, first_name: firstName },
     botInfo: botUsername ? { username: botUsername } : {},
     startPayload,
-    callbackQuery: callbackData ? { data: callbackData } : undefined,
+    callbackQuery: callbackData
+      ? {
+          data: callbackData,
+          message: { message_id: messageId != null ? messageId : 1 },
+        }
+      : undefined,
     replies,
     answered,
     edits,
     reply(text, extra) {
-      replies.push({ text, extra });
-      return Promise.resolve(replies[replies.length - 1]);
+      const payload = {
+        text,
+        extra,
+        message_id: messageId != null ? messageId : nextTestMessageId++,
+      };
+      replies.push(payload);
+      return Promise.resolve(payload);
     },
     editMessageText(text, extra) {
       edits.push({ text, extra });
@@ -131,6 +153,11 @@ function createMockCtx({
       return Promise.resolve();
     },
   };
+}
+
+function ownedCallback(ctx) {
+  bindGroupMenuOwnerFromCtx(ctx);
+  return ctx;
 }
 
 function getInlineRows(extra) {
@@ -589,9 +616,10 @@ runTest("isPrivateMenuLabel exact match only", () => {
 });
 
 runTest("/menu group toont Wallet en Rewards op hoofdmenu", () => {
-  const ctx = createMockCtx({ chatType: "supergroup" });
+  const ctx = createMockCtx({ chatType: "supergroup", firstName: "Kevin" });
   handleMenu(ctx);
-  assert.strictEqual(ctx.replies[0].text, GROUP_MENU_TEXT);
+  assert.strictEqual(ctx.replies[0].text, formatGroupMenuText("Kevin"));
+  assert.ok(ctx.replies[0].text.startsWith("🥭 ManGo Menu — Kevin"));
   const rows = getInlineRows(ctx.replies[0].extra);
   assert.strictEqual(rows.length, 5);
   assert.ok(rows.every((row) => row.length <= 2));
@@ -769,102 +797,124 @@ runTest("/start points group → geen persoonlijke points", () => {
 });
 
 runTest("Weekly callback gebruikt bestaande weekly logic", async () => {
-  const ctx = createMockCtx({
-    chatType: "group",
-    callbackData: GROUP_MENU_CALLBACK.WEEKLY,
-  });
+  const ctx = ownedCallback(
+    createMockCtx({
+      chatType: "group",
+      callbackData: GROUP_MENU_CALLBACK.WEEKLY,
+    })
+  );
   await handleGroupMenuCallback(ctx, { pointsFile: testPointsFile });
   assert.strictEqual(ctx.answered.length, 1);
   assert.ok(ctx.replies[0].text.includes("Weekly"));
 });
 
 runTest("Weekly Winners callback toont winners board", async () => {
-  const ctx = createMockCtx({
-    chatType: "group",
-    callbackData: GROUP_MENU_CALLBACK.WEEKLY_WINNERS,
-  });
+  const ctx = ownedCallback(
+    createMockCtx({
+      chatType: "group",
+      callbackData: GROUP_MENU_CALLBACK.WEEKLY_WINNERS,
+    })
+  );
   await handleGroupMenuCallback(ctx, { pointsFile: testPointsFile });
   assert.strictEqual(ctx.answered.length, 1);
   assert.ok(ctx.replies[0].text.includes("ManGo Weekly Winners"));
 });
 
 runTest("Leaderboard callback gebruikt bestaande leaderboard logic", async () => {
-  const ctx = createMockCtx({
-    chatType: "group",
-    callbackData: GROUP_MENU_CALLBACK.LEADERBOARD,
-  });
+  const ctx = ownedCallback(
+    createMockCtx({
+      chatType: "group",
+      callbackData: GROUP_MENU_CALLBACK.LEADERBOARD,
+    })
+  );
   await handleGroupMenuCallback(ctx, { pointsFile: testPointsFile });
   assert.ok(ctx.replies[0].text.includes("Leaderboard"));
 });
 
 runTest("Help callback toont bestaande help", async () => {
-  const ctx = createMockCtx({
-    chatType: "group",
-    callbackData: GROUP_MENU_CALLBACK.HELP,
-  });
+  const ctx = ownedCallback(
+    createMockCtx({
+      chatType: "group",
+      callbackData: GROUP_MENU_CALLBACK.HELP,
+    })
+  );
   await handleGroupMenuCallback(ctx);
   assert.strictEqual(ctx.replies[0].text, HELP_MESSAGE);
 });
 
 runTest("Streak callback toont publieke current streak board", async () => {
-  const ctx = createMockCtx({
-    chatType: "group",
-    callbackData: GROUP_MENU_CALLBACK.STREAK,
-  });
+  const ctx = ownedCallback(
+    createMockCtx({
+      chatType: "group",
+      callbackData: GROUP_MENU_CALLBACK.STREAK,
+    })
+  );
   await handleGroupMenuCallback(ctx, { pointsFile: testPointsFile });
   assert.strictEqual(ctx.answered.length, 1);
   assert.ok(ctx.replies[0].text.includes("ManGo Active Streaks"));
 });
 
 runTest("Streak Record callback toont longest board", async () => {
-  const ctx = createMockCtx({
-    chatType: "group",
-    callbackData: GROUP_MENU_CALLBACK.STREAK_RECORD,
-  });
+  const ctx = ownedCallback(
+    createMockCtx({
+      chatType: "group",
+      callbackData: GROUP_MENU_CALLBACK.STREAK_RECORD,
+    })
+  );
   await handleGroupMenuCallback(ctx, { pointsFile: testPointsFile });
   assert.ok(ctx.replies[0].text.includes("Longest ManGo Streaks"));
 });
 
 runTest("Rankings / Games / Profile / Back navigation edits menu", async () => {
-  const rankingsCtx = createMockCtx({
-    chatType: "group",
-    callbackData: GROUP_MENU_CALLBACK.RANKINGS,
-  });
+  const rankingsCtx = ownedCallback(
+    createMockCtx({
+      chatType: "group",
+      callbackData: GROUP_MENU_CALLBACK.RANKINGS,
+    })
+  );
   await handleGroupMenuCallback(rankingsCtx);
-  assert.strictEqual(rankingsCtx.edits[0].text, GROUP_RANKINGS_TEXT);
+  assert.strictEqual(rankingsCtx.edits[0].text, formatGroupRankingsText("Ada"));
   assert.ok(
     getInlineButtons(rankingsCtx.edits[0].extra).some(
       (b) => b.callback_data === GROUP_MENU_CALLBACK.WEEKLY_WINNERS
     )
   );
 
-  const gamesCtx = createMockCtx({
-    chatType: "group",
-    callbackData: GROUP_MENU_CALLBACK.GAMES,
-  });
+  const gamesCtx = ownedCallback(
+    createMockCtx({
+      chatType: "group",
+      callbackData: GROUP_MENU_CALLBACK.GAMES,
+    })
+  );
   await handleGroupMenuCallback(gamesCtx);
-  assert.strictEqual(gamesCtx.edits[0].text, GROUP_GAMES_TEXT);
+  assert.strictEqual(gamesCtx.edits[0].text, formatGroupGamesText("Ada"));
 
-  const profileCtx = createMockCtx({
-    chatType: "group",
-    callbackData: GROUP_MENU_CALLBACK.PROFILE,
-  });
+  const profileCtx = ownedCallback(
+    createMockCtx({
+      chatType: "group",
+      callbackData: GROUP_MENU_CALLBACK.PROFILE,
+    })
+  );
   await handleGroupMenuCallback(profileCtx);
-  assert.strictEqual(profileCtx.edits[0].text, GROUP_PROFILE_TEXT);
+  assert.strictEqual(profileCtx.edits[0].text, formatGroupProfileText("Ada"));
 
-  const progressCtx = createMockCtx({
-    chatType: "group",
-    callbackData: GROUP_MENU_CALLBACK.PROGRESS,
-  });
+  const progressCtx = ownedCallback(
+    createMockCtx({
+      chatType: "group",
+      callbackData: GROUP_MENU_CALLBACK.PROGRESS,
+    })
+  );
   await handleGroupMenuCallback(progressCtx);
-  assert.strictEqual(progressCtx.edits[0].text, GROUP_PROGRESS_TEXT);
+  assert.strictEqual(progressCtx.edits[0].text, formatGroupProfileText("Ada"));
 
-  const backCtx = createMockCtx({
-    chatType: "group",
-    callbackData: GROUP_MENU_CALLBACK.BACK,
-  });
+  const backCtx = ownedCallback(
+    createMockCtx({
+      chatType: "group",
+      callbackData: GROUP_MENU_CALLBACK.BACK,
+    })
+  );
   await handleGroupMenuCallback(backCtx);
-  assert.strictEqual(backCtx.edits[0].text, GROUP_MENU_TEXT);
+  assert.strictEqual(backCtx.edits[0].text, formatGroupMenuText("Ada"));
   assert.deepStrictEqual(
     getInlineButtons(backCtx.edits[0].extra).map((b) => b.text),
     [
@@ -882,13 +932,15 @@ runTest("Rankings / Games / Profile / Back navigation edits menu", async () => {
 });
 
 runTest("Back fallback replies when edit unavailable", async () => {
-  const ctx = createMockCtx({
-    chatType: "group",
-    callbackData: GROUP_MENU_CALLBACK.BACK,
-  });
+  const ctx = ownedCallback(
+    createMockCtx({
+      chatType: "group",
+      callbackData: GROUP_MENU_CALLBACK.BACK,
+    })
+  );
   delete ctx.editMessageText;
   await handleGroupMenuCallback(ctx);
-  assert.strictEqual(ctx.replies[0].text, GROUP_MENU_TEXT);
+  assert.strictEqual(ctx.replies[0].text, formatGroupMenuText("Ada"));
 });
 
 runTest("Tic-Tac-Toe menu lets members start (no admin required)", async () => {
@@ -896,10 +948,12 @@ runTest("Tic-Tac-Toe menu lets members start (no admin required)", async () => {
   process.env.TELEGRAM_CHAT_ID = String(-1003916996602);
   delete process.env.TELEGRAM_GAMES_TOPIC_ID;
   try {
-    const ctx = createMockCtx({
-      chatType: "supergroup",
-      callbackData: GROUP_MENU_CALLBACK.TICTACTOE,
-    });
+    const ctx = ownedCallback(
+      createMockCtx({
+        chatType: "supergroup",
+        callbackData: GROUP_MENU_CALLBACK.TICTACTOE,
+      })
+    );
     let started = false;
     await handleGroupMenuCallback(ctx, {
       isBusyFn: () => false,
@@ -922,10 +976,12 @@ runTest("Tic-Tac-Toe menu lets members start (no admin required)", async () => {
 });
 
 runTest("Tic-Tac-Toe menu respects Games topic gate", async () => {
-  const ctx = createMockCtx({
-    chatType: "supergroup",
-    callbackData: GROUP_MENU_CALLBACK.TICTACTOE,
-  });
+  const ctx = ownedCallback(
+    createMockCtx({
+      chatType: "supergroup",
+      callbackData: GROUP_MENU_CALLBACK.TICTACTOE,
+    })
+  );
   await handleGroupMenuCallback(ctx, {
     isBusyFn: () => false,
     assertCanStartFn: async () => ({ ok: false, reason: "wrong-topic" }),
@@ -941,10 +997,12 @@ runTest("Connect Four menu lets members start (no admin required)", async () => 
   process.env.TELEGRAM_CHAT_ID = String(-1003916996602);
   delete process.env.TELEGRAM_GAMES_TOPIC_ID;
   try {
-    const ctx = createMockCtx({
-      chatType: "supergroup",
-      callbackData: GROUP_MENU_CALLBACK.CONNECT4,
-    });
+    const ctx = ownedCallback(
+      createMockCtx({
+        chatType: "supergroup",
+        callbackData: GROUP_MENU_CALLBACK.CONNECT4,
+      })
+    );
     let started = false;
     await handleGroupMenuCallback(ctx, {
       isBusyFn: () => false,
@@ -971,10 +1029,12 @@ runTest("Trivia menu opens category chooser (no admin required)", async () => {
   process.env.TELEGRAM_CHAT_ID = String(-1003916996602);
   delete process.env.TELEGRAM_GAMES_TOPIC_ID;
   try {
-    const ctx = createMockCtx({
-      chatType: "supergroup",
-      callbackData: GROUP_MENU_CALLBACK.TRIVIA,
-    });
+    const ctx = ownedCallback(
+      createMockCtx({
+        chatType: "supergroup",
+        callbackData: GROUP_MENU_CALLBACK.TRIVIA,
+      })
+    );
     let started = false;
     await handleGroupMenuCallback(ctx, {
       isBusyFn: () => false,
@@ -1008,10 +1068,12 @@ runTest("ManGo Bomb menu lets members start (no admin required)", async () => {
   process.env.TELEGRAM_CHAT_ID = String(-1003916996602);
   delete process.env.TELEGRAM_GAMES_TOPIC_ID;
   try {
-    const ctx = createMockCtx({
-      chatType: "supergroup",
-      callbackData: GROUP_MENU_CALLBACK.MANGOBOMB,
-    });
+    const ctx = ownedCallback(
+      createMockCtx({
+        chatType: "supergroup",
+        callbackData: GROUP_MENU_CALLBACK.MANGOBOMB,
+      })
+    );
     let started = false;
     await handleGroupMenuCallback(ctx, {
       isBusyFn: () => false,
@@ -1055,6 +1117,225 @@ runTest("/start streak group → geen persoonlijke streak dump", () => {
   handleStart(ctx, { pointsFile: testPointsFile });
   assert.strictEqual(ctx.replies[0].text, WELCOME_MESSAGE);
   assert.ok(!ctx.replies[0].text.includes("Your ManGo Streak"));
+});
+
+runTest("owner can use their own group menu callbacks", async () => {
+  resetGroupMenuOwnersForTests();
+  const menu = createMockCtx({
+    chatType: "supergroup",
+    userId: USER_A,
+    firstName: "Kevin",
+    chatId: -2001,
+  });
+  await handleMenu(menu);
+  const cb = createMockCtx({
+    chatType: "supergroup",
+    userId: USER_A,
+    firstName: "Kevin",
+    chatId: -2001,
+    messageId: menu.replies[0].message_id,
+    callbackData: GROUP_MENU_CALLBACK.GAMES,
+  });
+  await handleGroupMenuCallback(cb);
+  assert.strictEqual(cb.edits.length, 1);
+  assert.strictEqual(cb.edits[0].text, formatGroupGamesText("Kevin"));
+  assert.ok(cb.answered.includes(true));
+});
+
+runTest("outsider click is denied and does not mutate the menu", async () => {
+  resetGroupMenuOwnersForTests();
+  const menu = createMockCtx({
+    chatType: "supergroup",
+    userId: USER_A,
+    firstName: "Kevin",
+    chatId: -2002,
+  });
+  await handleMenu(menu);
+  const outsider = createMockCtx({
+    chatType: "supergroup",
+    userId: USER_B,
+    firstName: "Piet",
+    chatId: -2002,
+    messageId: menu.replies[0].message_id,
+    callbackData: GROUP_MENU_CALLBACK.GAMES,
+  });
+  await handleGroupMenuCallback(outsider);
+  assert.deepStrictEqual(outsider.edits, []);
+  assert.deepStrictEqual(outsider.replies, []);
+  assert.deepStrictEqual(outsider.answered, [
+    "This menu belongs to Kevin. Open your own with /menu.",
+  ]);
+});
+
+runTest("parallel menus stay independently usable", async () => {
+  resetGroupMenuOwnersForTests();
+  const menuA = createMockCtx({
+    chatType: "supergroup",
+    userId: USER_A,
+    firstName: "Kevin",
+    chatId: -2003,
+  });
+  const menuB = createMockCtx({
+    chatType: "supergroup",
+    userId: USER_B,
+    firstName: "Piet",
+    chatId: -2003,
+  });
+  await handleMenu(menuA);
+  await handleMenu(menuB);
+  assert.notStrictEqual(
+    menuA.replies[0].message_id,
+    menuB.replies[0].message_id
+  );
+
+  const clickA = createMockCtx({
+    chatType: "supergroup",
+    userId: USER_A,
+    firstName: "Kevin",
+    chatId: -2003,
+    messageId: menuA.replies[0].message_id,
+    callbackData: GROUP_MENU_CALLBACK.RANKINGS,
+  });
+  const clickB = createMockCtx({
+    chatType: "supergroup",
+    userId: USER_B,
+    firstName: "Piet",
+    chatId: -2003,
+    messageId: menuB.replies[0].message_id,
+    callbackData: GROUP_MENU_CALLBACK.GAMES,
+  });
+  await handleGroupMenuCallback(clickA);
+  await handleGroupMenuCallback(clickB);
+  assert.strictEqual(clickA.edits[0].text, formatGroupRankingsText("Kevin"));
+  assert.strictEqual(clickB.edits[0].text, formatGroupGamesText("Piet"));
+  assert.strictEqual(clickA.edits.length, 1);
+  assert.strictEqual(clickB.edits.length, 1);
+});
+
+runTest("forgetting menu A does not affect menu B", async () => {
+  resetGroupMenuOwnersForTests();
+  const menuA = createMockCtx({
+    chatType: "supergroup",
+    userId: USER_A,
+    firstName: "Kevin",
+    chatId: -2004,
+  });
+  const menuB = createMockCtx({
+    chatType: "supergroup",
+    userId: USER_B,
+    firstName: "Piet",
+    chatId: -2004,
+  });
+  await handleMenu(menuA);
+  await handleMenu(menuB);
+  forgetGroupMenuOwner(-2004, menuA.replies[0].message_id);
+
+  const staleA = createMockCtx({
+    chatType: "supergroup",
+    userId: USER_A,
+    firstName: "Kevin",
+    chatId: -2004,
+    messageId: menuA.replies[0].message_id,
+    callbackData: GROUP_MENU_CALLBACK.BACK,
+  });
+  const liveB = createMockCtx({
+    chatType: "supergroup",
+    userId: USER_B,
+    firstName: "Piet",
+    chatId: -2004,
+    messageId: menuB.replies[0].message_id,
+    callbackData: GROUP_MENU_CALLBACK.PROFILE,
+  });
+  await handleGroupMenuCallback(staleA);
+  await handleGroupMenuCallback(liveB);
+  assert.deepStrictEqual(staleA.edits, []);
+  assert.deepStrictEqual(staleA.answered, [MENU_UNAUTHORIZED_GENERIC]);
+  assert.strictEqual(liveB.edits[0].text, formatGroupProfileText("Piet"));
+});
+
+runTest("Back on menu A does not change menu B", async () => {
+  resetGroupMenuOwnersForTests();
+  const menuA = createMockCtx({
+    chatType: "supergroup",
+    userId: USER_A,
+    firstName: "Kevin",
+    chatId: -2005,
+  });
+  const menuB = createMockCtx({
+    chatType: "supergroup",
+    userId: USER_B,
+    firstName: "Piet",
+    chatId: -2005,
+  });
+  await handleMenu(menuA);
+  await handleMenu(menuB);
+  const snapshotB = JSON.stringify(menuB.replies[0]);
+
+  const backA = createMockCtx({
+    chatType: "supergroup",
+    userId: USER_A,
+    firstName: "Kevin",
+    chatId: -2005,
+    messageId: menuA.replies[0].message_id,
+    callbackData: GROUP_MENU_CALLBACK.GAMES,
+  });
+  await handleGroupMenuCallback(backA);
+  const backHome = createMockCtx({
+    chatType: "supergroup",
+    userId: USER_A,
+    firstName: "Kevin",
+    chatId: -2005,
+    messageId: menuA.replies[0].message_id,
+    callbackData: GROUP_MENU_CALLBACK.BACK,
+  });
+  await handleGroupMenuCallback(backHome);
+  assert.strictEqual(backHome.edits[0].text, formatGroupMenuText("Kevin"));
+  assert.strictEqual(JSON.stringify(menuB.replies[0]), snapshotB);
+  assert.strictEqual(menuB.edits.length, 0);
+});
+
+runTest("ADMIN_USER_ID cannot drive another player's personal menu", async () => {
+  resetGroupMenuOwnersForTests();
+  const prev = process.env.ADMIN_USER_ID;
+  process.env.ADMIN_USER_ID = String(USER_B);
+  try {
+    const menu = createMockCtx({
+      chatType: "supergroup",
+      userId: USER_A,
+      firstName: "Kevin",
+      chatId: -2006,
+    });
+    await handleMenu(menu);
+    const adminClick = createMockCtx({
+      chatType: "supergroup",
+      userId: USER_B,
+      firstName: "Owner",
+      chatId: -2006,
+      messageId: menu.replies[0].message_id,
+      callbackData: GROUP_MENU_CALLBACK.GAMES,
+    });
+    await handleGroupMenuCallback(adminClick);
+    assert.deepStrictEqual(adminClick.edits, []);
+    assert.deepStrictEqual(adminClick.replies, []);
+    assert.deepStrictEqual(adminClick.answered, [
+      "This menu belongs to Kevin. Open your own with /menu.",
+    ]);
+  } finally {
+    if (prev === undefined) delete process.env.ADMIN_USER_ID;
+    else process.env.ADMIN_USER_ID = prev;
+  }
+});
+
+runTest("stale callback without mapping fails closed", async () => {
+  resetGroupMenuOwnersForTests();
+  const ctx = createMockCtx({
+    chatType: "group",
+    callbackData: GROUP_MENU_CALLBACK.GAMES,
+  });
+  await handleGroupMenuCallback(ctx);
+  assert.deepStrictEqual(ctx.edits, []);
+  assert.deepStrictEqual(ctx.replies, []);
+  assert.deepStrictEqual(ctx.answered, [MENU_UNAUTHORIZED_GENERIC]);
 });
 
 runTest("/menu command skips daily activity", () => {

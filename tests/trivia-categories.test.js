@@ -27,6 +27,7 @@ const {
   handleTriviaHubCallback,
 } = require("../commands/trivia");
 const { handleGroupMenuCallback } = require("../commands/menu");
+const { bindGroupMenuOwnerFromCtx } = require("../utils/menuOwnership");
 const { GROUP_MENU_CALLBACK, GROUP_GAMES_TEXT } = require("../utils/botMenu");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-trivia-cat-"));
@@ -195,6 +196,7 @@ async function main() {
 
   await runTest("1. Games → Trivia opens category chooser", async () => {
     const ctx = createMockCtx({ callbackData: GROUP_MENU_CALLBACK.TRIVIA });
+    bindGroupMenuOwnerFromCtx(ctx);
     await handleGroupMenuCallback(ctx, { isBusyFn: () => false });
     const text = viewText(ctx);
     assert.ok(text.includes("🧠 ManGo Trivia"));

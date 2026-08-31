@@ -50,6 +50,7 @@ const { GROUP_MENU_CALLBACK, getGroupGamesMenuExtra } = require("../utils/botMen
 const { HELP_MESSAGE } = require("../commands/help");
 const { buildGamesTopicUrl } = require("../utils/gameTopic");
 const { handleGroupMenuCallback } = require("../commands/menu");
+const { bindGroupMenuOwnerFromCtx } = require("../utils/menuOwnership");
 const {
   ACTION_REGISTRY,
 } = require("../services/communityActivityEngine");
@@ -833,6 +834,7 @@ async function main() {
       chatId: USER_A,
       callbackData: GROUP_MENU_CALLBACK.MANGOBOMB,
     });
+    bindGroupMenuOwnerFromCtx(ctx);
     await handleGroupMenuCallback(ctx, {
       isBusyFn: () => false,
       startLobbyFn: (p) => {

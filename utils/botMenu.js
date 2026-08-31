@@ -26,21 +26,23 @@ const MENU_LABELS = Object.freeze({
 
 const MENU_LABEL_LIST = Object.freeze(Object.values(MENU_LABELS));
 
-const GROUP_MENU_TEXT = `🥭 ManGo Menu
+const GROUP_MENU_TITLE = "🥭 ManGo Menu";
+const GROUP_MENU_BODY = "Choose what you want to explore.";
+const GROUP_RANKINGS_TITLE = "🏆 Rankings";
+const GROUP_RANKINGS_BODY = "Check community progress and weekly competition.";
+const GROUP_GAMES_TITLE = "🎮 Games";
+const GROUP_GAMES_BODY = "Play, compete and challenge the community.";
+const GROUP_PROFILE_TITLE = "👤 My Profile";
+const GROUP_PROFILE_BODY =
+  "Check your XP, streak, wallet status and rewards.";
 
-Choose what you want to explore.`;
+const GROUP_MENU_TEXT = `${GROUP_MENU_TITLE}\n\n${GROUP_MENU_BODY}`;
 
-const GROUP_RANKINGS_TEXT = `🏆 Rankings
+const GROUP_RANKINGS_TEXT = `${GROUP_RANKINGS_TITLE}\n\n${GROUP_RANKINGS_BODY}`;
 
-Check community progress and weekly competition.`;
+const GROUP_GAMES_TEXT = `${GROUP_GAMES_TITLE}\n\n${GROUP_GAMES_BODY}`;
 
-const GROUP_GAMES_TEXT = `🎮 Games
-
-Play, compete and challenge the community.`;
-
-const GROUP_PROFILE_TEXT = `👤 My Profile
-
-Check your XP, streak, wallet status and rewards.`;
+const GROUP_PROFILE_TEXT = `${GROUP_PROFILE_TITLE}\n\n${GROUP_PROFILE_BODY}`;
 
 const GROUP_PROGRESS_TEXT = GROUP_PROFILE_TEXT;
 
@@ -103,6 +105,44 @@ function isGroupChat(ctx) {
 
 function isPrivateMenuLabel(text) {
   return typeof text === "string" && MENU_LABEL_LIST.includes(text);
+}
+
+/**
+ * Prefix a menu heading with the owner's display name. Never interpolates ids.
+ * @param {string} title
+ * @param {string} body
+ * @param {string|null|undefined} displayName
+ * @returns {string}
+ */
+function formatOwnedMenuText(title, body, displayName) {
+  const name =
+    typeof displayName === "string" ? displayName.replace(/\s+/g, " ").trim() : "";
+  const heading = name ? `${title} — ${name}` : title;
+  return `${heading}\n\n${body}`;
+}
+
+function formatGroupMenuText(displayName) {
+  return formatOwnedMenuText(GROUP_MENU_TITLE, GROUP_MENU_BODY, displayName);
+}
+
+function formatGroupRankingsText(displayName) {
+  return formatOwnedMenuText(
+    GROUP_RANKINGS_TITLE,
+    GROUP_RANKINGS_BODY,
+    displayName
+  );
+}
+
+function formatGroupGamesText(displayName) {
+  return formatOwnedMenuText(GROUP_GAMES_TITLE, GROUP_GAMES_BODY, displayName);
+}
+
+function formatGroupProfileText(displayName) {
+  return formatOwnedMenuText(
+    GROUP_PROFILE_TITLE,
+    GROUP_PROFILE_BODY,
+    displayName
+  );
 }
 
 /**
@@ -495,6 +535,11 @@ module.exports = {
   GROUP_GAMES_TEXT,
   GROUP_PROFILE_TEXT,
   GROUP_PROGRESS_TEXT,
+  formatOwnedMenuText,
+  formatGroupMenuText,
+  formatGroupRankingsText,
+  formatGroupGamesText,
+  formatGroupProfileText,
   PRIVATE_MENU_HINT,
   GROUP_MENU_CALLBACK,
   PRIVATE_HUB_CALLBACK,

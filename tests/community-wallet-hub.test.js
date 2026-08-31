@@ -13,7 +13,6 @@ const { encodeBase58 } = require("../utils/base58");
 const { signEd25519Detached } = require("../utils/ed25519");
 const {
   MENU_LABELS,
-  GROUP_MENU_TEXT,
   GROUP_PROFILE_TEXT,
   PRIVATE_MENU_HINT,
   GROUP_MENU_CALLBACK,
@@ -22,6 +21,7 @@ const {
   getGroupMenuExtra,
   getGroupProfileMenuExtra,
   getPrivateProfileMenuExtra,
+  formatGroupMenuText,
 } = require("../utils/botMenu");
 const {
   handleMenu,
@@ -29,6 +29,7 @@ const {
   handlePrivateProfile,
   handlePrivateHubCallback,
 } = require("../commands/menu");
+const { bindGroupMenuOwnerFromCtx } = require("../utils/menuOwnership");
 const {
   handleWallet,
   handleWalletCallback,
@@ -202,7 +203,7 @@ runTest("1. Wallet grote hoofdmenu-knop", () => {
   handleMenu(ctx);
   const labels = buttons(ctx.replies[0]).map((b) => b.text);
   assert.ok(labels.includes("👛 Wallet"));
-  assert.strictEqual(ctx.replies[0].text, GROUP_MENU_TEXT);
+  assert.strictEqual(ctx.replies[0].text, formatGroupMenuText("Ada"));
 });
 
 runTest("2. Rewards grote hoofdmenu-knop", () => {
@@ -246,8 +247,9 @@ runTest("5. Back behavior", async () => {
     chatType: "group",
     callbackData: GROUP_MENU_CALLBACK.BACK,
   });
+  bindGroupMenuOwnerFromCtx(groupBack);
   await handleGroupMenuCallback(groupBack);
-  assert.strictEqual(groupBack.edits[0].text, GROUP_MENU_TEXT);
+  assert.strictEqual(groupBack.edits[0].text, formatGroupMenuText("Ada"));
 
   const profile = createMockCtx({ chatType: "private" });
   handlePrivateProfile(profile);

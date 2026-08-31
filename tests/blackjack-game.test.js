@@ -37,6 +37,7 @@ const { ACTION_REGISTRY } = require("../services/communityActivityEngine");
 const { GROUP_MENU_CALLBACK, getGroupGamesMenuExtra } = require("../utils/botMenu");
 const { HELP_MESSAGE } = require("../commands/help");
 const { handleGroupMenuCallback } = require("../commands/menu");
+const { bindGroupMenuOwnerFromCtx } = require("../utils/menuOwnership");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-bj-game-"));
 const COMMUNITY_CHAT = -1001234567890;
@@ -705,6 +706,7 @@ function createMockCtx(opts = {}) {
       callbackData: GROUP_MENU_CALLBACK.BLACKJACK,
       messageThreadId: 123,
     });
+    bindGroupMenuOwnerFromCtx(ctx);
     await handleGroupMenuCallback(ctx, {
       startLobbyFn: () => ({
         ok: true,
