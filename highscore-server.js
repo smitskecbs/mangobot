@@ -70,6 +70,11 @@ const {
   takeXpWalletReminder,
   XP_WALLET_GAME_LOCKED_TEXT,
 } = require("./services/xpWalletGate");
+const {
+  missingTelegramNotifyKeys,
+  formatTelegramNotifyDisabledLog,
+  sendHighscoreTelegramMessage,
+} = require("./services/highscoreNotify");
 
 const PORT = Number.parseInt(process.env.PORT || "8787", 10);
 const BOT_TOKEN = process.env.BOT_TOKEN?.trim();
@@ -230,29 +235,12 @@ function tryAwardBounchGameXp(identity, playerName, level) {
 }
 
 async function sendTelegramMessage(text) {
-  if (!BOT_TOKEN || !TELEGRAM_CHAT_ID) {
-    return false;
-  }
-
-  try {
-    const response = await fetchWithTimeout(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        chat_id: TELEGRAM_CHAT_ID,
-        text,
-        disable_web_page_preview: true,
-      }),
-      timeoutMs: TELEGRAM_TIMEOUT_MS,
-    });
-    return response.ok;
-  } catch (err) {
-    const code = (err && err.code) || (err && err.name) || "Error";
-    console.error(`[api] telegram notify failed error=${code}`);
-    return false;
-  }
+  return sendHighscoreTelegramMessage(text, {
+    botToken: BOT_TOKEN,
+    chatId: TELEGRAM_CHAT_ID,
+    log,
+    logError,
+  });
 }
 
 function isTestProcess() {
@@ -381,6 +369,7 @@ async function handleSnakeHighscore(req, res, origin) {
   }
 
   if (!BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+    log(formatTelegramNotifyDisabledLog(missingTelegramNotifyKeys(BOT_TOKEN, TELEGRAM_CHAT_ID)));
     sendJson(
       res,
       200,
@@ -523,6 +512,7 @@ async function handleBounchHighscore(req, res, origin) {
   }
 
   if (!BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+    log(formatTelegramNotifyDisabledLog(missingTelegramNotifyKeys(BOT_TOKEN, TELEGRAM_CHAT_ID)));
     sendJson(
       res,
       200,
@@ -641,7 +631,7 @@ server.listen(PORT, () => {
   log(`[startup] wallet-file-configured=yes`);
 
   if (!BOT_TOKEN || !TELEGRAM_CHAT_ID) {
-    log("[startup] telegram notify disabled");
+    log(formatTelegramNotifyDisabledLog(missingTelegramNotifyKeys(BOT_TOKEN, TELEGRAM_CHAT_ID)));
   }
   startPresaleReconciliationTimer();
   startDeliveryReconciliationTimer();

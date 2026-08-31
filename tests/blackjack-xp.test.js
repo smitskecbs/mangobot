@@ -31,6 +31,7 @@ const {
   BLACKJACK_PVP_WIN_XP,
   BLACKJACK_STAKE_XP,
   BLACKJACK_DAILY_REWARDED_CAP,
+  BLACKJACK_FIRST_COMPLETED_BOT_MIN_XP,
   loadPoints,
   mutatePoints,
   getTodayDate,
@@ -408,7 +409,7 @@ async function runTest(name, fn) {
     assert.strictEqual(pointsOf(files, USER_A), BLACKJACK_TIE_XP);
   });
 
-  await runTest("49. bot loss +0", async () => {
+  await runTest("49. first bot loss of UTC day +2", async () => {
     const files = nextFiles();
     link(files, USER_A);
     const { service } = createService();
@@ -430,7 +431,29 @@ async function runTest(name, fn) {
       threadId: 123,
     });
     await service.whenIdle(COMMUNITY_CHAT);
-    assert.strictEqual(pointsOf(files, USER_A), 0);
+    assert.strictEqual(pointsOf(files, USER_A), BLACKJACK_FIRST_COMPLETED_BOT_MIN_XP);
+  });
+
+  await runTest("49b. second bot loss same UTC day +0", async () => {
+    const files = nextFiles();
+    link(files, USER_A);
+    const first = awardBlackjackBotResultXp(
+      USER_A,
+      "Alice",
+      { result: "loss", eligible: true },
+      files.pointsFile,
+      files.walletFile
+    );
+    assert.strictEqual(first.pointsToAdd, BLACKJACK_FIRST_COMPLETED_BOT_MIN_XP);
+    const second = awardBlackjackBotResultXp(
+      USER_A,
+      "Alice",
+      { result: "loss", eligible: true },
+      files.pointsFile,
+      files.walletFile
+    );
+    assert.strictEqual(second.pointsToAdd, 0);
+    assert.strictEqual(pointsOf(files, USER_A), BLACKJACK_FIRST_COMPLETED_BOT_MIN_XP);
   });
 
   await runTest("50. no negative lifetime XP", () => {
@@ -443,9 +466,9 @@ async function runTest(name, fn) {
       files.pointsFile,
       files.walletFile
     );
-    assert.strictEqual(loss.pointsToAdd, 0);
+    assert.strictEqual(loss.pointsToAdd, BLACKJACK_FIRST_COMPLETED_BOT_MIN_XP);
     assert.ok(loss.points >= 0);
-    assert.strictEqual(pointsOf(files, USER_A), 0);
+    assert.strictEqual(pointsOf(files, USER_A), BLACKJACK_FIRST_COMPLETED_BOT_MIN_XP);
   });
 
   await runTest("51-52. rank-up fields and announcement predicate", () => {
@@ -793,6 +816,130 @@ async function runTest(name, fn) {
     await service.whenIdle(COMMUNITY_CHAT);
     assert.strictEqual(pointsOf(files, USER_A), BLACKJACK_BOT_WIN_XP + BLACKJACK_PVP_WIN_XP);
     assert.strictEqual(pointsOf(files, USER_B), 0);
+  });
+
+  await runTest("first-completed: win stays 10 not 12", () => {
+    const files = nextFiles();
+    link(files, USER_A);
+    const win = awardBlackjackBotResultXp(
+      USER_A,
+      "Alice",
+      { result: "win", eligible: true },
+      files.pointsFile,
+      files.walletFile
+    );
+    assert.strictEqual(win.pointsToAdd, BLACKJACK_BOT_WIN_XP);
+  });
+
+  await runTest("first-completed: pass does not consume bot Play floor", () => {
+    const files = nextFiles();
+    link(files, USER_A);
+    awardBlackjackPassXp(
+      USER_A,
+      "Alice",
+      { eligible: true },
+      files.pointsFile,
+      files.walletFile
+    );
+    assert.strictEqual(pointsOf(files, USER_A), BLACKJACK_PASS_XP);
+    const loss = awardBlackjackBotResultXp(
+      USER_A,
+      "Alice",
+      { result: "loss", eligible: true },
+      files.pointsFile,
+      files.walletFile
+    );
+    assert.strictEqual(loss.pointsToAdd, BLACKJACK_FIRST_COMPLETED_BOT_MIN_XP);
+    assert.strictEqual(
+      pointsOf(files, USER_A),
+      BLACKJACK_PASS_XP + BLACKJACK_FIRST_COMPLETED_BOT_MIN_XP
+    );
+  });
+
+  await runTest("first-completed: wallet block does not consume the claim", () => {
+    const files = nextFiles();
+    const blocked = awardBlackjackBotResultXp(
+      USER_A,
+      "Alice",
+      { result: "loss", eligible: true },
+      files.pointsFile,
+      files.walletFile
+    );
+    assert.strictEqual(blocked.awarded, false);
+    assert.strictEqual(blocked.reason, XP_WALLET_REQUIRED);
+    assert.strictEqual(pointsOf(files, USER_A), 0);
+    link(files, USER_A);
+    const later = awardBlackjackBotResultXp(
+      USER_A,
+      "Alice",
+      { result: "loss", eligible: true },
+      files.pointsFile,
+      files.walletFile
+    );
+    assert.strictEqual(later.pointsToAdd, BLACKJACK_FIRST_COMPLETED_BOT_MIN_XP);
+  });
+
+  await runTest("first-completed: fun-only loss does not consume the claim", () => {
+    const files = nextFiles();
+    link(files, USER_A);
+    const fun = awardBlackjackBotResultXp(
+      USER_A,
+      "Alice",
+      { result: "loss", eligible: false, funOnly: true },
+      files.pointsFile,
+      files.walletFile
+    );
+    assert.strictEqual(fun.pointsToAdd, 0);
+    const later = awardBlackjackBotResultXp(
+      USER_A,
+      "Alice",
+      { result: "loss", eligible: true },
+      files.pointsFile,
+      files.walletFile
+    );
+    assert.strictEqual(later.pointsToAdd, BLACKJACK_FIRST_COMPLETED_BOT_MIN_XP);
+  });
+
+  await runTest("first-completed: PvP loss stays +0", () => {
+    const files = nextFiles();
+    link(files, USER_A);
+    const pvp = awardBlackjackPvpResultXp(
+      USER_A,
+      "Alice",
+      { result: "loss", eligible: true },
+      files.pointsFile,
+      files.walletFile
+    );
+    assert.strictEqual(pvp.pointsToAdd, 0);
+    const botLoss = awardBlackjackBotResultXp(
+      USER_A,
+      "Alice",
+      { result: "loss", eligible: true },
+      files.pointsFile,
+      files.walletFile
+    );
+    assert.strictEqual(botLoss.pointsToAdd, BLACKJACK_FIRST_COMPLETED_BOT_MIN_XP);
+  });
+
+  await runTest("first-completed: owner exclusion does not grant floor", () => {
+    const prev = process.env.ADMIN_USER_ID;
+    process.env.ADMIN_USER_ID = String(USER_A);
+    try {
+      const files = nextFiles();
+      link(files, USER_A);
+      const loss = awardBlackjackBotResultXp(
+        USER_A,
+        "Alice",
+        { result: "loss", eligible: true },
+        files.pointsFile,
+        files.walletFile
+      );
+      assert.strictEqual(loss.awarded, false);
+      assert.strictEqual(pointsOf(files, USER_A), 0);
+    } finally {
+      if (prev === undefined) delete process.env.ADMIN_USER_ID;
+      else process.env.ADMIN_USER_ID = prev;
+    }
   });
 
   for (const [file, mtime] of Object.entries(prodMtimes)) {

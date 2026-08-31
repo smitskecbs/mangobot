@@ -1680,6 +1680,8 @@ const BLACKJACK_BOT_WIN_XP = 10;
 const BLACKJACK_PVP_WIN_XP = 20;
 /** Max rewarded Blackjack rounds per UTC day per user. */
 const BLACKJACK_DAILY_REWARDED_CAP = 2;
+/** Minimum XP for the first completed bot Play-game of a UTC day. */
+const BLACKJACK_FIRST_COMPLETED_BOT_MIN_XP = 2;
 
 /**
  * Ensure optional Blackjack XP state exists (backward compatible).
@@ -1692,6 +1694,7 @@ function ensureBlackjackState(user) {
       rewardDate: null,
       rewardedRoundsUsed: 0,
       rewardedPvpOpponents: [],
+      firstBotPlayRewardDate: null,
     };
   }
   if (!Object.prototype.hasOwnProperty.call(user.blackjack, "rewardDate")) {
@@ -1700,6 +1703,9 @@ function ensureBlackjackState(user) {
   user.blackjack.rewardedRoundsUsed = normalizeNonNegInt(
     user.blackjack.rewardedRoundsUsed
   );
+  if (!Object.prototype.hasOwnProperty.call(user.blackjack, "firstBotPlayRewardDate")) {
+    user.blackjack.firstBotPlayRewardDate = null;
+  }
   if (!Array.isArray(user.blackjack.rewardedPvpOpponents)) {
     user.blackjack.rewardedPvpOpponents = [];
   } else {
@@ -1717,6 +1723,7 @@ function resetBlackjackIfNewDay(user) {
     user.blackjack.rewardDate = today;
     user.blackjack.rewardedRoundsUsed = 0;
     user.blackjack.rewardedPvpOpponents = [];
+    user.blackjack.firstBotPlayRewardDate = null;
   }
 }
 
@@ -1922,6 +1929,7 @@ function settleBlackjackXp(
     typeof amount === "number" && Number.isInteger(amount) && amount > 0 ? amount : 0;
   const funOnly = Boolean(payload && payload.funOnly);
   const eligible = payload && payload.eligible === false ? false : !funOnly;
+  const botCompletedPlay = Boolean(payload && payload.botCompletedPlay);
 
   return finalizeXpAward(
     userId,
@@ -1951,7 +1959,17 @@ function settleBlackjackXp(
         });
       }
 
-      if (!eligible || !want) {
+      const today = getTodayDate();
+      let reward = want;
+      if (
+        botCompletedPlay &&
+        eligible &&
+        user.blackjack.firstBotPlayRewardDate !== today
+      ) {
+        reward = Math.max(reward, BLACKJACK_FIRST_COMPLETED_BOT_MIN_XP);
+      }
+
+      if (!eligible || !reward) {
         return blackjackAwardBase(user, {
           reason: extraReason || (funOnly ? "fun-only" : "zero"),
           funOnly: true,
@@ -1960,7 +1978,10 @@ function settleBlackjackXp(
         });
       }
 
-      const granted = grantBlackjackXp(user, want);
+      const granted = grantBlackjackXp(user, reward);
+      if (botCompletedPlay && granted.awarded) {
+        user.blackjack.firstBotPlayRewardDate = today;
+      }
       noteWeeklyStandingSafe(id, user);
       return { ...granted, walletOk: true, eligible: true, funOnly: false };
     }, pointsFile),
@@ -2004,7 +2025,7 @@ function awardBlackjackBotResultXp(
     userId,
     userName,
     amount,
-    payload,
+    { ...payload, botCompletedPlay: true },
     pointsFile,
     walletFile,
     outcome || "bot"
@@ -2411,6 +2432,7 @@ module.exports = {
   BLACKJACK_BOT_WIN_XP,
   BLACKJACK_PVP_WIN_XP,
   BLACKJACK_DAILY_REWARDED_CAP,
+  BLACKJACK_FIRST_COMPLETED_BOT_MIN_XP,
   ensureBlackjackState,
   getBlackjackStatus,
   reserveBlackjackRewardedRound,
