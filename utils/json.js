@@ -87,6 +87,60 @@ function writeJsonFileAtomic(filePath, data) {
 }
 
 /**
+ * Async counterpart of writeJsonFileAtomic. Same durability intent:
+ * unique same-directory temp → write → file fsync → rename → directory fsync.
+ * File/directory fsync remain best-effort. Original target is not replaced
+ * until rename succeeds. Optional `io` is for tests only (defaults to fs.promises).
+ *
+ * @param {string} filePath
+ * @param {unknown} data
+ * @param {typeof fs.promises} [io]
+ */
+async function writeJsonFileAtomicAsync(filePath, data, io) {
+  const fsp = io || fs.promises;
+  const dir = path.dirname(filePath);
+  const base = path.basename(filePath);
+  const unique = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const tempFile = path.join(dir, `${base}.tmp-${unique}`);
+  const payload = JSON.stringify(data, null, 2);
+
+  try {
+    await fsp.writeFile(tempFile, payload, "utf8");
+
+    try {
+      const fh = await fsp.open(tempFile, "r+");
+      try {
+        await fh.sync();
+      } finally {
+        await fh.close();
+      }
+    } catch {
+      // fsync is best-effort; rename still replaces the target atomically on the same volume.
+    }
+
+    await fsp.rename(tempFile, filePath);
+
+    try {
+      const dirFh = await fsp.open(dir, "r");
+      try {
+        await dirFh.sync();
+      } finally {
+        await dirFh.close();
+      }
+    } catch {
+      // Directory fsync is best-effort; not supported on every platform.
+    }
+  } catch (err) {
+    try {
+      await fsp.unlink(tempFile);
+    } catch {
+      // ignore cleanup errors
+    }
+    throw err;
+  }
+}
+
+/**
  * Write data to a JSON file using atomic temp+rename.
  * Logs errors instead of throwing (legacy helper behavior).
  */
@@ -111,5 +165,6 @@ module.exports = {
   readJsonFile,
   writeJsonFile,
   writeJsonFileAtomic,
+  writeJsonFileAtomicAsync,
   ensureJsonFile,
 };

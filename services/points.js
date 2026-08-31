@@ -1,14 +1,16 @@
 /**
  * Community points system — storage, triggers, ranks, weekly tracking, and daily activity.
  *
- * All points.json mutations go through mutatePoints(): exclusive cross-process lock +
- * atomic write. Read-only helpers never write.
+ * All production points.json mutations go through mutatePoints() (sync).
+ * mutatePointsAsync is the async successor and is not wired to production callers yet.
+ * Read-only helpers never write.
  */
 
 const fs = require("fs");
 const path = require("path");
 const lockfile = require("proper-lockfile");
-const { writeJsonFileAtomic } = require("../utils/json");
+const { writeJsonFileAtomic, writeJsonFileAtomicAsync } = require("../utils/json");
+const { enqueueFileMutation } = require("../utils/asyncFileQueue");
 const { error: logError } = require("../utils/logger");
 const { isCommunityCompetitionExcluded } = require("../utils/competition");
 const {
@@ -54,6 +56,22 @@ const LOCK_RETRY = Object.freeze({
   factor: 1.5,
 });
 
+/**
+ * Async lock options. Same stale/realpath as POINTS_LOCK_OPTIONS.
+ * retries uses proper-lockfile v4 / `retry` package (async waits, no Atomics.wait).
+ * retries: 100 ≈ the sync helper's 100 attempts.
+ */
+const POINTS_LOCK_ASYNC_OPTIONS = Object.freeze({
+  stale: POINTS_LOCK_OPTIONS.stale,
+  realpath: POINTS_LOCK_OPTIONS.realpath,
+  retries: Object.freeze({
+    retries: LOCK_RETRY.attempts,
+    minTimeout: LOCK_RETRY.minTimeoutMs,
+    maxTimeout: LOCK_RETRY.maxTimeoutMs,
+    factor: LOCK_RETRY.factor,
+  }),
+});
+
 function sleepSync(ms) {
   const delay = Math.max(0, Math.ceil(ms));
   if (delay === 0) {
@@ -92,6 +110,20 @@ function acquirePointsLock(pointsFile) {
   const message =
     lastError && lastError.message ? lastError.message : "lock retries exhausted";
   throw new Error(`Failed to acquire points.json lock: ${message}`);
+}
+
+/**
+ * Acquire an exclusive lock without blocking the event loop.
+ * @param {string} pointsFile
+ * @returns {Promise<() => Promise<void>>} async release
+ */
+async function acquirePointsLockAsync(pointsFile) {
+  try {
+    return await lockfile.lock(pointsFile, POINTS_LOCK_ASYNC_OPTIONS);
+  } catch (err) {
+    const message = err && err.message ? err.message : String(err);
+    throw new Error(`Failed to acquire points.json lock: ${message}`);
+  }
 }
 
 function getTodayDate(date = new Date()) {
@@ -318,6 +350,56 @@ function loadPoints(pointsFile = POINTS_FILE) {
 }
 
 /**
+ * Async strict/fail-closed read used by mutatePointsAsync.
+ * Missing or empty → empty structure. Invalid JSON/shape throws when strict.
+ * @param {string} [pointsFile]
+ * @param {{ strict?: boolean }} [options]
+ */
+async function readPointsSnapshotAsync(pointsFile = POINTS_FILE, options = {}) {
+  try {
+    let raw;
+    try {
+      raw = await fs.promises.readFile(pointsFile, "utf8");
+    } catch (err) {
+      if (err && err.code === "ENOENT") {
+        return emptyPointsData();
+      }
+      throw err;
+    }
+
+    raw = typeof raw === "string" ? raw.trim() : "";
+    if (!raw) {
+      return emptyPointsData();
+    }
+
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== "object" || !data.users || typeof data.users !== "object") {
+      if (options.strict) {
+        throw new Error("Failed to read points.json: invalid-shape");
+      }
+      return emptyPointsData();
+    }
+
+    return data;
+  } catch (err) {
+    if (options.strict && err && err.code !== "ENOENT") {
+      const message = err && err.message ? err.message : String(err);
+      throw new Error(`Failed to read points.json: ${message}`);
+    }
+    logError(`Error reading ${path.basename(pointsFile)}:`, err);
+    return emptyPointsData();
+  }
+}
+
+function isThenable(value) {
+  return Boolean(
+    value &&
+      (typeof value === "object" || typeof value === "function") &&
+      typeof value.then === "function"
+  );
+}
+
+/**
  * Exclusive cross-process mutation of points.json.
  * Lock → read → mutator(data) → atomic write → release (always).
  *
@@ -381,6 +463,80 @@ function mutatePoints(mutator, pointsFile = POINTS_FILE) {
 
   if (mutated) {
     notifyReferralLifetimeCrossings(beforePoints, afterPoints, pointsFile);
+  }
+  return result;
+}
+
+/**
+ * Async exclusive mutation of points.json.
+ * Production callers still use mutatePoints(); this is infrastructure for the
+ * later migration.
+ *
+ * Exclusive queue slot (per resolved file path):
+ *   async lock → async read → sync mutator → stringify (null, 2) via atomic
+ *   helper → async write → unlock.
+ *
+ * Ordering matches mutatePoints:
+ * - noteWeeklyStandingSafe still runs inside the mutator while the points lock
+ *   is held (award wrappers call it; not redesigned here).
+ * - notifyReferralLifetimeCrossings runs after the exclusive queue slot and
+ *   lock are released (mutatePoints notifies after unlock).
+ *
+ * Mutators must be synchronous. A thenable return is rejected so an async
+ * mutator cannot deadlock the per-file queue or reorder writes.
+ *
+ * @template T
+ * @param {(data: { users: Record<string, object> }) => T} mutator
+ * @param {string} [pointsFile]
+ * @param {{ writeJsonFileAtomicAsync?: Function }} [options] test-only write injection
+ * @returns {Promise<T>}
+ */
+async function mutatePointsAsync(mutator, pointsFile = POINTS_FILE, options = {}) {
+  if (typeof mutator !== "function") {
+    throw new TypeError("mutatePointsAsync requires a mutator function");
+  }
+
+  const resolved = path.resolve(pointsFile || POINTS_FILE);
+  const writeAtomic =
+    options && typeof options.writeJsonFileAtomicAsync === "function"
+      ? options.writeJsonFileAtomicAsync
+      : writeJsonFileAtomicAsync;
+
+  let beforePoints = null;
+  let afterPoints = null;
+  let mutated = false;
+  let result;
+
+  await enqueueFileMutation(resolved, async () => {
+    const release = await acquirePointsLockAsync(resolved);
+    try {
+      const data = await readPointsSnapshotAsync(resolved, { strict: true });
+      beforePoints = snapshotUserPoints(data);
+      result = mutator(data);
+      if (isThenable(result)) {
+        throw new TypeError("mutatePointsAsync mutator must be synchronous");
+      }
+
+      try {
+        await writeAtomic(resolved, data);
+      } catch (err) {
+        const message = err && err.message ? err.message : String(err);
+        throw new Error(`Failed to write points.json: ${message}`);
+      }
+
+      afterPoints = snapshotUserPoints(data);
+      mutated = true;
+    } finally {
+      try {
+        await Promise.resolve(typeof release === "function" ? release() : undefined);
+      } catch (err) {
+        logError("Failed to release points.json lock:", err);
+      }
+    }
+  });
+
+  if (mutated) {
+    notifyReferralLifetimeCrossings(beforePoints, afterPoints, resolved);
   }
   return result;
 }
@@ -2380,9 +2536,12 @@ module.exports = {
   TRIGGER_DETECT_ORDER,
   TRIGGER_LABELS,
   POINTS_LOCK_OPTIONS,
+  POINTS_LOCK_ASYNC_OPTIONS,
   loadPoints,
   savePoints,
   mutatePoints,
+  mutatePointsAsync,
+  acquirePointsLockAsync,
   readPointsSnapshot,
   isAdmin,
   getRank,
