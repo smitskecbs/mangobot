@@ -322,14 +322,14 @@ async function main() {
     });
     seedPoints(h.pointsFile, USER, 24);
     const before = loadPoints(h.pointsFile).users[USER].points;
-    const awarded = awardDailyActivityPoint(USER, "Ada", h.pointsFile);
+    const awarded = await awardDailyActivityPoint(USER, "Ada", h.pointsFile);
     assert.strictEqual(awarded.rankUp, true);
     await whenRankUpIdle();
     assert.strictEqual(loadPoints(h.pointsFile).users[USER].points, before + 1);
     const pending = loadRankUpStore(h.storeFile).announcements[rankUpEventId(USER, "Sprout")];
     assert.strictEqual(pending.state, "pending");
     fail = false;
-    const again = awardDailyActivityPoint(USER, "Ada", h.pointsFile);
+    const again = await awardDailyActivityPoint(USER, "Ada", h.pointsFile);
     assert.strictEqual(again.awarded, false);
     assert.strictEqual(again.rankUp, false);
     await maybeAnnounceRankUp({
@@ -350,32 +350,32 @@ async function main() {
       username: "adafruit",
       first_name: "Ada",
     });
-    const gm = awardTriggerPoints(USER, "Ada", "gm", h.pointsFile);
+    const gm = await awardTriggerPoints(USER, "Ada", "gm", h.pointsFile);
     assert.strictEqual(gm.rankUp, true);
     await whenRankUpIdle();
     assert.strictEqual(h.posts.length, 1);
 
     const h2 = harness();
     seedPoints(h2.pointsFile, USER, 24);
-    awardDailyActivityPoint(USER, "Ada", h2.pointsFile);
+    await awardDailyActivityPoint(USER, "Ada", h2.pointsFile);
     await whenRankUpIdle();
     assert.strictEqual(h2.posts.length, 1);
 
     const h3 = harness();
     seedPoints(h3.pointsFile, USER, 24);
-    awardPvpWinXp(USER, "Ada", h3.pointsFile);
+    await awardPvpWinXp(USER, "Ada", h3.pointsFile);
     await whenRankUpIdle();
     assert.strictEqual(h3.posts.length, 1);
 
     const h4 = harness();
     seedPoints(h4.pointsFile, USER, 24);
-    awardMangoBombXp(USER, "Ada", 1, "round-1", h4.pointsFile);
+    await awardMangoBombXp(USER, "Ada", 1, "round-1", h4.pointsFile);
     await whenRankUpIdle();
     assert.strictEqual(h4.posts.length, 1);
 
     const h5 = harness();
     seedPoints(h5.pointsFile, USER, 24);
-    awardCommunityBuilderXp(USER, "Ada", 1, h5.pointsFile);
+    await awardCommunityBuilderXp(USER, "Ada", 1, h5.pointsFile);
     await whenRankUpIdle();
     assert.strictEqual(h5.posts.length, 1);
 
@@ -400,7 +400,7 @@ async function main() {
   await runTest("31. large XP award announces only final rank", async () => {
     const h = harness();
     seedPoints(h.pointsFile, USER, 0);
-    const result = awardCommunityBuilderXp(USER, "Ada", 80, h.pointsFile);
+    const result = await awardCommunityBuilderXp(USER, "Ada", 80, h.pointsFile);
     assert.strictEqual(result.previousRank.title, "Seed");
     assert.strictEqual(result.rank.title, "Tree");
     await whenRankUpIdle();

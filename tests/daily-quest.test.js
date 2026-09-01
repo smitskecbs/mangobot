@@ -177,7 +177,7 @@ async function runTest(name, fn) {
 }
 
 async function main() {
-  await runTest("10. daily state starts 0/3", () => {
+  await runTest("10. daily state starts 0/3", async () => {
     const files = nextFiles();
     link(files);
     const snap = getDailyQuestSnapshot(USER, opts(files));
@@ -186,35 +186,35 @@ async function main() {
     assert.strictEqual(snap.streak, 0);
   });
 
-  await runTest("11-14. community message once; slash/bot ignored", () => {
+  await runTest("11-14. community message once; slash/bot ignored", async () => {
     const files = nextFiles();
     link(files);
-    const ok = processCommunityMessage(groupCtx({ text: "hello mango" }), communityOpts(files));
+    const ok = await processCommunityMessage(groupCtx({ text: "hello mango" }), communityOpts(files));
     assert.ok(ok);
     assert.strictEqual(isEligibleDailyQuestCommunityMessage(groupCtx({ text: "hello" })), true);
     assert.strictEqual(
       isEligibleDailyQuestCommunityMessage(groupCtx({ text: "/points" })),
       false
     );
-    processCommunityMessage(groupCtx({ text: "/help" }), communityOpts(files));
-    processCommunityMessage(groupCtx({ text: "hi", isBot: true }), communityOpts(files));
-    processCommunityMessage(groupCtx({ text: "hello again" }), communityOpts(files));
+    await processCommunityMessage(groupCtx({ text: "/help" }), communityOpts(files));
+    await processCommunityMessage(groupCtx({ text: "hi", isBot: true }), communityOpts(files));
+    await processCommunityMessage(groupCtx({ text: "hello again" }), communityOpts(files));
     const snap = getDailyQuestSnapshot(USER, communityOpts(files));
     assert.strictEqual(snap.community.completed, true);
     assert.strictEqual(getLootBalance(USER, files.shopFile), ACTIVITY_LOOT);
   });
 
-  await runTest("sticker-only does not complete community quest", () => {
+  await runTest("sticker-only does not complete community quest", async () => {
     const files = nextFiles();
     link(files);
     const ctx = groupCtx({ text: undefined, extra: { sticker: { file_id: "x" } } });
     delete ctx.message.text;
-    processCommunityMessage(ctx, communityOpts(files));
+    await processCommunityMessage(ctx, communityOpts(files));
     const snap = getDailyQuestSnapshot(USER, communityOpts(files));
     assert.strictEqual(snap.community.completed, false);
   });
 
-  await runTest("15-17. valid bot game once; snake/bounch/cancelled do not", () => {
+  await runTest("15-17. valid bot game once; snake/bounch/cancelled do not", async () => {
     const files = nextFiles();
     link(files);
     noteDailyQuestGame(USER, "chatfight", botOpts(files));
@@ -223,21 +223,21 @@ async function main() {
     assert.strictEqual(getLootBalance(USER, files.shopFile), ACTIVITY_LOOT);
     const skip = nextFiles();
     link(skip);
-    awardSnakeGameXp(USER, "Ada", skip.pointsFile, skip.walletFile);
-    awardBounchGameXp(USER, "Ada", 1, skip.pointsFile, skip.walletFile);
+    await awardSnakeGameXp(USER, "Ada", skip.pointsFile, skip.walletFile);
+    await awardBounchGameXp(USER, "Ada", 1, skip.pointsFile, skip.walletFile);
     const skipped = getDailyQuestSnapshot(USER, botOpts(skip));
     assert.strictEqual(skipped.game.completed, false);
     assert.ok(!GAME_SOURCES.includes("snake"));
     assert.ok(!GAME_SOURCES.includes("bounch"));
     const files2 = nextFiles();
     link(files2);
-    awardMangoBombXp(USER, "Ada", 0, "", files2.pointsFile, files2.walletFile);
+    await awardMangoBombXp(USER, "Ada", 0, "", files2.pointsFile, files2.walletFile);
     const empty = getDailyQuestSnapshot(USER, botOpts(files2));
     assert.strictEqual(empty.game.completed, false);
     assert.strictEqual(getLootBalance(USER, files2.shopFile), 0);
   });
 
-  await runTest("18-21. XP progress 1/3 then 3/3 awards +5", () => {
+  await runTest("18-21. XP progress 1/3 then 3/3 awards +5", async () => {
     const files = nextFiles();
     link(files);
     noteDailyQuestXp(USER, 1, xpOpts(files));
@@ -251,15 +251,15 @@ async function main() {
     assert.strictEqual(getLootBalance(USER, files.shopFile), ACTIVITY_LOOT);
   });
 
-  await runTest("20. blocked XP does not count", () => {
+  await runTest("20. blocked XP does not count", async () => {
     const files = nextFiles();
-    const blocked = awardDailyActivityPoint(USER, "Ada", files.pointsFile, DATE, files.walletFile);
+    const blocked = await awardDailyActivityPoint(USER, "Ada", files.pointsFile, DATE, files.walletFile);
     assert.strictEqual(blocked.awarded, false);
     const snap = getDailyQuestSnapshot(USER, xpOpts(files));
     assert.strictEqual(snap.xp.progress, 0);
   });
 
-  await runTest("22-24. all 3 gives +10; day total 25; duplicates no extra", () => {
+  await runTest("22-24. all 3 gives +10; day total 25; duplicates no extra", async () => {
     const files = nextFiles();
     link(files);
     completeSelectedQuests(USER, opts(files));
@@ -271,7 +271,7 @@ async function main() {
     assert.strictEqual(snap.lootAwardedToday, BASE_DAILY_MAX);
   });
 
-  await runTest("25. restart no duplicate", () => {
+  await runTest("25. restart no duplicate", async () => {
     const files = nextFiles();
     link(files);
     const first = selectQuestsForDate(utcDate(DAY))[0];
@@ -284,7 +284,7 @@ async function main() {
     assert.strictEqual(spends.length, 1);
   });
 
-  await runTest("26-27. next UTC day fresh; previous does not leak", () => {
+  await runTest("26-27. next UTC day fresh; previous does not leak", async () => {
     const files = nextFiles();
     link(files);
     completeSelectedQuests(USER, opts(files));
@@ -295,7 +295,7 @@ async function main() {
     assert.strictEqual(prev.completedToday, 3);
   });
 
-  await runTest("28-32. unlinked view, no loot, registered/verified unlock, no retroactive", () => {
+  await runTest("28-32. unlinked view, no loot, registered/verified unlock, no retroactive", async () => {
     const files = nextFiles();
     const ctx = mockPrivate();
     handleDailyQuest(ctx, communityOpts(files));
@@ -318,7 +318,7 @@ async function main() {
     assert.strictEqual(getLootBalance(USER, filesV.shopFile), ACTIVITY_LOOT);
   });
 
-  await runTest("33-34. unlink blocks future; re-link enables", () => {
+  await runTest("33-34. unlink blocks future; re-link enables", async () => {
     const files = nextFiles();
     link(files);
     const selected = selectQuestsForDate(utcDate(DAY));
@@ -387,7 +387,7 @@ async function main() {
     assert.ok((shop.replies[0] || shop.edits[0]).text.includes("🏪 ManGo Shop"));
   });
 
-  await runTest("52-53. profile compact progress; Phase 2 detail", () => {
+  await runTest("52-53. profile compact progress; Phase 2 detail", async () => {
     const files = nextFiles();
     link(files);
     fillDailyQuest(USER, selectQuestsForDate(utcDate(DAY))[0], opts(files));
@@ -402,7 +402,7 @@ async function main() {
     assert.strictEqual(detail.mangoLoot, ACTIVITY_LOOT * 2);
   });
 
-  await runTest("54. callbacks no raw uid", () => {
+  await runTest("54. callbacks no raw uid", async () => {
     assert.deepStrictEqual(parseDailyQuestCallback("dquest:home"), { action: "home" });
     assert.strictEqual(parseDailyQuestCallback("dquest:buy:7001"), null);
   });
@@ -427,7 +427,7 @@ async function main() {
     assert.strictEqual(full.length, 1);
   });
 
-  await runTest("58. title purchase + daily loot stay coherent", () => {
+  await runTest("58. title purchase + daily loot stay coherent", async () => {
     const files = nextFiles();
     link(files);
     const { awardLoot } = require("../services/mangoLoot");
@@ -463,7 +463,7 @@ async function main() {
     assert.strictEqual(acc.lifetimeEarned - acc.lifetimeSpent, acc.balance);
   });
 
-  await runTest("no production files touched", () => {
+  await runTest("no production files touched", async () => {
     for (const file of prodRoots) {
       if (!fs.existsSync(file)) continue;
       assert.strictEqual(fs.statSync(file).mtimeMs, prodMtimes[file], file);

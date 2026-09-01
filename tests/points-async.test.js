@@ -1,5 +1,5 @@
 /**
- * mutatePointsAsync infrastructure (production still uses mutatePoints).
+ * mutatePointsAsync infrastructure and production async XP path.
  * Run: node tests/points-async.test.js
  */
 
@@ -14,6 +14,8 @@ const {
   loadPoints,
   mutatePoints,
   mutatePointsAsync,
+  awardDailyActivityPoint,
+  awardSnakeGameXp,
   POINTS_LOCK_OPTIONS,
   POINTS_LOCK_ASYNC_OPTIONS,
 } = require("../services/points");
@@ -24,6 +26,11 @@ require("../services/xpWalletGate").setXpWalletAutoLinkForTests(true);
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-points-async-"));
 const holderPath = path.join(__dirname, "helpers", "points-lock-holder.js");
+const highscoreWorkerPath = path.join(
+  __dirname,
+  "helpers",
+  "game-xp-concurrency-worker.js"
+);
 
 async function runTest(name, fn) {
   try {
@@ -342,6 +349,36 @@ function waitUntil(predicate, timeoutMs, label) {
       }),
       false
     );
+  });
+
+  await runTest("bot + highscore-like child: beide async mutations blijven behouden", async () => {
+    const file = path.join(tempDir, "bot-highscore.json");
+    writeFile(file);
+    const child = spawn(
+      process.execPath,
+      [highscoreWorkerPath, file, "snake", "1", "7"],
+      { stdio: ["ignore", "pipe", "pipe"] }
+    );
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    const parent = awardDailyActivityPoint(7, "Ada", file);
+    const childDone = new Promise((resolve, reject) => {
+      child.on("exit", (code) => {
+        if (code === 0) {
+          resolve();
+          return;
+        }
+        reject(new Error(`highscore child exit ${code}${stderr ? `: ${stderr}` : ""}`));
+      });
+      child.on("error", reject);
+    });
+    await Promise.all([parent, childDone]);
+    const user = loadPoints(file).users["7"];
+    assert.ok(user);
+    assert.strictEqual(user.points, 2);
+    assert.strictEqual(user.weeklyPoints, 2);
   });
 
   fs.rmSync(tempDir, { recursive: true, force: true });

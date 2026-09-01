@@ -37,10 +37,10 @@ function resetFile(contents = { users: {} }) {
   fs.writeFileSync(testFile, `${JSON.stringify(contents, null, 2)}\n`, "utf8");
 }
 
-function runTest(name, fn) {
+async function runTest(name, fn) {
   try {
     resetFile();
-    fn();
+    await fn();
     console.log(`✓ ${name}`);
   } catch (err) {
     console.error(`✗ ${name}`);
@@ -48,12 +48,13 @@ function runTest(name, fn) {
   }
 }
 
-runTest("exact GM / gm", () => {
+(async () => {
+await runTest("exact GM / gm", async () => {
   assert.strictEqual(detectTrigger("GM"), "gm");
   assert.strictEqual(detectTrigger("gm"), "gm");
 });
 
-runTest("GM with emoji around", () => {
+await runTest("GM with emoji around", async () => {
   assert.strictEqual(detectTrigger("GM 🥭"), "gm");
   assert.strictEqual(detectTrigger("🥭 GM"), "gm");
   assert.strictEqual(detectTrigger("☀️ GM"), "gm");
@@ -62,7 +63,7 @@ runTest("GM with emoji around", () => {
   assert.strictEqual(detectTrigger("☕ gm"), "gm");
 });
 
-runTest("GMango with emoji around", () => {
+await runTest("GMango with emoji around", async () => {
   assert.strictEqual(detectTrigger("GMango"), "gmango");
   assert.strictEqual(detectTrigger("gmango"), "gmango");
   assert.strictEqual(detectTrigger("GMango 🥭"), "gmango");
@@ -72,7 +73,7 @@ runTest("GMango with emoji around", () => {
   assert.strictEqual(detectTrigger("☀️🥭 GMango"), "gmango");
 });
 
-runTest("GN / GNango with emoji around", () => {
+await runTest("GN / GNango with emoji around", async () => {
   assert.strictEqual(detectTrigger("GN"), "gn");
   assert.strictEqual(detectTrigger("gn"), "gn");
   assert.strictEqual(detectTrigger("GN 🌙"), "gn");
@@ -85,18 +86,18 @@ runTest("GN / GNango with emoji around", () => {
   assert.strictEqual(detectTrigger("🥭 GNango 🌙"), "gnango");
 });
 
-runTest("no match inside other words", () => {
+await runTest("no match inside other words", async () => {
   assert.strictEqual(detectTrigger("programmer"), null);
   assert.strictEqual(detectTrigger("gmangos"), null);
   assert.strictEqual(detectTrigger("longmango"), null);
 });
 
-runTest("gmango preferred over gm substring", () => {
+await runTest("gmango preferred over gm substring", async () => {
   assert.strictEqual(detectTrigger("gmango"), "gmango");
   assert.strictEqual(detectTrigger("GMango 🥭"), "gmango");
 });
 
-runTest("one message yields at most one trigger", () => {
+await runTest("one message yields at most one trigger", async () => {
   assert.strictEqual(detectTrigger("GM 🥭 GMango"), "gmango");
   assert.strictEqual(TRIGGERS[detectTrigger("GM 🥭 GMango")], 2);
 
@@ -113,14 +114,14 @@ runTest("one message yields at most one trigger", () => {
   assert.strictEqual(TRIGGERS[detectTrigger("🥭 GMango GM GN")], 2);
 });
 
-runTest("point values unchanged", () => {
+await runTest("point values unchanged", async () => {
   assert.strictEqual(TRIGGERS.gm, 1);
   assert.strictEqual(TRIGGERS.gn, 1);
   assert.strictEqual(TRIGGERS.gmango, 2);
   assert.strictEqual(TRIGGERS.gnango, 2);
 });
 
-runTest("rank thresholds", () => {
+await runTest("rank thresholds", async () => {
   assert.deepStrictEqual(getRank(0), { emoji: "🌱", title: "Seed" });
   assert.deepStrictEqual(getRank(24), { emoji: "🌱", title: "Seed" });
   assert.deepStrictEqual(getRank(25), { emoji: "🌿", title: "Sprout" });
@@ -134,8 +135,8 @@ runTest("rank thresholds", () => {
   assert.deepStrictEqual(getRank(600), { emoji: "👑", title: "Legend" });
 });
 
-runTest("successful claim saves points", () => {
-  const result = awardTriggerPoints(42, "Kevin", "gm", testFile);
+await runTest("successful claim saves points", async () => {
+  const result = await awardTriggerPoints(42, "Kevin", "gm", testFile);
 
   assert.strictEqual(result.awarded, true);
   assert.strictEqual(result.pointsToAdd, 1);
@@ -146,32 +147,32 @@ runTest("successful claim saves points", () => {
   assert.deepStrictEqual(saved.users["42"].triggersUsed, ["gm"]);
 });
 
-runTest("successful claim has no standard reply", () => {
-  const result = awardTriggerPoints(42, "Kevin", "gm", testFile);
+await runTest("successful claim has no standard reply", async () => {
+  const result = await awardTriggerPoints(42, "Kevin", "gm", testFile);
 
   assert.strictEqual(result.awarded, true);
   assert.strictEqual(result.rankUp, false);
   assert.strictEqual(getAutomaticTriggerReply(result, "Kevin"), null);
 });
 
-runTest("duplicate claim awards no points", () => {
-  awardTriggerPoints(42, "Kevin", "gm", testFile);
-  const second = awardTriggerPoints(42, "Kevin", "gm", testFile);
+await runTest("duplicate claim awards no points", async () => {
+  await awardTriggerPoints(42, "Kevin", "gm", testFile);
+  const second = await awardTriggerPoints(42, "Kevin", "gm", testFile);
 
   assert.strictEqual(second.awarded, false);
   assert.strictEqual(second.points, 1);
   assert.strictEqual(loadPoints(testFile).users["42"].points, 1);
 });
 
-runTest("duplicate claim has no reply", () => {
-  awardTriggerPoints(42, "Kevin", "gm", testFile);
-  const second = awardTriggerPoints(42, "Kevin", "gm", testFile);
+await runTest("duplicate claim has no reply", async () => {
+  await awardTriggerPoints(42, "Kevin", "gm", testFile);
+  const second = await awardTriggerPoints(42, "Kevin", "gm", testFile);
 
   assert.strictEqual(second.awarded, false);
   assert.strictEqual(getAutomaticTriggerReply(second, "Kevin"), null);
 });
 
-runTest("rank-up is detected and may reply", () => {
+await runTest("rank-up is detected and may reply", async () => {
   resetFile({
     users: {
       "42": {
@@ -185,7 +186,7 @@ runTest("rank-up is detected and may reply", () => {
     },
   });
 
-  const result = awardTriggerPoints(42, "Kevin", "gm", testFile);
+  const result = await awardTriggerPoints(42, "Kevin", "gm", testFile);
 
   assert.strictEqual(result.awarded, true);
   assert.strictEqual(result.points, 25);
@@ -201,7 +202,7 @@ runTest("rank-up is detected and may reply", () => {
   );
 });
 
-runTest("only rank-up yields automatic visible message", () => {
+await runTest("only rank-up yields automatic visible message", async () => {
   const silentSuccess = {
     awarded: true,
     rankUp: false,
@@ -226,8 +227,8 @@ runTest("only rank-up yields automatic visible message", () => {
   );
 });
 
-runTest("first normal message awards +1 activity", () => {
-  const result = awardDailyActivityPoint(42, "Kevin", testFile);
+await runTest("first normal message awards +1 activity", async () => {
+  const result = await awardDailyActivityPoint(42, "Kevin", testFile);
 
   assert.strictEqual(result.awarded, true);
   assert.strictEqual(result.pointsToAdd, 1);
@@ -238,27 +239,27 @@ runTest("first normal message awards +1 activity", () => {
   assert.ok(typeof saved.activityDate === "string" && saved.activityDate.length === 10);
 });
 
-runTest("second normal message same UTC day awards +0 activity", () => {
-  awardDailyActivityPoint(42, "Kevin", testFile);
-  const second = awardDailyActivityPoint(42, "Kevin", testFile);
+await runTest("second normal message same UTC day awards +0 activity", async () => {
+  await awardDailyActivityPoint(42, "Kevin", testFile);
+  const second = await awardDailyActivityPoint(42, "Kevin", testFile);
 
   assert.strictEqual(second.awarded, false);
   assert.strictEqual(second.points, 1);
   assert.strictEqual(loadPoints(testFile).users["42"].points, 1);
 });
 
-runTest("next UTC day awards activity again", () => {
-  awardDailyActivityPoint(42, "Kevin", testFile);
+await runTest("next UTC day awards activity again", async () => {
+  await awardDailyActivityPoint(42, "Kevin", testFile);
   const data = loadPoints(testFile);
   data.users["42"].activityDate = "2000-01-01";
   savePoints(data, testFile);
 
-  const nextDay = awardDailyActivityPoint(42, "Kevin", testFile);
+  const nextDay = await awardDailyActivityPoint(42, "Kevin", testFile);
   assert.strictEqual(nextDay.awarded, true);
   assert.strictEqual(nextDay.points, 2);
 });
 
-runTest("existing user without activityDate still works", () => {
+await runTest("existing user without activityDate still works", async () => {
   resetFile({
     users: {
       "42": {
@@ -272,28 +273,28 @@ runTest("existing user without activityDate still works", () => {
     },
   });
 
-  const result = awardDailyActivityPoint(42, "Kevin", testFile);
+  const result = await awardDailyActivityPoint(42, "Kevin", testFile);
   assert.strictEqual(result.awarded, true);
   assert.strictEqual(result.points, 11);
   assert.strictEqual(loadPoints(testFile).users["42"].points, 11);
   assert.ok(loadPoints(testFile).users["42"].activityDate);
 });
 
-runTest("activity increases lifetime points", () => {
-  awardDailyActivityPoint(42, "Kevin", testFile);
+await runTest("activity increases lifetime points", async () => {
+  await awardDailyActivityPoint(42, "Kevin", testFile);
   assert.strictEqual(loadPoints(testFile).users["42"].points, 1);
 });
 
-runTest("activity increases weeklyPoints", () => {
-  awardDailyActivityPoint(42, "Kevin", testFile);
+await runTest("activity increases weeklyPoints", async () => {
+  await awardDailyActivityPoint(42, "Kevin", testFile);
   const user = loadPoints(testFile).users["42"];
   assert.strictEqual(user.weeklyPoints, 1);
   assert.strictEqual(getEffectiveWeeklyPoints(user), 1);
 });
 
-runTest("activity and gmango both award on same message flow", () => {
-  const activity = awardDailyActivityPoint(42, "Kevin", testFile);
-  const trigger = awardTriggerPoints(42, "Kevin", "gmango", testFile);
+await runTest("activity and gmango both award on same message flow", async () => {
+  const activity = await awardDailyActivityPoint(42, "Kevin", testFile);
+  const trigger = await awardTriggerPoints(42, "Kevin", "gmango", testFile);
 
   assert.strictEqual(activity.awarded, true);
   assert.strictEqual(trigger.awarded, true);
@@ -302,31 +303,31 @@ runTest("activity and gmango both award on same message flow", () => {
   assert.deepStrictEqual(loadPoints(testFile).users["42"].triggersUsed, ["gmango"]);
 });
 
-runTest("activity of one user does not affect another", () => {
-  awardDailyActivityPoint(42, "Kevin", testFile);
-  awardDailyActivityPoint(99, "Ada", testFile);
+await runTest("activity of one user does not affect another", async () => {
+  await awardDailyActivityPoint(42, "Kevin", testFile);
+  await awardDailyActivityPoint(99, "Ada", testFile);
 
   const data = loadPoints(testFile);
   assert.strictEqual(data.users["42"].points, 1);
   assert.strictEqual(data.users["99"].points, 1);
 
-  const secondKevin = awardDailyActivityPoint(42, "Kevin", testFile);
+  const secondKevin = await awardDailyActivityPoint(42, "Kevin", testFile);
   assert.strictEqual(secondKevin.awarded, false);
   assert.strictEqual(loadPoints(testFile).users["99"].points, 1);
 });
 
-runTest("existing gm/gmango/gn/gnango behavior still works with activity present", () => {
-  awardDailyActivityPoint(42, "Kevin", testFile);
-  assert.strictEqual(awardTriggerPoints(42, "Kevin", "gm", testFile).points, 2);
-  assert.strictEqual(awardTriggerPoints(42, "Kevin", "gmango", testFile).points, 4);
-  assert.strictEqual(awardTriggerPoints(42, "Kevin", "gn", testFile).points, 5);
-  assert.strictEqual(awardTriggerPoints(42, "Kevin", "gnango", testFile).points, 7);
+await runTest("existing gm/gmango/gn/gnango behavior still works with activity present", async () => {
+  await awardDailyActivityPoint(42, "Kevin", testFile);
+  assert.strictEqual((await awardTriggerPoints(42, "Kevin", "gm", testFile)).points, 2);
+  assert.strictEqual((await awardTriggerPoints(42, "Kevin", "gmango", testFile)).points, 4);
+  assert.strictEqual((await awardTriggerPoints(42, "Kevin", "gn", testFile)).points, 5);
+  assert.strictEqual((await awardTriggerPoints(42, "Kevin", "gnango", testFile)).points, 7);
 
-  assert.strictEqual(awardTriggerPoints(42, "Kevin", "gm", testFile).awarded, false);
+  assert.strictEqual((await awardTriggerPoints(42, "Kevin", "gm", testFile)).awarded, false);
   assert.strictEqual(loadPoints(testFile).users["42"].points, 7);
 });
 
-runTest("isCommandText filters slash commands for activity", () => {
+await runTest("isCommandText filters slash commands for activity", async () => {
   assert.strictEqual(isCommandText("/help"), true);
   assert.strictEqual(isCommandText("/points"), true);
   assert.strictEqual(isCommandText("  /weekly"), true);
@@ -335,7 +336,7 @@ runTest("isCommandText filters slash commands for activity", () => {
   assert.strictEqual(isCommandText("/"), true);
 });
 
-runTest("combined rank-up reply is at most one message", () => {
+await runTest("combined rank-up reply is at most one message", async () => {
   const activityRankUp = {
     awarded: true,
     rankUp: true,
@@ -363,7 +364,7 @@ runTest("combined rank-up reply is at most one message", () => {
   assert.strictEqual(getCombinedRankUpReply(null, null, "Kevin"), null);
 });
 
-runTest("activity then gmango crossing Sprout yields single combined reply", () => {
+await runTest("activity then gmango crossing Sprout yields single combined reply", async () => {
   resetFile({
     users: {
       "42": {
@@ -377,8 +378,8 @@ runTest("activity then gmango crossing Sprout yields single combined reply", () 
     },
   });
 
-  const activity = awardDailyActivityPoint(42, "Kevin", testFile);
-  const trigger = awardTriggerPoints(42, "Kevin", "gmango", testFile);
+  const activity = await awardDailyActivityPoint(42, "Kevin", testFile);
+  const trigger = await awardTriggerPoints(42, "Kevin", "gmango", testFile);
 
   assert.strictEqual(activity.awarded, true);
   assert.strictEqual(activity.rankUp, true);
@@ -390,7 +391,7 @@ runTest("activity then gmango crossing Sprout yields single combined reply", () 
   assert.strictEqual(reply, "🥭 Kevin reached 🌿 Sprout!");
 });
 
-runTest("activityDate today means daily activity claimed", () => {
+await runTest("activityDate today means daily activity claimed", async () => {
   const today = new Date().toISOString().slice(0, 10);
   assert.strictEqual(hasClaimedDailyActivity({ activityDate: today }), true);
   assert.strictEqual(
@@ -399,7 +400,7 @@ runTest("activityDate today means daily activity claimed", () => {
   );
 });
 
-runTest("activityDate other day means daily activity not claimed", () => {
+await runTest("activityDate other day means daily activity not claimed", async () => {
   assert.strictEqual(hasClaimedDailyActivity({ activityDate: "2000-01-01" }), false);
   assert.strictEqual(
     formatClaimedTodayLines({
@@ -411,13 +412,13 @@ runTest("activityDate other day means daily activity not claimed", () => {
   );
 });
 
-runTest("missing activityDate means daily activity not claimed", () => {
+await runTest("missing activityDate means daily activity not claimed", async () => {
   assert.strictEqual(hasClaimedDailyActivity({}), false);
   assert.strictEqual(hasClaimedDailyActivity({ activityDate: null }), false);
   assert.strictEqual(hasClaimedDailyActivity(undefined), false);
 });
 
-runTest("trigger claimed-today status still works with activity lines", () => {
+await runTest("trigger claimed-today status still works with activity lines", async () => {
   const today = new Date().toISOString().slice(0, 10);
   const user = {
     activityDate: today,
@@ -441,7 +442,7 @@ runTest("trigger claimed-today status still works with activity lines", () => {
   );
 });
 
-runTest("legacy user without game → Snake/Bounch unchecked and unlocks 0/7", () => {
+await runTest("legacy user without game → Snake/Bounch unchecked and unlocks 0/7", async () => {
   const legacy = { activityDate: null, triggerDate: null, triggersUsed: [] };
   assert.strictEqual(hasClaimedSnakeToday(legacy), false);
   assert.strictEqual(hasClaimedBounchToday(legacy), false);
@@ -456,7 +457,7 @@ runTest("legacy user without game → Snake/Bounch unchecked and unlocks 0/7", (
   assert.strictEqual(getBounchUnlockedMaxForDisplay({}), 0);
 });
 
-runTest("snakePlayDate today → claimed; yesterday → not claimed", () => {
+await runTest("snakePlayDate today → claimed; yesterday → not claimed", async () => {
   const today = new Date().toISOString().slice(0, 10);
   assert.strictEqual(
     hasClaimedSnakeToday({ game: { snakePlayDate: today } }),
@@ -474,7 +475,7 @@ runTest("snakePlayDate today → claimed; yesterday → not claimed", () => {
   );
 });
 
-runTest("bounchPlayDate today → claimed; yesterday → not claimed", () => {
+await runTest("bounchPlayDate today → claimed; yesterday → not claimed", async () => {
   const today = new Date().toISOString().slice(0, 10);
   assert.strictEqual(
     hasClaimedBounchToday({ game: { bounchPlayDate: today } }),
@@ -494,7 +495,7 @@ runTest("bounchPlayDate today → claimed; yesterday → not claimed", () => {
   );
 });
 
-runTest("bounchUnlockedMax display clamps and is read-only", () => {
+await runTest("bounchUnlockedMax display clamps and is read-only", async () => {
   assert.strictEqual(
     getBounchUnlockedMaxForDisplay({ game: { bounchUnlockedMax: 4 } }),
     4
@@ -539,5 +540,11 @@ runTest("bounchUnlockedMax display clamps and is read-only", () => {
   assert.strictEqual(user.game.bounchUnlockedMax, 99);
 });
 
-fs.rmSync(tempDir, { recursive: true, force: true });
+
+  fs.rmSync(tempDir, { recursive: true, force: true });
 console.log("\nAll points tests passed.");
+
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

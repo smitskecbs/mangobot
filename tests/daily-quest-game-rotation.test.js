@@ -73,9 +73,9 @@ function questProgress(snap, questId) {
   return (snap.questList || []).find((q) => q.id === questId) || null;
 }
 
-function runTest(name, fn) {
+async function runTest(name, fn) {
   try {
-    fn();
+    await fn();
     console.log(`✓ ${name}`);
   } catch (err) {
     console.error(`✗ ${name}`);
@@ -87,9 +87,10 @@ const pvpDay = findUtcDateForSelection({ game: QUEST_IDS.PVP_GAME_1 });
 const triviaDay = findUtcDateForSelection({ game: QUEST_IDS.TRIVIA_1 });
 const botDay = findUtcDateForSelection({ game: QUEST_IDS.BOT_GAME_1 });
 
-runTest("human PvP completion", () => {
+(async () => {
+await runTest("human PvP completion", async () => {
   const files = nextFiles();
-  noteHumanPvpMatch(
+  await noteHumanPvpMatch(
     USER,
     {
       game: "tictactoe",
@@ -105,9 +106,9 @@ runTest("human PvP completion", () => {
   assert.strictEqual(q.completed, true);
 });
 
-runTest("bot PvP excluded from PVP quest", () => {
+await runTest("bot PvP excluded from PVP quest", async () => {
   const files = nextFiles();
-  noteHumanPvpMatch(
+  await noteHumanPvpMatch(
     USER,
     {
       game: "tictactoe",
@@ -123,9 +124,9 @@ runTest("bot PvP excluded from PVP quest", () => {
   assert.strictEqual(q.completed, false);
 });
 
-runTest("valid Trivia answer", () => {
+await runTest("valid Trivia answer", async () => {
   const files = nextFiles();
-  awardTriviaAttemptXp(
+  await awardTriviaAttemptXp(
     USER,
     "Ada",
     { correct: false, shopFile: files.shopFile, now: triviaDay.now },
@@ -139,7 +140,7 @@ runTest("valid Trivia answer", () => {
   assert.strictEqual(q.completed, true);
 });
 
-runTest("chooser alone excluded", async () => {
+await runTest("chooser alone excluded", async () => {
   const files = nextFiles();
   const replies = [];
   const ctx = {
@@ -163,9 +164,9 @@ runTest("chooser alone excluded", async () => {
   assert.strictEqual(q.completed, false);
 });
 
-runTest("bot game completion", () => {
+await runTest("bot game completion", async () => {
   const files = nextFiles();
-  awardChatFightXp(USER, "Ada", files.pointsFile, files.walletFile);
+  await awardChatFightXp(USER, "Ada", files.pointsFile, files.walletFile);
   noteDailyQuestGame(USER, "chatfight", opts(files, botDay.now));
   const q = questProgress(
     getDailyQuestSnapshot(USER, opts(files, botDay.now)),
@@ -174,7 +175,7 @@ runTest("bot game completion", () => {
   assert.strictEqual(q.completed, true);
 });
 
-runTest("noteDailyQuestPvp is selected-only", () => {
+await runTest("noteDailyQuestPvp is selected-only", async () => {
   const files = nextFiles();
   noteDailyQuestPvp(USER, opts(files, triviaDay.now));
   const triviaSnap = getDailyQuestSnapshot(USER, opts(files, triviaDay.now));
@@ -194,5 +195,11 @@ setMangoShopFileForTests(null);
 setWalletFileForTests(null);
 if (originalChatId === undefined) delete process.env.TELEGRAM_CHAT_ID;
 else process.env.TELEGRAM_CHAT_ID = originalChatId;
-fs.rmSync(tempDir, { recursive: true, force: true });
+
+  fs.rmSync(tempDir, { recursive: true, force: true });
 console.log("All daily-quest-game-rotation tests passed.");
+
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

@@ -152,11 +152,11 @@ function groupCtx(userId, text) {
   };
 }
 
-function runTest(name, fn) {
+async function runTest(name, fn) {
   resetXpWalletRemindersForTests();
   setXpWalletAutoLinkForTests(false);
   try {
-    fn();
+    await fn();
     console.log(`✓ ${name}`);
   } catch (err) {
     console.error(`✗ ${name}`);
@@ -164,9 +164,10 @@ function runTest(name, fn) {
   }
 }
 
-runTest("12. no wallet → no XP", () => {
+(async () => {
+await runTest("12. no wallet → no XP", async () => {
   const { pointsFile, walletFile } = files();
-  const result = awardDailyActivityPoint(10, "Ada", pointsFile, undefined, walletFile);
+  const result = await awardDailyActivityPoint(10, "Ada", pointsFile, undefined, walletFile);
   assert.strictEqual(result.awarded, false);
   assert.strictEqual(result.reason, XP_WALLET_REQUIRED);
   assert.strictEqual(result.points, 0);
@@ -174,10 +175,10 @@ runTest("12. no wallet → no XP", () => {
   assert.strictEqual(canEarnXp(10, walletFile), false);
 });
 
-runTest("13. manual wallet → XP yes", () => {
+await runTest("13. manual wallet → XP yes", async () => {
   const { pointsFile, walletFile } = files();
   registerManualWallet(11, generateSolanaWallet().address, walletFile, 1000);
-  const result = awardDailyActivityPoint(11, "Ada", pointsFile, undefined, walletFile);
+  const result = await awardDailyActivityPoint(11, "Ada", pointsFile, undefined, walletFile);
   assert.strictEqual(result.awarded, true);
   assert.strictEqual(result.points, 1);
   assert.strictEqual(getXpWalletLinkStatus(11, walletFile), "registered");
@@ -185,46 +186,46 @@ runTest("13. manual wallet → XP yes", () => {
   assert.ok(getLinkedWalletForUser(11, walletFile));
 });
 
-runTest("14. verified wallet → XP yes", () => {
+await runTest("14. verified wallet → XP yes", async () => {
   const { pointsFile, walletFile } = files();
   verifyUser(walletFile, 12, generateSolanaWallet(), 2000);
-  const result = awardTriggerPoints(12, "Ada", "gmango", pointsFile, walletFile);
+  const result = await awardTriggerPoints(12, "Ada", "gmango", pointsFile, walletFile);
   assert.strictEqual(result.awarded, true);
   assert.strictEqual(result.points, 2);
   assert.strictEqual(getXpWalletLinkStatus(12, walletFile), "verified");
 });
 
-runTest("15. remove wallet → future XP blocked", () => {
+await runTest("15. remove wallet → future XP blocked", async () => {
   const { pointsFile, walletFile } = files();
   registerManualWallet(13, generateSolanaWallet().address, walletFile, 3000);
-  assert.strictEqual(awardTriggerPoints(13, "Ada", "gm", pointsFile, walletFile).awarded, true);
+  assert.strictEqual((await awardTriggerPoints(13, "Ada", "gm", pointsFile, walletFile)).awarded, true);
   disconnectWallet(13, walletFile);
-  const blocked = awardTriggerPoints(13, "Ada", "gn", pointsFile, walletFile);
+  const blocked = await awardTriggerPoints(13, "Ada", "gn", pointsFile, walletFile);
   assert.strictEqual(blocked.awarded, false);
   assert.strictEqual(blocked.reason, XP_WALLET_REQUIRED);
   assert.strictEqual(loadPoints(pointsFile).users["13"].points, 1);
 });
 
-runTest("16. existing XP preserved", () => {
+await runTest("16. existing XP preserved", async () => {
   const { pointsFile, walletFile } = files();
   seedXp(pointsFile, 14, "Ada", 40);
-  awardDailyActivityPoint(14, "Ada", pointsFile, undefined, walletFile);
+  await awardDailyActivityPoint(14, "Ada", pointsFile, undefined, walletFile);
   assert.strictEqual(loadPoints(pointsFile).users["14"].points, 40);
   assert.strictEqual(getRank(40).title, "Sprout");
 });
 
-runTest("17. no retroactive XP", () => {
+await runTest("17. no retroactive XP", async () => {
   const { pointsFile, walletFile } = files();
-  awardDailyActivityPoint(15, "Ada", pointsFile, undefined, walletFile);
+  await awardDailyActivityPoint(15, "Ada", pointsFile, undefined, walletFile);
   registerManualWallet(15, generateSolanaWallet().address, walletFile, 4000);
-  const later = awardDailyActivityPoint(15, "Ada", pointsFile, undefined, walletFile);
+  const later = await awardDailyActivityPoint(15, "Ada", pointsFile, undefined, walletFile);
   assert.strictEqual(later.awarded, false);
   assert.strictEqual(loadPoints(pointsFile).users["15"].points, 0);
 });
 
-runTest("18. unlinked activity updates metadata but XP 0", () => {
+await runTest("18. unlinked activity updates metadata but XP 0", async () => {
   const { pointsFile, walletFile } = files();
-  const result = awardDailyActivityPoint(16, "Ada", pointsFile, undefined, walletFile);
+  const result = await awardDailyActivityPoint(16, "Ada", pointsFile, undefined, walletFile);
   const user = loadPoints(pointsFile).users["16"];
   assert.strictEqual(result.awarded, false);
   assert.strictEqual(user.points, 0);
@@ -234,18 +235,18 @@ runTest("18. unlinked activity updates metadata but XP 0", () => {
   assert.strictEqual(user.streak.lastActiveDate, getTodayDate());
 });
 
-runTest("19. linked activity XP works", () => {
+await runTest("19. linked activity XP works", async () => {
   const { pointsFile, walletFile } = files();
   registerManualWallet(17, generateSolanaWallet().address, walletFile, 5000);
-  const result = awardDailyActivityPoint(17, "Ada", pointsFile, undefined, walletFile);
+  const result = await awardDailyActivityPoint(17, "Ada", pointsFile, undefined, walletFile);
   assert.strictEqual(result.awarded, true);
   assert.strictEqual(loadPoints(pointsFile).users["17"].points, 1);
   assert.strictEqual(loadPoints(pointsFile).users["17"].weeklyPoints, 1);
 });
 
-runTest("20. reminder does not spam", () => {
+await runTest("20. reminder does not spam", async () => {
   const { pointsFile, walletFile } = files();
-  const first = processCommunityMessage(groupCtx(18, "hello there"), {
+  const first = await processCommunityMessage(groupCtx(18, "hello there"), {
     pointsFile,
     walletFile,
     now: 10_000,
@@ -253,7 +254,7 @@ runTest("20. reminder does not spam", () => {
   assert.strictEqual(first.activityResult.reason, XP_WALLET_REQUIRED);
   assert.strictEqual(first.reply, XP_WALLET_REMINDER_TEXT);
   assert.ok(first.reply.includes("🔒 XP locked"));
-  const second = processCommunityMessage(groupCtx(18, "hello again"), {
+  const second = await processCommunityMessage(groupCtx(18, "hello again"), {
     pointsFile,
     walletFile,
     now: 20_000,
@@ -262,13 +263,13 @@ runTest("20. reminder does not spam", () => {
   assert.strictEqual(takeXpWalletReminder(18, 20_000), false);
 });
 
-runTest("21. gm unlinked → 0 XP", () => {
+await runTest("21. gm unlinked → 0 XP", async () => {
   const { pointsFile, walletFile } = files();
-  const result = awardTriggerPoints(19, "Ada", "gm", pointsFile, walletFile);
+  const result = await awardTriggerPoints(19, "Ada", "gm", pointsFile, walletFile);
   assert.strictEqual(result.awarded, false);
   assert.strictEqual(result.reason, XP_WALLET_REQUIRED);
   assert.strictEqual(loadPoints(pointsFile).users["19"] ? loadPoints(pointsFile).users["19"].points : 0, 0);
-  const msg = processCommunityMessage(groupCtx(19, "gm"), {
+  const msg = await processCommunityMessage(groupCtx(19, "gm"), {
     pointsFile,
     walletFile,
     now: 30_000,
@@ -280,66 +281,66 @@ runTest("21. gm unlinked → 0 XP", () => {
   assert.ok(!used || !Array.isArray(used.triggersUsed) || !used.triggersUsed.includes("gm"));
 });
 
-runTest("22. gm linked → XP", () => {
+await runTest("22. gm linked → XP", async () => {
   const { pointsFile, walletFile } = files();
   registerManualWallet(20, generateSolanaWallet().address, walletFile, 6000);
-  const result = awardTriggerPoints(20, "Ada", "gm", pointsFile, walletFile);
+  const result = await awardTriggerPoints(20, "Ada", "gm", pointsFile, walletFile);
   assert.strictEqual(result.awarded, true);
   assert.strictEqual(result.points, 1);
 });
 
-runTest("23. failed pre-link gm does not consume future claim", () => {
+await runTest("23. failed pre-link gm does not consume future claim", async () => {
   const { pointsFile, walletFile } = files();
-  awardTriggerPoints(21, "Ada", "gm", pointsFile, walletFile);
+  await awardTriggerPoints(21, "Ada", "gm", pointsFile, walletFile);
   const used = loadPoints(pointsFile).users["21"];
   assert.ok(!used || !Array.isArray(used.triggersUsed) || !used.triggersUsed.includes("gm"));
   registerManualWallet(21, generateSolanaWallet().address, walletFile, 7000);
-  const after = awardTriggerPoints(21, "Ada", "gm", pointsFile, walletFile);
+  const after = await awardTriggerPoints(21, "Ada", "gm", pointsFile, walletFile);
   assert.strictEqual(after.awarded, true);
   assert.strictEqual(after.points, 1);
 });
 
-runTest("24. gmango/gn/gnango same consume rule", () => {
+await runTest("24. gmango/gn/gnango same consume rule", async () => {
   const { pointsFile, walletFile } = files();
   for (const trigger of ["gmango", "gn", "gnango"]) {
-    awardTriggerPoints(22, "Ada", trigger, pointsFile, walletFile);
+    await awardTriggerPoints(22, "Ada", trigger, pointsFile, walletFile);
   }
   registerManualWallet(22, generateSolanaWallet().address, walletFile, 8000);
-  assert.strictEqual(awardTriggerPoints(22, "Ada", "gmango", pointsFile, walletFile).awarded, true);
-  assert.strictEqual(awardTriggerPoints(22, "Ada", "gn", pointsFile, walletFile).awarded, true);
-  assert.strictEqual(awardTriggerPoints(22, "Ada", "gnango", pointsFile, walletFile).awarded, true);
+  assert.strictEqual((await awardTriggerPoints(22, "Ada", "gmango", pointsFile, walletFile)).awarded, true);
+  assert.strictEqual((await awardTriggerPoints(22, "Ada", "gn", pointsFile, walletFile)).awarded, true);
+  assert.strictEqual((await awardTriggerPoints(22, "Ada", "gnango", pointsFile, walletFile)).awarded, true);
   assert.strictEqual(loadPoints(pointsFile).users["22"].points, 5);
 });
 
-runTest("25. Snake unlinked → highscore works, XP 0", () => {
+await runTest("25. Snake unlinked → highscore works, XP 0", async () => {
   const { pointsFile, walletFile, snakeFile } = files();
   const submission = submitScore(snakeFile, "Guest", 99);
   assert.ok(!submission.error);
-  const xp = awardSnakeGameXp(25, "Guest", pointsFile, walletFile);
+  const xp = await awardSnakeGameXp(25, "Guest", pointsFile, walletFile);
   assert.strictEqual(xp.awarded, false);
   assert.strictEqual(xp.reason, XP_WALLET_REQUIRED);
   const payload = publicGameXpFromAward(xp);
   assert.strictEqual(payload.walletRequired, true);
   assert.strictEqual(payload.message, XP_WALLET_GAME_LOCKED_TEXT);
   assert.deepStrictEqual(loadPoints(pointsFile), { users: {} });
-  const spoof = awardSnakeGameXp(25, "Guest", pointsFile, walletFile);
+  const spoof = await awardSnakeGameXp(25, "Guest", pointsFile, walletFile);
   assert.strictEqual(spoof.awarded, false);
 });
 
-runTest("26. Bounch unlinked → XP 0, play state not consumed", () => {
+await runTest("26. Bounch unlinked → XP 0, play state not consumed", async () => {
   const { pointsFile, walletFile } = files();
-  const blocked = awardBounchGameXp(26, "Ada", 3, pointsFile, walletFile);
+  const blocked = await awardBounchGameXp(26, "Ada", 3, pointsFile, walletFile);
   assert.strictEqual(blocked.awarded, false);
   assert.strictEqual(publicGameXpFromAward(blocked).message, XP_WALLET_GAME_LOCKED_TEXT);
   registerManualWallet(26, generateSolanaWallet().address, walletFile, 9000);
-  const later = awardBounchGameXp(26, "Ada", 3, pointsFile, walletFile);
+  const later = await awardBounchGameXp(26, "Ada", 3, pointsFile, walletFile);
   assert.strictEqual(later.awarded, true);
   assert.strictEqual(later.xp.unlock, 3);
 });
 
-runTest("27. Trivia correct unlinked → XP 0, attempt consumed, no retroactive XP", () => {
+await runTest("27. Trivia correct unlinked → XP 0, attempt consumed, no retroactive XP", async () => {
   const { pointsFile, walletFile } = files();
-  const blocked = awardTriviaAttemptXp(
+  const blocked = await awardTriviaAttemptXp(
     27,
     "Ada",
     { correct: true },
@@ -353,7 +354,7 @@ runTest("27. Trivia correct unlinked → XP 0, attempt consumed, no retroactive 
   const triviaSrc = fs.readFileSync(path.join(__dirname, "../services/trivia.js"), "utf8");
   assert.ok(triviaSrc.includes("Trivia XP: 🔒 0 XP — wallet not linked — /wallet"));
   registerManualWallet(27, generateSolanaWallet().address, walletFile, 10_000);
-  const later = awardTriviaAttemptXp(
+  const later = await awardTriviaAttemptXp(
     27,
     "Ada",
     { correct: true },
@@ -367,19 +368,19 @@ runTest("27. Trivia correct unlinked → XP 0, attempt consumed, no retroactive 
   assert.strictEqual(loadPoints(pointsFile).users["27"].points, 1);
 });
 
-runTest("28. linked game XP amounts unchanged", () => {
+await runTest("28. linked game XP amounts unchanged", async () => {
   const { pointsFile, walletFile } = files();
   registerManualWallet(28, generateSolanaWallet().address, walletFile, 11_000);
-  assert.strictEqual(awardSnakeGameXp(28, "Ada", pointsFile, walletFile).pointsToAdd, 1);
-  assert.strictEqual(awardPvpWinXp(28, "Ada", pointsFile, walletFile).pointsToAdd, 3);
-  assert.strictEqual(awardChatFightXp(28, "Ada", pointsFile, walletFile).pointsToAdd, 2);
+  assert.strictEqual((await awardSnakeGameXp(28, "Ada", pointsFile, walletFile)).pointsToAdd, 1);
+  assert.strictEqual((await awardPvpWinXp(28, "Ada", pointsFile, walletFile)).pointsToAdd, 3);
+  assert.strictEqual((await awardChatFightXp(28, "Ada", pointsFile, walletFile)).pointsToAdd, 2);
 });
 
-runTest("26b. PvP/ChatFight blocked XP feedback", () => {
+await runTest("26b. PvP/ChatFight blocked XP feedback", async () => {
   const { pointsFile, walletFile } = files();
-  const pvp = awardPvpWinXp(260, "Ada", pointsFile, walletFile);
+  const pvp = await awardPvpWinXp(260, "Ada", pointsFile, walletFile);
   assert.strictEqual(pvp.reason, XP_WALLET_REQUIRED);
-  const fight = awardChatFightXp(261, "Ada", pointsFile, walletFile);
+  const fight = await awardChatFightXp(261, "Ada", pointsFile, walletFile);
   assert.strictEqual(fight.reason, XP_WALLET_REQUIRED);
   const reply = buildWinnerReply("Ada", fight);
   assert.ok(reply.includes("🔒 0 XP — wallet not linked — /wallet"));
@@ -389,45 +390,45 @@ runTest("26b. PvP/ChatFight blocked XP feedback", () => {
   assert.ok(c4.includes("PvP XP: 🔒 0 XP — wallet not linked — /wallet"));
 });
 
-runTest("29. no duplicate wallet reminder spam", () => {
+await runTest("29. no duplicate wallet reminder spam", async () => {
   resetXpWalletRemindersForTests();
   assert.strictEqual(takeXpWalletReminder(29, 1), true);
   assert.strictEqual(takeXpWalletReminder(29, 2), false);
   assert.strictEqual(takeXpWalletReminder(30, 2), true);
 });
 
-runTest("30. unlinked cannot rank up", () => {
+await runTest("30. unlinked cannot rank up", async () => {
   const { pointsFile, walletFile } = files();
   seedXp(pointsFile, 31, "Ada", 24);
-  const result = awardDailyActivityPoint(31, "Ada", pointsFile, undefined, walletFile);
+  const result = await awardDailyActivityPoint(31, "Ada", pointsFile, undefined, walletFile);
   assert.strictEqual(result.rankUp, false);
   assert.strictEqual(getRank(loadPoints(pointsFile).users["31"].points).title, "Seed");
 });
 
-runTest("31. existing rank preserved", () => {
+await runTest("31. existing rank preserved", async () => {
   const { pointsFile, walletFile } = files();
   seedXp(pointsFile, 32, "Ada", 75);
-  awardDailyActivityPoint(32, "Ada", pointsFile, undefined, walletFile);
+  await awardDailyActivityPoint(32, "Ada", pointsFile, undefined, walletFile);
   assert.strictEqual(getRank(loadPoints(pointsFile).users["32"].points).title, "Tree");
 });
 
-runTest("32. linked rank-up semantics unchanged", () => {
+await runTest("32. linked rank-up semantics unchanged", async () => {
   const { pointsFile, walletFile } = files();
   seedXp(pointsFile, 33, "Ada", 24);
   registerManualWallet(33, generateSolanaWallet().address, walletFile, 12_000);
-  const result = awardDailyActivityPoint(33, "Ada", pointsFile, undefined, walletFile);
+  const result = await awardDailyActivityPoint(33, "Ada", pointsFile, undefined, walletFile);
   assert.strictEqual(result.rankUp, true);
   assert.strictEqual(result.rank.title, "Sprout");
 });
 
-runTest("33. frontend cannot spoof linked state", () => {
+await runTest("33. frontend cannot spoof linked state", async () => {
   const { pointsFile, walletFile } = files();
-  const xp = awardSnakeGameXp(34, "Ada", pointsFile, walletFile);
+  const xp = await awardSnakeGameXp(34, "Ada", pointsFile, walletFile);
   assert.strictEqual(xp.awarded, false);
   assert.strictEqual(canEarnXp(34, walletFile), false);
 });
 
-runTest("34. manual wallet counts linked but not verified", () => {
+await runTest("34. manual wallet counts linked but not verified", async () => {
   const { walletFile } = files();
   registerManualWallet(35, generateSolanaWallet().address, walletFile, 13_000);
   assert.strictEqual(canEarnXp(35, walletFile), true);
@@ -435,7 +436,7 @@ runTest("34. manual wallet counts linked but not verified", () => {
   assert.strictEqual(isRewardEligible(35, walletFile), true);
 });
 
-runTest("35. presale manual remains blocked", () => {
+await runTest("35. presale manual remains blocked", async () => {
   const { walletFile } = files();
   registerManualWallet(36, generateSolanaWallet().address, walletFile, 14_000);
   const session = createPresaleSession(36, { walletFile, now: 14_000 });
@@ -444,13 +445,13 @@ runTest("35. presale manual remains blocked", () => {
   assert.strictEqual(canEarnXp(36, walletFile), true);
 });
 
-runTest("36. no production files touched", () => {
+await runTest("36. no production files touched", async () => {
   for (const [file, before] of Object.entries(prodMtimes)) {
     assert.strictEqual(fs.statSync(file).mtimeMs, before, file);
   }
 });
 
-runTest("37. no secrets in reminder/list copy", () => {
+await runTest("37. no secrets in reminder/list copy", async () => {
   assert.ok(!/BOT_TOKEN|private key|seed/i.test(XP_WALLET_REMINDER_TEXT));
   assert.ok(!XP_WALLET_REMINDER_TEXT.includes("cryptographically verified"));
   assert.ok(XP_WALLET_REMINDER_TEXT.includes("🔒 XP locked"));
@@ -458,7 +459,7 @@ runTest("37. no secrets in reminder/list copy", () => {
   assert.ok(XP_WALLET_GAME_LOCKED_TEXT.includes("Game completed"));
 });
 
-runTest("membercheck XP earning lines", () => {
+await runTest("membercheck XP earning lines", async () => {
   const { pointsFile, walletFile, rewardsFile } = files();
   const none = formatMemberCheck(getMemberActivityProfile(40, { pointsFile, walletFile, rewardsFile }));
   assert.ok(none.includes("Wallet: ⬜ Not linked"));
@@ -479,7 +480,7 @@ runTest("membercheck XP earning lines", () => {
   assert.ok(verified.includes("XP earning: ✅ Enabled"));
 });
 
-runTest("/points locked copy", () => {
+await runTest("/points locked copy", async () => {
   const { pointsFile, walletFile } = files();
   const ctx = {
     chat: { type: "private" },
@@ -504,17 +505,17 @@ runTest("/points locked copy", () => {
   assert.ok(!linked.replies[0].includes("XP earning locked"));
 });
 
-runTest("slash commands do not claim daily XP", () => {
+await runTest("slash commands do not claim daily XP", async () => {
   const { pointsFile, walletFile } = files();
   registerManualWallet(51, generateSolanaWallet().address, walletFile, 18_000);
-  const result = processCommunityMessage(groupCtx(51, "/points"), {
+  const result = await processCommunityMessage(groupCtx(51, "/points"), {
     pointsFile,
     walletFile,
   });
   assert.strictEqual(result.activityResult, null);
 });
 
-runTest("canEarnXp never uses verified-only", () => {
+await runTest("canEarnXp never uses verified-only", async () => {
   const src = fs.readFileSync(path.join(__dirname, "..", "services", "xpWalletGate.js"), "utf8");
   const start = src.indexOf("function canEarnXp");
   const end = src.indexOf("function getXpWalletLinkStatus");
@@ -529,4 +530,10 @@ if (originalChat === undefined) delete process.env.TELEGRAM_CHAT_ID;
 else process.env.TELEGRAM_CHAT_ID = originalChat;
 setWalletFileForTests(null);
 
-console.log("xp-wallet-gate tests passed");
+
+  console.log("xp-wallet-gate tests passed");
+
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

@@ -62,9 +62,9 @@ const OTHER_ID = "333";
 
 const originalAdmin = process.env.ADMIN_USER_ID;
 
-function runTest(name, fn) {
+async function runTest(name, fn) {
   try {
-    fn();
+    await fn();
     console.log(`✓ ${name}`);
   } catch (err) {
     console.error(`✗ ${name}`);
@@ -143,7 +143,8 @@ function createMockCtx({
 process.env.ADMIN_USER_ID = OWNER_ID;
 seedPoints();
 
-runTest("1. owner uid zichtbaar op lifetime", () => {
+(async () => {
+await runTest("1. owner uid zichtbaar op lifetime", async () => {
   const top = getLifetimeTop(loadPoints(pointsFile).users);
   assert.deepStrictEqual(
     top.map((u) => u.name),
@@ -154,7 +155,7 @@ runTest("1. owner uid zichtbaar op lifetime", () => {
   assert.ok(lines.some((l) => l.includes("Alice")));
 });
 
-runTest("2. owner uid zichtbaar op weekly", () => {
+await runTest("2. owner uid zichtbaar op weekly", async () => {
   const top = getWeeklyTop(
     loadPoints(pointsFile).users,
     getEffectiveWeeklyPoints
@@ -166,7 +167,7 @@ runTest("2. owner uid zichtbaar op weekly", () => {
   assert.ok(formatWeeklyLines(top)[0].startsWith("🥇 Kevin"));
 });
 
-runTest("3. verified owner uid blijft zichtbaar op Snake", () => {
+await runTest("3. verified owner uid blijft zichtbaar op Snake", async () => {
   writeScoresFile(snakeFile, {
     ...createEmptyScores(),
     globalHighScore: 900,
@@ -202,7 +203,7 @@ runTest("3. verified owner uid blijft zichtbaar op Snake", () => {
   assert.ok(text.includes("Alice"));
 });
 
-runTest("4. verified owner uid blijft zichtbaar op Bounch", () => {
+await runTest("4. verified owner uid blijft zichtbaar op Bounch", async () => {
   bounchScores.writeScoresFile(bounchFile, {
     ...bounchScores.createEmptyScores(),
     globalBestLevel: 7,
@@ -238,7 +239,7 @@ runTest("4. verified owner uid blijft zichtbaar op Bounch", () => {
   assert.ok(text.includes("Alice"));
 });
 
-runTest("5. andere speler met exact dezelfde display name blijft zichtbaar", () => {
+await runTest("5. andere speler met exact dezelfde display name blijft zichtbaar", async () => {
   writeScoresFile(snakeFile, {
     ...createEmptyScores(),
     globalHighScore: 800,
@@ -263,7 +264,7 @@ runTest("5. andere speler met exact dezelfde display name blijft zichtbaar", () 
   assert.strictEqual(display[0].name, "Kevin");
 });
 
-runTest("6. eigenaar met andere game display name blijft zichtbaar via uid", () => {
+await runTest("6. eigenaar met andere game display name blijft zichtbaar via uid", async () => {
   assert.strictEqual(
     shouldHideScoreLeaderboardEntry({
       name: "TotallyDifferent",
@@ -273,7 +274,7 @@ runTest("6. eigenaar met andere game display name blijft zichtbaar via uid", () 
   );
 });
 
-runTest("7. unverified body telegramUserId kan owner-filter niet spoofen", () => {
+await runTest("7. unverified body telegramUserId kan owner-filter niet spoofen", async () => {
   // Unverified submit must not attach body-claimed owner uid.
   writeScoresFile(snakeFile, createEmptyScores());
   submitScore(snakeFile, "Spoof", 100, {
@@ -292,7 +293,7 @@ runTest("7. unverified body telegramUserId kan owner-filter niet spoofen", () =>
   assert.strictEqual(getSnakeDisplay(snakeFile, 10)[0].name, "Kevin");
 });
 
-runTest("8. oude Snake entry zonder telegramUserId blijft geldig", () => {
+await runTest("8. oude Snake entry zonder telegramUserId blijft geldig", async () => {
   writeScoresFile(snakeFile, {
     ...createEmptyScores(),
     globalHighScore: 50,
@@ -313,7 +314,7 @@ runTest("8. oude Snake entry zonder telegramUserId blijft geldig", () => {
   assert.strictEqual(display[0].name, "Legacy");
 });
 
-runTest("9. oude Bounch entry zonder telegramUserId blijft geldig", () => {
+await runTest("9. oude Bounch entry zonder telegramUserId blijft geldig", async () => {
   bounchScores.writeScoresFile(bounchFile, {
     ...bounchScores.createEmptyScores(),
     globalBestLevel: 3,
@@ -334,7 +335,7 @@ runTest("9. oude Bounch entry zonder telegramUserId blijft geldig", () => {
   assert.strictEqual(display[0].name, "Legacy");
 });
 
-runTest("10. verified submit kan veilige uid koppeling toevoegen", () => {
+await runTest("10. verified submit kan veilige uid koppeling toevoegen", async () => {
   writeScoresFile(snakeFile, {
     ...createEmptyScores(),
     globalHighScore: 40,
@@ -358,7 +359,7 @@ runTest("10. verified submit kan veilige uid koppeling toevoegen", () => {
   assert.strictEqual(getSnakeDisplay(snakeFile, 10)[0].name, "LinkMe");
 });
 
-runTest("11. bestaande andere verified uid wordt niet blind overschreven", () => {
+await runTest("11. bestaande andere verified uid wordt niet blind overschreven", async () => {
   writeScoresFile(snakeFile, createEmptyScores());
   submitScore(snakeFile, "SharedName", 100, {
     verifiedTelegramUserId: ALICE_ID,
@@ -382,7 +383,7 @@ runTest("11. bestaande andere verified uid wordt niet blind overschreven", () =>
   );
 });
 
-runTest("12. /points voor eigenaar blijft werken", () => {
+await runTest("12. /points voor eigenaar blijft werken", async () => {
   const ctx = createMockCtx({
     userId: OWNER_ID,
     firstName: "Kevin",
@@ -392,20 +393,20 @@ runTest("12. /points voor eigenaar blijft werken", () => {
   assert.ok(ctx.replies[0].text.includes("500") || ctx.replies[0].text.length > 10);
 });
 
-runTest("13. owner kan community competition XP verdienen", () => {
+await runTest("13. owner kan community competition XP verdienen", async () => {
   const before = loadPoints(pointsFile).users[OWNER_ID].points;
   assert.strictEqual(
-    awardDailyActivityPoint(OWNER_ID, "Kevin", pointsFile).awarded,
+    (await awardDailyActivityPoint(OWNER_ID, "Kevin", pointsFile)).awarded,
     true
   );
   assert.strictEqual(
-    awardTriggerPoints(OWNER_ID, "Kevin", "gm", pointsFile).awarded,
+    (await awardTriggerPoints(OWNER_ID, "Kevin", "gm", pointsFile)).awarded,
     true
   );
   assert.ok(loadPoints(pointsFile).users[OWNER_ID].points > before);
 });
 
-runTest("14. ranks include owner without hiding", () => {
+await runTest("14. ranks include owner without hiding", async () => {
   const ctxLb = createMockCtx();
   handleLeaderboard(ctxLb, { pointsFile });
   assert.ok(ctxLb.replies[0].text.includes("Kevin"));
@@ -419,7 +420,7 @@ runTest("14. ranks include owner without hiding", () => {
   assert.strictEqual(shouldHideFromLeaderboards(ALICE_ID), false);
 });
 
-runTest("bounch verified uid attach + conflict same as snake", () => {
+await runTest("bounch verified uid attach + conflict same as snake", async () => {
   bounchScores.writeScoresFile(bounchFile, bounchScores.createEmptyScores());
   bounchScores.submitLevel(bounchFile, "BounceMe", 2, {
     verifiedTelegramUserId: ALICE_ID,
@@ -431,7 +432,7 @@ runTest("bounch verified uid attach + conflict same as snake", () => {
   assert.strictEqual(data.leaderboard[0].bestLevel, 4);
 });
 
-runTest("15. legacy Snake Kevin visible after owner verified submit links uid", () => {
+await runTest("15. legacy Snake Kevin visible after owner verified submit links uid", async () => {
   writeScoresFile(snakeFile, {
     ...createEmptyScores(),
     globalHighScore: 777,
@@ -456,7 +457,7 @@ runTest("15. legacy Snake Kevin visible after owner verified submit links uid", 
   assert.strictEqual(getSnakeDisplay(snakeFile, 10)[0].name, "Kevin");
 });
 
-runTest("16. legacy Bounch Kevin links then stays visible", () => {
+await runTest("16. legacy Bounch Kevin links then stays visible", async () => {
   bounchScores.writeScoresFile(bounchFile, {
     ...bounchScores.createEmptyScores(),
     globalBestLevel: 5,
@@ -487,7 +488,7 @@ runTest("16. legacy Bounch Kevin links then stays visible", () => {
   );
 });
 
-runTest("17. other Kevin with other verified uid stays visible after owner link", () => {
+await runTest("17. other Kevin with other verified uid stays visible after owner link", async () => {
   writeScoresFile(snakeFile, {
     ...createEmptyScores(),
     globalHighScore: 900,
@@ -528,7 +529,7 @@ runTest("17. other Kevin with other verified uid stays visible after owner link"
   );
 });
 
-runTest("18. name-dedupe preserves verified uid when higher score is legacy", () => {
+await runTest("18. name-dedupe preserves verified uid when higher score is legacy", async () => {
   writeScoresFile(snakeFile, {
     ...createEmptyScores(),
     leaderboard: [
@@ -561,5 +562,11 @@ runTest("18. name-dedupe preserves verified uid when higher score is legacy", ()
 });
 
 restoreAdminEnv();
-fs.rmSync(tempDir, { recursive: true, force: true });
+
+  fs.rmSync(tempDir, { recursive: true, force: true });
 console.log("\nAll leaderboard-privacy tests passed.");
+
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

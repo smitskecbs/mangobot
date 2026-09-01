@@ -195,10 +195,10 @@ function startRound(service, chatId = COMMUNITY_CHAT) {
   return started;
 }
 
-function answerCorrect(service, sessionId, userId, name) {
+async function answerCorrect(service, sessionId, userId, name) {
   const snap = service.getSnapshot();
   assert.ok(snap);
-  return service.tryAnswer({
+  return await service.tryAnswer({
     sessionId,
     userId,
     answerIndex: snap.correctIndex,
@@ -207,10 +207,10 @@ function answerCorrect(service, sessionId, userId, name) {
   });
 }
 
-function answerWrong(service, sessionId, userId, name) {
+async function answerWrong(service, sessionId, userId, name) {
   const snap = service.getSnapshot();
   const wrong = (snap.correctIndex + 1) % 4;
-  return service.tryAnswer({
+  return await service.tryAnswer({
     sessionId,
     userId,
     answerIndex: wrong,
@@ -285,13 +285,13 @@ function createMockCtx({
 async function main() {
   resetEnv();
 
-  await runTest("question bank validates", () => {
+  await runTest("question bank validates", async () => {
     const result = validateTriviaQuestionBank(TRIVIA_QUESTIONS);
     assert.strictEqual(result.ok, true, result.errors.join("; "));
     assert.ok(TRIVIA_QUESTIONS.length >= 50);
   });
 
-  await runTest("round = 5 questions + numbering", () => {
+  await runTest("round = 5 questions + numbering", async () => {
     const { service } = createService();
     const started = startRound(service);
     assert.strictEqual(started.session.totalQuestions, 5);
@@ -300,28 +300,28 @@ async function main() {
     assert.strictEqual(TRIVIA_ROUND_QUESTIONS, 5);
   });
 
-  await runTest("one attempt per question; resets next question", () => {
+  await runTest("one attempt per question; resets next question", async () => {
     const { service, timers } = createService();
     const started = startRound(service);
-    const wrong = answerWrong(service, started.session.id, USER_A, "Alice");
+    const wrong = await answerWrong(service, started.session.id, USER_A, "Alice");
     assert.strictEqual(wrong.correct, false);
-    const again = answerCorrect(service, started.session.id, USER_A, "Alice");
+    const again = await answerCorrect(service, started.session.id, USER_A, "Alice");
     assert.strictEqual(again.reason, "question-closed");
 
-    const bob = answerCorrect(service, started.session.id, USER_B, "Bob");
+    const bob = await answerCorrect(service, started.session.id, USER_B, "Bob");
     assert.strictEqual(bob.reason, "question-closed");
     timers.advance(2_500);
     assert.strictEqual(service.getSnapshot().questionNumber, 2);
-    const next = answerCorrect(service, started.session.id, USER_A, "Alice");
+    const next = await answerCorrect(service, started.session.id, USER_A, "Alice");
     assert.strictEqual(next.questionWon, true);
     assert.strictEqual(service.getSnapshot().scores[String(USER_A)].score, 1);
   });
 
-  await runTest("first correct earns 1 round point; wrong 0; no lifetime XP yet", () => {
+  await runTest("first correct earns 1 round point; wrong 0; no lifetime XP yet", async () => {
     const file = pointsFile();
     const { service, timers } = createService();
     const started = startRound(service);
-    service.tryAnswer({
+    await service.tryAnswer({
       sessionId: started.session.id,
       userId: USER_A,
       answerIndex: (service.getSnapshot().correctIndex + 1) % 4,
@@ -329,16 +329,16 @@ async function main() {
       displayName: "Alice",
     });
     assert.strictEqual(service.getSnapshot().scores[String(USER_A)], undefined);
-    const closed = answerCorrect(service, started.session.id, USER_B, "Bob");
+    const closed = await answerCorrect(service, started.session.id, USER_B, "Bob");
     assert.strictEqual(closed.reason, "question-closed");
     timers.advance(2_500);
-    answerCorrect(service, started.session.id, USER_B, "Bob");
+    await answerCorrect(service, started.session.id, USER_B, "Bob");
     assert.strictEqual(service.getSnapshot().scores[String(USER_B)].score, 1);
     assert.strictEqual(service.getSnapshot().scores[String(USER_A)], undefined);
     assert.strictEqual(loadPoints(file).users[String(USER_B)], undefined);
   });
 
-  await runTest("wrong answer shows ❌ and correct answer; next question in 2.5s", () => {
+  await runTest("wrong answer shows ❌ and correct answer; next question in 2.5s", async () => {
     const edits = [];
     const { service, timers } = createService();
     service.setEditMessageHandler((_c, _m, text, extra) => {
@@ -347,7 +347,7 @@ async function main() {
     const started = startRound(service);
     const snap = service.getSnapshot();
     const correctText = snap.answers[snap.correctIndex];
-    const wrong = answerWrong(service, started.session.id, USER_A, "Alice");
+    const wrong = await answerWrong(service, started.session.id, USER_A, "Alice");
     assert.strictEqual(wrong.correct, false);
     assert.ok(wrong.rendered.text.includes("❌ Wrong answer!"));
     assert.ok(wrong.rendered.text.includes("Correct answer:"));
@@ -361,10 +361,10 @@ async function main() {
     assert.strictEqual(service.getSnapshot().questionNumber, 2);
   });
 
-  await runTest("correct answer keeps 5s delay; wrong uses 2.5s", () => {
+  await runTest("correct answer keeps 5s delay; wrong uses 2.5s", async () => {
     const { service, timers } = createService();
     const started = startRound(service);
-    answerCorrect(service, started.session.id, USER_A, "Alice");
+    await answerCorrect(service, started.session.id, USER_A, "Alice");
     assert.ok(service.buildQuestionWonText(service.getSnapshot(), "Alice").includes("5 seconds"));
     timers.advance(2_500);
     assert.strictEqual(service.getSnapshot().questionNumber, 1);
@@ -372,16 +372,16 @@ async function main() {
     assert.strictEqual(service.getSnapshot().questionNumber, 2);
   });
 
-  await runTest("repeated wrong callback does not duplicate next-question timer", () => {
+  await runTest("repeated wrong callback does not duplicate next-question timer", async () => {
     const { service, timers } = createService();
     const started = startRound(service);
-    const first = answerWrong(service, started.session.id, USER_A, "Alice");
+    const first = await answerWrong(service, started.session.id, USER_A, "Alice");
     assert.strictEqual(first.ok, true);
     assert.strictEqual(service.getPendingTimerCount(), 1);
-    const second = answerWrong(service, started.session.id, USER_A, "Alice");
+    const second = await answerWrong(service, started.session.id, USER_A, "Alice");
     assert.strictEqual(second.ok, false);
     assert.strictEqual(second.reason, "question-closed");
-    const third = answerWrong(service, started.session.id, USER_B, "Bob");
+    const third = await answerWrong(service, started.session.id, USER_B, "Bob");
     assert.strictEqual(third.reason, "question-closed");
     assert.strictEqual(service.getPendingTimerCount(), 1);
     timers.advance(2_500);
@@ -389,18 +389,17 @@ async function main() {
     assert.strictEqual(service.getPendingTimerCount(), 1);
   });
 
-  await runTest("wrong answer awards no round XP; correct XP unchanged", () => {
+  await runTest("wrong answer awards no round XP; correct XP unchanged", async () => {
     const file = pointsFile();
     const { service, timers } = createService({ nextQuestionDelayMs: 1, wrongAnswerNextDelayMs: 1 });
-    service.setAwardXpHandler((uid, name, payload) =>
-      awardTriviaAttemptXp(uid, name, payload, file)
+    service.setAwardXpHandler((uid, name, payload) => awardTriviaAttemptXp(uid, name, payload, file)
     );
     service.setEditMessageHandler(() => {});
     const started = startRound(service);
-    answerWrong(service, started.session.id, USER_A, "Alice");
+    await answerWrong(service, started.session.id, USER_A, "Alice");
     timers.advance(1);
     for (let q = 2; q <= 5; q += 1) {
-      answerCorrect(service, started.session.id, USER_B, "Bob");
+      await answerCorrect(service, started.session.id, USER_B, "Bob");
       timers.advance(1);
     }
     assert.strictEqual(service.isTriviaOpen(), false);
@@ -433,7 +432,7 @@ async function main() {
     assert.strictEqual(ctx.edited.length, 1);
   });
 
-  await runTest("question timeout continues round; 5th completes", () => {
+  await runTest("question timeout continues round; 5th completes", async () => {
     const edits = [];
     const { service, timers } = createService({
       questionTimeoutMs: 60_000,
@@ -443,8 +442,7 @@ async function main() {
       edits.push({ text, extra });
     });
     const file = pointsFile();
-    service.setAwardXpHandler((uid, name, payload) =>
-      awardTriviaAttemptXp(uid, name, payload, file)
+    service.setAwardXpHandler((uid, name, payload) => awardTriviaAttemptXp(uid, name, payload, file)
     );
     startRound(service);
     assert.strictEqual(service.isTriviaOpen(), true);
@@ -464,38 +462,37 @@ async function main() {
     assert.ok(edits.some((e) => e.text.includes("TRIVIA COMPLETE")));
   });
 
-  await runTest("sole winner +3 XP; tie +2 XP; owner earns; daily cap", () => {
+  await runTest("sole winner +3 XP; tie +2 XP; owner earns; daily cap", async () => {
     const file = pointsFile();
     assert.strictEqual(TRIVIA_ROUND_WIN_XP, 3);
     assert.strictEqual(TRIVIA_TIE_XP, 2);
     assert.strictEqual(TRIVIA_DAILY_REWARD_CAP, 2);
 
-    const sole = awardTriviaRoundXp(USER_A, "Alice", TRIVIA_ROUND_WIN_XP, file);
+    const sole = await awardTriviaRoundXp(USER_A, "Alice", TRIVIA_ROUND_WIN_XP, file);
     assert.strictEqual(sole.awarded, true);
     assert.strictEqual(sole.pointsToAdd, 3);
     assert.strictEqual(loadPoints(file).users[String(USER_A)].points, 3);
     assert.strictEqual(loadPoints(file).users[String(USER_A)].weeklyPoints, 3);
 
-    const tie = awardTriviaRoundXp(USER_B, "Bob", TRIVIA_TIE_XP, file);
+    const tie = await awardTriviaRoundXp(USER_B, "Bob", TRIVIA_TIE_XP, file);
     assert.strictEqual(tie.awarded, true);
     assert.strictEqual(tie.pointsToAdd, 2);
 
-    const owner = awardTriviaRoundXp(OWNER_ID, "Kevin", TRIVIA_ROUND_WIN_XP, file);
+    const owner = await awardTriviaRoundXp(OWNER_ID, "Kevin", TRIVIA_ROUND_WIN_XP, file);
     assert.strictEqual(owner.awarded, true);
     assert.strictEqual(owner.pointsToAdd, 3);
 
-    awardTriviaRoundXp(USER_A, "Alice", TRIVIA_ROUND_WIN_XP, file);
-    const capped = awardTriviaRoundXp(USER_A, "Alice", TRIVIA_ROUND_WIN_XP, file);
+    await awardTriviaRoundXp(USER_A, "Alice", TRIVIA_ROUND_WIN_XP, file);
+    const capped = await awardTriviaRoundXp(USER_A, "Alice", TRIVIA_ROUND_WIN_XP, file);
     assert.strictEqual(capped.awarded, false);
     assert.strictEqual(capped.reason, "daily-cap");
     assert.strictEqual(loadPoints(file).users[String(USER_A)].points, 6);
   });
 
-  await runTest("full round sole winner awards once; concurrency one question winner", () => {
+  await runTest("full round sole winner awards once; concurrency one question winner", async () => {
     const file = pointsFile();
     const { service, timers } = createService({ nextQuestionDelayMs: 1 });
-    service.setAwardXpHandler((uid, name, payload) =>
-      awardTriviaAttemptXp(uid, name, payload, file)
+    service.setAwardXpHandler((uid, name, payload) => awardTriviaAttemptXp(uid, name, payload, file)
     );
     const edits = [];
     service.setEditMessageHandler((c, m, text) => {
@@ -504,8 +501,8 @@ async function main() {
     const started = startRound(service);
 
     for (let q = 1; q <= 5; q += 1) {
-      const a = answerCorrect(service, started.session.id, USER_A, "Alice");
-      const b = answerCorrect(service, started.session.id, USER_B, "Bob");
+      const a = await answerCorrect(service, started.session.id, USER_A, "Alice");
+      const b = await answerCorrect(service, started.session.id, USER_B, "Bob");
       assert.strictEqual(a.questionWon, true);
       assert.strictEqual(b.ok, false);
       timers.advance(1);
@@ -517,22 +514,21 @@ async function main() {
     assert.strictEqual(claim2.shouldAward, false);
   });
 
-  await runTest("tie winners both get +2", () => {
+  await runTest("tie winners both get +2", async () => {
     const file = pointsFile();
     const { service, timers } = createService({ nextQuestionDelayMs: 1 });
-    service.setAwardXpHandler((uid, name, payload) =>
-      awardTriviaAttemptXp(uid, name, payload, file)
+    service.setAwardXpHandler((uid, name, payload) => awardTriviaAttemptXp(uid, name, payload, file)
     );
     service.setEditMessageHandler(() => {});
     const started = startRound(service);
     // A wins Q1,Q2; B wins Q3,Q4; Q5 timeout → tie 2-2
-    answerCorrect(service, started.session.id, USER_A, "Alice");
+    await answerCorrect(service, started.session.id, USER_A, "Alice");
     timers.advance(1);
-    answerCorrect(service, started.session.id, USER_A, "Alice");
+    await answerCorrect(service, started.session.id, USER_A, "Alice");
     timers.advance(1);
-    answerCorrect(service, started.session.id, USER_B, "Bob");
+    await answerCorrect(service, started.session.id, USER_B, "Bob");
     timers.advance(1);
-    answerCorrect(service, started.session.id, USER_B, "Bob");
+    await answerCorrect(service, started.session.id, USER_B, "Bob");
     timers.advance(1);
     timers.advance(60_000);
     timers.advance(1);
@@ -540,7 +536,7 @@ async function main() {
     assert.strictEqual(loadPoints(file).users[String(USER_B)].points, 2);
   });
 
-  await runTest("all scores 0 after five questions → no tie XP", () => {
+  await runTest("all scores 0 after five questions → no tie XP", async () => {
     const file = pointsFile();
     const awards = [];
     const edits = [];
@@ -574,7 +570,7 @@ async function main() {
     assert.strictEqual(ranked.length, 0);
   });
 
-  await runTest("busy remains between questions; released after round", () => {
+  await runTest("busy remains between questions; released after round", async () => {
     const { service, timers } = createService({ nextQuestionDelayMs: 5_000 });
     const started = startRound(service);
     assert.strictEqual(
@@ -586,18 +582,18 @@ async function main() {
       }),
       true
     );
-    answerCorrect(service, started.session.id, USER_A, "Alice");
+    await answerCorrect(service, started.session.id, USER_A, "Alice");
     assert.strictEqual(service.isTriviaOpen(), true);
     timers.advance(5_000);
     assert.strictEqual(service.isTriviaOpen(), true);
     for (let q = 2; q <= 5; q += 1) {
-      answerCorrect(service, started.session.id, USER_A, "Alice");
+      await answerCorrect(service, started.session.id, USER_A, "Alice");
       timers.advance(5_000);
     }
     assert.strictEqual(service.isTriviaOpen(), false);
   });
 
-  await runTest("auto registry + weights total 100", () => {
+  await runTest("auto registry + weights total 100", async () => {
     assert.strictEqual(ACTION_REGISTRY.trivia.enabledForAuto, true);
     assert.strictEqual(ACTION_REGISTRY.trivia.mode, "race");
     assert.strictEqual(ACTION_WEIGHTS[ACTION_IDS.TRIVIA], 15);
@@ -829,7 +825,7 @@ async function main() {
     assert.ok(emptyInlineKeyboardExtra().reply_markup.inline_keyboard);
   });
 
-  await runTest("callbacks opaque; help lists 5-question", () => {
+  await runTest("callbacks opaque; help lists 5-question", async () => {
     const data = buildAnswerCallbackData("abc123", 1);
     assert.strictEqual(data, "trivia:abc123:1");
     assert.ok(!data.includes("Beta"));
@@ -840,7 +836,7 @@ async function main() {
     assert.ok(HELP_MESSAGE.includes("Open Trivia categories"));
   });
 
-  await runTest("anti-repeat window", () => {
+  await runTest("anti-repeat window", async () => {
     const bank = makeBank(3);
     let recent = [];
     const seen = [];
@@ -853,7 +849,7 @@ async function main() {
     assert.ok(ANTI_REPEAT_WINDOW >= 10);
   });
 
-  await runTest("fatal abort releases busy", () => {
+  await runTest("fatal abort releases busy", async () => {
     const { service } = createService();
     startRound(service);
     service.abortRound("edit-failed");
@@ -861,7 +857,7 @@ async function main() {
     assert.strictEqual(service.getSnapshot().status, STATUS.ABORTED);
   });
 
-  await runTest("stale hub session does not permanently block a new game", () => {
+  await runTest("stale hub session does not permanently block a new game", async () => {
     const { service, timers } = createService({ staleAfterMs: 1_000 });
     const first = service.startTrivia({
       chatId: COMMUNITY_CHAT,
@@ -870,7 +866,7 @@ async function main() {
     });
     assert.strictEqual(first.ok, true);
     service.setMessageId(first.session.id, 9001);
-    answerCorrect(service, first.session.id, USER_A, "Alice");
+    await answerCorrect(service, first.session.id, USER_A, "Alice");
     assert.strictEqual(service.isTriviaOpen(), true);
     timers.advance(1_000);
     assert.strictEqual(service.isTriviaOpen(), false);
@@ -882,7 +878,7 @@ async function main() {
     assert.strictEqual(second.ok, true);
   });
 
-  await runTest("timerless leftover after restart-like crash is recovered", () => {
+  await runTest("timerless leftover after restart-like crash is recovered", async () => {
     const { service, timers } = createService();
     startRound(service);
     assert.strictEqual(service.isTriviaOpen(), true);
@@ -933,10 +929,10 @@ async function main() {
     return started;
   }
 
-  function answerSession(service, sessionId, userId, name, correct = true) {
+  async function answerSession(service, sessionId, userId, name, correct = true) {
     const snap = service.getSnapshot(sessionId);
     assert.ok(snap);
-    return service.tryAnswer({
+    return await service.tryAnswer({
       sessionId,
       userId,
       answerIndex: correct ? snap.correctIndex : (snap.correctIndex + 1) % 4,
@@ -945,7 +941,7 @@ async function main() {
     });
   }
 
-  await runTest("A-C. parallel personal Trivia stays isolated by owner", () => {
+  await runTest("A-C. parallel personal Trivia stays isolated by owner", async () => {
     const { service } = createPersonalService();
     const kevin = startPersonal(service, {
       userId: USER_A,
@@ -965,7 +961,7 @@ async function main() {
     assert.strictEqual(piet.session.category, "geography");
     assert.notStrictEqual(kevin.session.id, piet.session.id);
 
-    const aAnswer = answerSession(service, kevin.session.id, USER_A, "Kevin");
+    const aAnswer = await answerSession(service, kevin.session.id, USER_A, "Kevin");
     assert.strictEqual(aAnswer.ok, true);
     assert.strictEqual(
       service.getSnapshot(piet.session.id).questionPhase,
@@ -976,7 +972,7 @@ async function main() {
       "geography"
     );
 
-    const bAnswer = answerSession(service, piet.session.id, USER_B, "Piet");
+    const bAnswer = await answerSession(service, piet.session.id, USER_B, "Piet");
     assert.strictEqual(bAnswer.ok, true);
     assert.strictEqual(
       service.getSnapshot(kevin.session.id).questionPhase,
@@ -985,7 +981,7 @@ async function main() {
     assert.strictEqual(service.getSnapshot(kevin.session.id).category, "math");
   });
 
-  await runTest("D. outsider personal answer is denied without XP or state change", () => {
+  await runTest("D. outsider personal answer is denied without XP or state change", async () => {
     const file = pointsFile();
     const awards = [];
     const { service } = createPersonalService();
@@ -1000,7 +996,7 @@ async function main() {
       displayName: "Kevin",
     });
     const before = service.getSnapshot(kevin.session.id);
-    const denied = service.tryAnswer({
+    const denied = await service.tryAnswer({
       sessionId: kevin.session.id,
       userId: USER_B,
       answerIndex: before.correctIndex,
@@ -1019,8 +1015,7 @@ async function main() {
   await runTest("D-handler. outsider callback does not edit or reward", async () => {
     const file = pointsFile();
     const { service } = createPersonalService();
-    service.setAwardXpHandler((uid, name, payload) =>
-      awardTriviaAttemptXp(uid, name, payload, file)
+    service.setAwardXpHandler((uid, name, payload) => awardTriviaAttemptXp(uid, name, payload, file)
     );
     const kevin = startPersonal(service, {
       userId: USER_A,
@@ -1061,7 +1056,7 @@ async function main() {
       messageId: 202,
       displayName: "Piet",
     });
-    answerSession(service, kevin.session.id, USER_A, "Kevin");
+    await answerSession(service, kevin.session.id, USER_A, "Kevin");
     const pietBefore = service.getSnapshot(piet.session.id);
     const ctx = createMockCtx({
       userId: USER_A,
@@ -1105,7 +1100,7 @@ async function main() {
     assert.strictEqual(service.getSnapshot(piet.session.id).category, "geography");
   });
 
-  await runTest("G. personal timeout does not end the other session", () => {
+  await runTest("G. personal timeout does not end the other session", async () => {
     const { service, timers } = createPersonalService({ questionTimeoutMs: 1_000 });
     const kevin = startPersonal(service, {
       userId: USER_A,
@@ -1199,7 +1194,7 @@ async function main() {
     assert.strictEqual(started.ok, true);
   });
 
-  await runTest("J-K. personal and community Trivia coexist; community race stays open", () => {
+  await runTest("J-K. personal and community Trivia coexist; community race stays open", async () => {
     const { service } = createPersonalService();
     const kevin = startPersonal(service, {
       userId: USER_A,
@@ -1222,7 +1217,7 @@ async function main() {
     assert.strictEqual(community.session.hubMode, false);
 
     const snap = service.getSnapshot(community.session.id);
-    const first = service.tryAnswer({
+    const first = await service.tryAnswer({
       sessionId: community.session.id,
       userId: USER_B,
       answerIndex: snap.correctIndex,
@@ -1230,7 +1225,7 @@ async function main() {
       displayName: "Piet",
     });
     assert.strictEqual(first.ok, true);
-    const second = service.tryAnswer({
+    const second = await service.tryAnswer({
       sessionId: community.session.id,
       userId: USER_A,
       answerIndex: snap.correctIndex,
@@ -1248,7 +1243,7 @@ async function main() {
     );
   });
 
-  await runTest("L. owner earns personal Trivia XP but cannot drive another player's game", () => {
+  await runTest("L. owner earns personal Trivia XP but cannot drive another player's game", async () => {
     const file = pointsFile();
     const awards = [];
     const { service } = createPersonalService();
@@ -1268,13 +1263,13 @@ async function main() {
       messageId: 202,
       displayName: "Piet",
     });
-    const own = answerSession(service, ownerGame.session.id, OWNER_ID, "Kevin");
+    const own = await answerSession(service, ownerGame.session.id, OWNER_ID, "Kevin");
     assert.strictEqual(own.ok, true);
     assert.ok(awards.some((row) => String(row.uid) === String(OWNER_ID)));
     assert.ok(loadPoints(file).users[String(OWNER_ID)]);
 
     const beforePiet = service.getSnapshot(piet.session.id);
-    const hijack = service.tryAnswer({
+    const hijack = await service.tryAnswer({
       sessionId: piet.session.id,
       userId: OWNER_ID,
       answerIndex: beforePiet.correctIndex,
@@ -1312,7 +1307,7 @@ async function main() {
     assert.strictEqual(service.getSession(piet.session.id).messageId, 202);
     assert.notStrictEqual(kevin.session.id, piet.session.id);
 
-    answerSession(service, kevin.session.id, USER_A, "Kevin");
+    await answerSession(service, kevin.session.id, USER_A, "Kevin");
     const next = service.nextHubQuestion(kevin.session.id, USER_A);
     assert.strictEqual(next.ok, true);
     await Promise.resolve();
@@ -1495,10 +1490,10 @@ async function main() {
     assert.strictEqual(ctx.cbAnswers[1], "This question is already finished.");
   });
 
-  await runTest("two sequential XP mutations both persist", () => {
+  await runTest("two sequential XP mutations both persist", async () => {
     const file = pointsFile();
-    const a = awardTriviaAttemptXp(USER_A, "Kevin", { correct: true }, file);
-    const b = awardTriviaAttemptXp(USER_B, "Piet", { correct: true }, file);
+    const a = await awardTriviaAttemptXp(USER_A, "Kevin", { correct: true }, file);
+    const b = await awardTriviaAttemptXp(USER_B, "Piet", { correct: true }, file);
     assert.strictEqual(a.awarded, true);
     assert.strictEqual(b.awarded, true);
     const data = loadPoints(file);

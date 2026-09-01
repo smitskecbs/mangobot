@@ -346,18 +346,18 @@ runTest("3. private cannot start", async () => {
   assert.strictEqual(service.getActiveFight(), null);
 });
 
-runTest("4. exact/case-insensitive correct answer wins", () => {
+runTest("4. exact/case-insensitive correct answer wins", async () => {
   const file = pointsFile();
   const { service } = createService({ random: () => 0 });
   startActiveFight(service, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
   const claim = service.tryClaimWinner(USER_A, COMMUNITY_CHAT, "mango");
   assert.strictEqual(claim.claimed, true);
-  const award = awardChatFightXp(USER_A, "Kevin", file);
+  const award = await awardChatFightXp(USER_A, "Kevin", file);
   assert.strictEqual(award.awarded, true);
   assert.strictEqual(award.pointsToAdd, 2);
 });
 
-runTest("5. wrong answer silent (no claim)", () => {
+runTest("5. wrong answer silent (no claim)", async () => {
   const { service } = createService({ random: () => 0 });
   startActiveFight(service, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
   const claim = service.tryClaimWinner(USER_A, COMMUNITY_CHAT, "WRONG");
@@ -366,7 +366,7 @@ runTest("5. wrong answer silent (no claim)", () => {
   assert.ok(service.getActiveFight());
 });
 
-runTest("6. substring answer fails", () => {
+runTest("6. substring answer fails", async () => {
   const { service } = createService({ random: () => 0 });
   startActiveFight(service, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
   // Word is MANGO — substring / extra punctuation must fail
@@ -384,7 +384,7 @@ runTest("6. substring answer fails", () => {
   );
 });
 
-runTest("7. bot cannot win", () => {
+runTest("7. bot cannot win", async () => {
   const file = pointsFile();
   const { service } = createService({ random: () => 0 });
   startActiveFight(service, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
@@ -399,7 +399,7 @@ runTest("7. bot cannot win", () => {
     text: "MANGO",
     isBot: true,
   });
-  handlers[0](ctx);
+  await handlers[0](ctx);
   assert.strictEqual(ctx.replies.length, 0);
   assert.ok(service.getActiveFight());
   assert.strictEqual(loadPoints(file).users[String(USER_A)], undefined);
@@ -409,7 +409,7 @@ runTest("7. bot cannot win", () => {
 // Math
 // ---------------------------------------------------------------------------
 
-runTest("8. generated math challenge has valid integer solution", () => {
+runTest("8. generated math challenge has valid integer solution", async () => {
   for (let i = 0; i < 30; i += 1) {
     const { service } = createService({
       random: () => Math.random(),
@@ -427,7 +427,7 @@ runTest("8. generated math challenge has valid integer solution", () => {
   }
 });
 
-runTest("9. correct math answer wins", () => {
+runTest("9. correct math answer wins", async () => {
   const file = pointsFile();
   const { service } = createService({
     random: () => 0, // add, then 1, then 1 → 1+1=2 with our RNG shape
@@ -447,11 +447,11 @@ runTest("9. correct math answer wins", () => {
   const answer = fight.acceptedAnswers[0];
   const claim = svc.tryClaimWinner(USER_A, COMMUNITY_CHAT, answer);
   assert.strictEqual(claim.claimed, true);
-  const award = awardChatFightXp(USER_A, "Kevin", file);
+  const award = await awardChatFightXp(USER_A, "Kevin", file);
   assert.strictEqual(award.points, 2);
 });
 
-runTest("10. wrong math answer no XP", () => {
+runTest("10. wrong math answer no XP", async () => {
   const file = pointsFile();
   const { service } = createService({ random: () => 0 });
   startActiveFight(service, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.MATH_RUSH });
@@ -464,7 +464,7 @@ runTest("10. wrong math answer no XP", () => {
 // Emoji
 // ---------------------------------------------------------------------------
 
-runTest("11. accepted synonym wins", () => {
+runTest("11. accepted synonym wins", async () => {
   const { service } = createService({ random: () => 0 }); // first emoji 😂
   startActiveFight(service, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.EMOJI_GUESS });
   const fight = service.getActiveFight();
@@ -475,7 +475,7 @@ runTest("11. accepted synonym wins", () => {
   );
 });
 
-runTest("12. unknown emoji answer fails", () => {
+runTest("12. unknown emoji answer fails", async () => {
   const { service } = createService({ random: () => 0 });
   startActiveFight(service, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.EMOJI_GUESS });
   assert.strictEqual(
@@ -488,14 +488,14 @@ runTest("12. unknown emoji answer fails", () => {
 // Winner / idempotency
 // ---------------------------------------------------------------------------
 
-runTest("13-16. first correct +2; second +0; lifetime+weekly", () => {
+runTest("13-16. first correct +2; second +0; lifetime+weekly", async () => {
   const file = pointsFile();
   const { service } = createService({ random: () => 0 });
   startActiveFight(service, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
 
   const first = service.tryClaimWinner(USER_A, COMMUNITY_CHAT, "MANGO");
   assert.strictEqual(first.claimed, true);
-  const award1 = awardChatFightXp(USER_A, "Kevin", file);
+  const award1 = await awardChatFightXp(USER_A, "Kevin", file);
   assert.strictEqual(award1.pointsToAdd, 2);
   assert.strictEqual(award1.points, 2);
 
@@ -508,10 +508,10 @@ runTest("13-16. first correct +2; second +0; lifetime+weekly", () => {
   assert.strictEqual(user.weeklyPoints, 2);
 });
 
-runTest("17. rank-up works", () => {
+runTest("17. rank-up works", async () => {
   const file = pointsFile();
   seedUser(file, USER_A, 24);
-  const award = awardChatFightXp(USER_A, "Kevin", file);
+  const award = await awardChatFightXp(USER_A, "Kevin", file);
   assert.strictEqual(award.rankUp, true);
   assert.strictEqual(award.rank.title, "Sprout");
   const reply = buildWinnerReply("Kevin", award);
@@ -519,7 +519,7 @@ runTest("17. rank-up works", () => {
   assert.ok(reply.includes("🌿"));
 });
 
-runTest("18. two near-simultaneous correct messages → one winner", () => {
+runTest("18. two near-simultaneous correct messages → one winner", async () => {
   const file = pointsFile();
   const { service } = createService({ random: () => 0 });
   startActiveFight(service, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
@@ -532,8 +532,9 @@ runTest("18. two near-simultaneous correct messages → one winner", () => {
 
   const ctxA = createMockCtx({ userId: USER_A, firstName: "Ada", text: "MANGO" });
   const ctxB = createMockCtx({ userId: USER_B, firstName: "Bob", text: "MANGO" });
-  handlers[0](ctxA);
-  handlers[0](ctxB);
+  const pA = handlers[0](ctxA);
+  const pB = handlers[0](ctxB);
+  await Promise.all([pA, pB]);
 
   assert.strictEqual(ctxA.replies.length, 1);
   assert.strictEqual(ctxB.replies.length, 0);
@@ -547,7 +548,7 @@ runTest("18. two near-simultaneous correct messages → one winner", () => {
 // Daily Activity interaction
 // ---------------------------------------------------------------------------
 
-runTest("19-20. first daily message that wins → activity + ChatFight XP", () => {
+runTest("19-20. first daily message that wins → activity + ChatFight XP", async () => {
   const file = pointsFile();
   const { service } = createService({ random: () => 0 });
   startActiveFight(service, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
@@ -555,8 +556,8 @@ runTest("19-20. first daily message that wins → activity + ChatFight XP", () =
   // Simulate event order: chat-fight then points-trigger awards
   const claim = service.tryClaimWinner(USER_A, COMMUNITY_CHAT, "MANGO");
   assert.ok(claim.claimed);
-  const fightAward = awardChatFightXp(USER_A, "Kevin", file);
-  const activityAward = awardDailyActivityPoint(USER_A, "Kevin", file);
+  const fightAward = await awardChatFightXp(USER_A, "Kevin", file);
+  const activityAward = await awardDailyActivityPoint(USER_A, "Kevin", file);
 
   assert.strictEqual(fightAward.awarded, true);
   assert.strictEqual(activityAward.awarded, true);
@@ -565,13 +566,13 @@ runTest("19-20. first daily message that wins → activity + ChatFight XP", () =
   assert.strictEqual(user.weeklyPoints, 3);
 });
 
-runTest("21. rank-up reply not duplicated if activity + fight cross threshold", () => {
+runTest("21. rank-up reply not duplicated if activity + fight cross threshold", async () => {
   const file = pointsFile();
   // 22 + 2 fight = 24 (no rank-up); +1 activity = 25 (rank-up) — only activity announces
   seedUser(file, USER_A, 22);
 
-  const fightAward = awardChatFightXp(USER_A, "Kevin", file);
-  const activityAward = awardDailyActivityPoint(USER_A, "Kevin", file);
+  const fightAward = await awardChatFightXp(USER_A, "Kevin", file);
+  const activityAward = await awardDailyActivityPoint(USER_A, "Kevin", file);
   assert.strictEqual(fightAward.rankUp, false);
   assert.strictEqual(activityAward.rankUp, true);
 
@@ -590,8 +591,8 @@ runTest("21. rank-up reply not duplicated if activity + fight cross threshold", 
   // 23 + 2 = 25 fight rank-up; activity no — fight reply only
   const file2 = pointsFile();
   seedUser(file2, USER_A, 23);
-  const fight2 = awardChatFightXp(USER_A, "Kevin", file2);
-  const activity2 = awardDailyActivityPoint(USER_A, "Kevin", file2);
+  const fight2 = await awardChatFightXp(USER_A, "Kevin", file2);
+  const activity2 = await awardDailyActivityPoint(USER_A, "Kevin", file2);
   assert.strictEqual(fight2.rankUp, true);
   assert.strictEqual(activity2.rankUp, false);
   const winner2 = buildWinnerReply("Kevin", fight2);
@@ -604,7 +605,7 @@ runTest("21. rank-up reply not duplicated if activity + fight cross threshold", 
 // Timeout
 // ---------------------------------------------------------------------------
 
-runTest("22-24. timeout ends fight; one message; no XP after", () => {
+runTest("22-24. timeout ends fight; one message; no XP after", async () => {
   const file = pointsFile();
   const { service, clock, sent } = createService({
     random: () => 0,
@@ -629,7 +630,7 @@ runTest("22-24. timeout ends fight; one message; no XP after", () => {
   assert.strictEqual(loadPoints(file).users[String(USER_A)], undefined);
 });
 
-runTest("25. timer cleared after winner", () => {
+runTest("25. timer cleared after winner", async () => {
   const { service, clock, sent } = createService({
     random: () => 0,
     durationMs: 60_000,
@@ -646,7 +647,7 @@ runTest("25. timer cleared after winner", () => {
 // Cooldown
 // ---------------------------------------------------------------------------
 
-runTest("26. cannot start second fight before 60 min", () => {
+runTest("26. cannot start second fight before 60 min", async () => {
   const { service, clock } = createService({ random: () => 0 });
   const first = startActiveFight(service, {
     chatId: COMMUNITY_CHAT,
@@ -665,7 +666,7 @@ runTest("26. cannot start second fight before 60 min", () => {
   assert.ok(second.remainingMinutes >= 59);
 });
 
-runTest("27. can start after cooldown", () => {
+runTest("27. can start after cooldown", async () => {
   const { service, clock } = createService({ random: () => 0 });
   startActiveFight(service, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
   service.tryClaimWinner(USER_A, COMMUNITY_CHAT, "MANGO");
@@ -677,7 +678,7 @@ runTest("27. can start after cooldown", () => {
   assert.ok(next.ok);
 });
 
-runTest("28. cooldown survives fight completion in memory", () => {
+runTest("28. cooldown survives fight completion in memory", async () => {
   const { service, clock } = createService({ random: () => 0 });
   startActiveFight(service, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
   service.tryClaimWinner(USER_A, COMMUNITY_CHAT, "MANGO");
@@ -708,7 +709,7 @@ runTest("29. displayed remaining minutes sensible", async () => {
 // Chat restriction
 // ---------------------------------------------------------------------------
 
-runTest("30. wrong group cannot participate", () => {
+runTest("30. wrong group cannot participate", async () => {
   resetEnv();
   assert.strictEqual(isAllowedChatFightChat(OTHER_CHAT), false);
   const { service } = createService({ random: () => 0 });
@@ -725,7 +726,7 @@ runTest("30. wrong group cannot participate", () => {
   assert.strictEqual(claim.claimed, false);
 });
 
-runTest("31. configured community group works", () => {
+runTest("31. configured community group works", async () => {
   resetEnv();
   assert.strictEqual(isAllowedChatFightChat(COMMUNITY_CHAT), true);
   const { service } = createService({ random: () => 0 });
@@ -740,7 +741,7 @@ runTest("31. configured community group works", () => {
 // Regression / security
 // ---------------------------------------------------------------------------
 
-runTest("32. commands don't count as answer", () => {
+runTest("32. commands don't count as answer", async () => {
   const { service } = createService({ random: () => 0 });
   startActiveFight(service, { chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
 
@@ -753,22 +754,22 @@ runTest("32. commands don't count as answer", () => {
   });
 
   const ctx = createMockCtx({ text: "/mango" });
-  handlers[0](ctx);
+  await handlers[0](ctx);
   assert.strictEqual(ctx.replies.length, 0);
   assert.ok(service.getActiveFight());
   assert.ok(isCommandText("/chatfight"));
 });
 
-runTest("33. gm/gmango triggers still work normally", () => {
+runTest("33. gm/gmango triggers still work normally", async () => {
   const file = pointsFile();
   assert.strictEqual(detectTrigger("gmango everyone"), "gmango");
   assert.strictEqual(detectTrigger("gm friends"), "gm");
-  const result = awardTriggerPoints(USER_A, "Kevin", "gmango", file);
+  const result = await awardTriggerPoints(USER_A, "Kevin", "gmango", file);
   assert.strictEqual(result.awarded, true);
   assert.strictEqual(result.pointsToAdd, 2);
 });
 
-runTest("34. menu labels unaffected", () => {
+runTest("34. menu labels unaffected", async () => {
   assert.ok(MENU_LABELS.POINTS);
   assert.ok(HELP_MESSAGE.includes("/chatfight"));
   const ctx = createMockCtx({
@@ -778,7 +779,7 @@ runTest("34. menu labels unaffected", () => {
   assert.strictEqual(shouldSkipCommunityActivity(ctx, MENU_LABELS.POINTS), true);
 });
 
-runTest("35. points locking remains safe via awardChatFightXp", () => {
+runTest("35. points locking remains safe via awardChatFightXp", async () => {
   const file = pointsFile();
   mutatePoints((data) => {
     data.users["1"] = {
@@ -791,8 +792,8 @@ runTest("35. points locking remains safe via awardChatFightXp", () => {
       activityDate: null,
     };
   }, file);
-  const a = awardChatFightXp(1, "A", file);
-  const b = awardChatFightXp(1, "A", file);
+  const a = await awardChatFightXp(1, "A", file);
+  const b = await awardChatFightXp(1, "A", file);
   assert.strictEqual(a.points, 2);
   assert.strictEqual(b.points, 4);
   assert.strictEqual(loadPoints(file).users["1"].points, 4);
@@ -815,13 +816,13 @@ runTest("parseFightTypeArg + usage on unknown", async () => {
   assert.strictEqual(ctx.replies[0], USAGE_TEXT);
 });
 
-runTest("normalizeAnswer policy: no punctuation strip", () => {
+runTest("normalizeAnswer policy: no punctuation strip", async () => {
   assert.strictEqual(normalizeAnswer(FIGHT_TYPES.TYPE_RUSH, "  MaNgO  "), "mango");
   assert.strictEqual(normalizeAnswer(FIGHT_TYPES.TYPE_RUSH, "MANGO!!!"), "mango!!!");
   assert.strictEqual(normalizeAnswer(FIGHT_TYPES.MATH_RUSH, " 42 "), "42");
 });
 
-runTest("TYPE_RUSH_WORDS and EMOJI_MAP are stable", () => {
+runTest("TYPE_RUSH_WORDS and EMOJI_MAP are stable", async () => {
   assert.ok(TYPE_RUSH_WORDS.includes("MANGO"));
   assert.ok(TYPE_RUSH_WORDS.includes("GMANGO"));
   assert.deepStrictEqual(EMOJI_MAP["😂"], ["laugh", "laughing", "funny"]);
@@ -829,7 +830,7 @@ runTest("TYPE_RUSH_WORDS and EMOJI_MAP are stable", () => {
   assert.strictEqual(getRank(26).title, "Sprout");
 });
 
-runTest("dev mode without TELEGRAM_CHAT_ID allows any group", () => {
+runTest("dev mode without TELEGRAM_CHAT_ID allows any group", async () => {
   delete process.env.TELEGRAM_CHAT_ID;
   assert.strictEqual(isAllowedChatFightChat(OTHER_CHAT), true);
   resetEnv();
@@ -1055,7 +1056,7 @@ runTest("auth13. non-admin /chatfight awards geen XP", async () => {
 // Reveal flow
 // ---------------------------------------------------------------------------
 
-runTest("reveal11. fight starts hidden (waiting_for_reveal)", () => {
+runTest("reveal11. fight starts hidden (waiting_for_reveal)", async () => {
   const { service } = createService({ random: () => 0 });
   const started = service.startFight({
     chatId: COMMUNITY_CHAT,
@@ -1086,7 +1087,7 @@ runTest("reveal12-14. teaser has opaque reveal button, no answer in callback", a
   assert.ok(!JSON.stringify(button).toLowerCase().includes("mango"));
 });
 
-runTest("reveal15. answer before reveal does nothing", () => {
+runTest("reveal15. answer before reveal does nothing", async () => {
   const file = pointsFile();
   const { service } = createService({ random: () => 0 });
   service.startFight({ chatId: COMMUNITY_CHAT, type: FIGHT_TYPES.TYPE_RUSH });
@@ -1123,7 +1124,7 @@ runTest("reveal16-17. first reveal shows challenge; second does not duplicate", 
   assert.strictEqual(clock.pendingCount(), 1);
 });
 
-runTest("reveal18. answer after reveal can win", () => {
+runTest("reveal18. answer after reveal can win", async () => {
   const { service } = createService({ random: () => 0 });
   startActiveFight(service, {
     chatId: COMMUNITY_CHAT,
@@ -1145,7 +1146,7 @@ runTest("reveal19. reveal click awards no XP", async () => {
   assert.strictEqual(loadPoints(file).users[String(USER_A)], undefined);
 });
 
-runTest("reveal20. answer can give activity + fight XP", () => {
+runTest("reveal20. answer can give activity + fight XP", async () => {
   const file = pointsFile();
   const { service } = createService({ random: () => 0 });
   startActiveFight(service, {
@@ -1154,14 +1155,14 @@ runTest("reveal20. answer can give activity + fight XP", () => {
   });
   const claim = service.tryClaimWinner(USER_A, COMMUNITY_CHAT, "MANGO");
   assert.ok(claim.claimed);
-  const fightAward = awardChatFightXp(USER_A, "Kevin", file);
-  const activityAward = awardDailyActivityPoint(USER_A, "Kevin", file);
+  const fightAward = await awardChatFightXp(USER_A, "Kevin", file);
+  const activityAward = await awardDailyActivityPoint(USER_A, "Kevin", file);
   assert.strictEqual(fightAward.awarded, true);
   assert.strictEqual(activityAward.awarded, true);
   assert.strictEqual(loadPoints(file).users[String(USER_A)].points, 3);
 });
 
-runTest("reveal21. reveal timeout without click", () => {
+runTest("reveal21. reveal timeout without click", async () => {
   const { service, clock, sent } = createService({
     random: () => 0,
     revealWaitMs: 5 * 60 * 1000,
@@ -1177,7 +1178,7 @@ runTest("reveal21. reveal timeout without click", () => {
   assert.strictEqual(claim.claimed, false);
 });
 
-runTest("reveal22-23. answer timeout after reveal; timer cleanup", () => {
+runTest("reveal22-23. answer timeout after reveal; timer cleanup", async () => {
   const { service, clock, sent } = createService({
     random: () => 0,
     revealWaitMs: 300_000,
@@ -1196,7 +1197,7 @@ runTest("reveal22-23. answer timeout after reveal; timer cleanup", () => {
   assert.strictEqual(clock.pendingCount(), 0);
 });
 
-runTest("reveal24. cooldown from fight START not reveal", () => {
+runTest("reveal24. cooldown from fight START not reveal", async () => {
   const { service, clock } = createService({
     random: () => 0,
     revealWaitMs: 300_000,

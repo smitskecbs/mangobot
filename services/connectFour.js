@@ -450,8 +450,8 @@ function createConnectFourService(options = {}) {
     return takeResolvedQuestUsers(session, isBotPlayer);
   }
 
-  function emitQuest(result) {
-    emitResolvedPvpDailyQuest(result && result.questUsers, GAME_ID, {
+  async function emitQuest(result) {
+    await emitResolvedPvpDailyQuest(result && result.questUsers, GAME_ID, {
       shopFile: options.shopFile,
       walletFile: options.walletFile,
       pointsFile: options.pointsFile,
@@ -704,11 +704,11 @@ function createConnectFourService(options = {}) {
 
   function startTurnTimer(session) {
     manager.schedule(session, "turn", turnTimeoutMs, () => {
-      resolveTurnTimeout(session.id);
+      Promise.resolve(resolveTurnTimeout(session.id)).catch(() => {});
     });
   }
 
-  function resolveTurnTimeout(sessionId) {
+  async function resolveTurnTimeout(sessionId) {
     const locked = manager.withSessionLock(sessionId, () => {
       const session = manager.getSession(sessionId);
       if (!session || session.status !== STATUS.ACTIVE) {
@@ -742,7 +742,7 @@ function createConnectFourService(options = {}) {
       }
     }
     notifyRender(locked);
-    emitQuest(locked);
+    await emitQuest(locked);
     return locked;
   }
 
@@ -794,7 +794,7 @@ function createConnectFourService(options = {}) {
     });
   }
 
-  function move({ sessionId, userId, column, chatId } = {}) {
+  async function move({ sessionId, userId, column, chatId } = {}) {
     const locked = manager.withSessionLock(sessionId, () => {
       const session = manager.getSession(sessionId);
       if (!session) {
@@ -870,7 +870,7 @@ function createConnectFourService(options = {}) {
         rendered: renderMessage(session, null, manager.now()),
       };
     });
-    emitQuest(locked);
+    await emitQuest(locked);
     return locked;
   }
 
@@ -879,11 +879,11 @@ function createConnectFourService(options = {}) {
     const gen = session.botMoveGeneration;
     const sessionId = session.id;
     manager.schedule(session, "bot", botThinkDelay(), () => {
-      performBotMove(sessionId, gen);
+      Promise.resolve(performBotMove(sessionId, gen)).catch(() => {});
     });
   }
 
-  function performBotMove(sessionId, expectedGen) {
+  async function performBotMove(sessionId, expectedGen) {
     const locked = manager.withSessionLock(sessionId, () => {
       const session = manager.getSession(sessionId);
       if (!session || session.status !== STATUS.ACTIVE) {
@@ -957,7 +957,7 @@ function createConnectFourService(options = {}) {
       }
     }
     notifyRender(locked);
-    emitQuest(locked);
+    await emitQuest(locked);
     return locked;
   }
 

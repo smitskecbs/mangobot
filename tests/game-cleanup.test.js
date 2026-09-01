@@ -169,7 +169,7 @@ function createBombCtx({ gameId, userId = USER_A, chatId = COMMUNITY_CHAT, hasBu
 }
 
 async function main() {
-  await runTest("copy. empty / not-enough / expired / cancelled", () => {
+  await runTest("copy. empty / not-enough / expired / cancelled", async () => {
     assert.strictEqual(STALE_CALLBACK, GAME_OVER_TOAST);
     assert.ok(
       buildFinalGameText(GAME_TYPE.MANGOBOMB, FINAL_STATE.EMPTY).includes(
@@ -784,7 +784,7 @@ async function main() {
     assert.ok(sends[0].text.includes("WINNER"));
   });
 
-  await runTest("29. no production data touched", () => {
+  await runTest("29. no production data touched", async () => {
     for (const file of prodRoots) {
       if (!fs.existsSync(file)) continue;
       assert.strictEqual(fs.statSync(file).mtimeMs, prodMtimes[file], file);

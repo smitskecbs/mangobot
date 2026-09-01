@@ -46,7 +46,7 @@ function startBotRuntime({
   let communityScheduler = null;
   let schedulerStarted = false;
 
-  function onBotLaunched() {
+  async function onBotLaunched() {
     if (schedulerStarted) {
       return;
     }
@@ -55,7 +55,7 @@ function startBotRuntime({
 
     if (typeof beforeScheduler === "function") {
       try {
-        beforeScheduler();
+        await beforeScheduler();
       } catch (err) {
         logFn(
           "[lifecycle] beforeScheduler failed:",

@@ -30,7 +30,7 @@ function isBotOpponent(opponentType, opponentUserId) {
   return BOT_IDS.includes(opp);
 }
 
-function noteHumanPvpMatch(userId, payload = {}, pointsFile) {
+async function noteHumanPvpMatch(userId, payload = {}, pointsFile) {
   const uid = userId == null ? "" : String(userId).trim();
   if (!uid || BOT_IDS.includes(uid.toLowerCase())) {
     return { ok: false, reason: "user" };
@@ -55,7 +55,7 @@ function noteHumanPvpMatch(userId, payload = {}, pointsFile) {
     counted = { ok: true, already: false, matchesToday: 0, skippedPoints: true };
   } else {
     try {
-      counted = recordHumanPvpMatch(
+      counted = await recordHumanPvpMatch(
         uid,
         (payload && payload.userName) || "Player",
         noteKey,

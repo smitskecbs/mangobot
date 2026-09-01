@@ -949,13 +949,16 @@ function createBlackjackService(options = {}) {
     return Promise.resolve(true);
   }
 
-  function callAward(kind, userId, displayName, payload) {
+  async function callAward(kind, userId, displayName, payload) {
     const fn = awards[kind];
     if (typeof fn !== "function") {
       return { awarded: false, pointsToAdd: 0, reason: "no-handler" };
     }
     try {
-      return fn(userId, displayName, payload || {}) || { awarded: false, pointsToAdd: 0 };
+      const result = await Promise.resolve(
+        fn(userId, displayName, payload || {})
+      );
+      return result || { awarded: false, pointsToAdd: 0 };
     } catch (_err) {
       return { awarded: false, pointsToAdd: 0, reason: "award-error" };
     }
@@ -1317,7 +1320,7 @@ function createBlackjackService(options = {}) {
     };
   }
 
-  function settleAwards(game) {
+  async function settleAwards(game) {
     if (game.awardsSettled) {
       return game.xpResults || {};
     }
@@ -1342,7 +1345,7 @@ function createBlackjackService(options = {}) {
         return results;
       }
       if (human.decision === "pass") {
-        store(human, callAward("pass", human.userId, human.displayName, xpPayload(human)));
+        store(human, await callAward("pass", human.userId, human.displayName, xpPayload(human)));
       } else {
         const bot = game.players.get(BOT_ID);
         const cmp = compareHands(human.hand, bot ? bot.hand : []);
@@ -1350,7 +1353,7 @@ function createBlackjackService(options = {}) {
         game.handResult = outcome;
         store(
           human,
-          callAward("bot", human.userId, human.displayName, {
+          await callAward("bot", human.userId, human.displayName, {
             ...xpPayload(human),
             result: outcome,
           })
@@ -1366,14 +1369,14 @@ function createBlackjackService(options = {}) {
       game.handResult = cmp === "a" ? a.userId : cmp === "b" ? b.userId : "push";
       store(
         a,
-        callAward("pvp", a.userId, a.displayName, {
+        await callAward("pvp", a.userId, a.displayName, {
           ...xpPayload(a),
           result: cmp === "a" ? "win" : cmp === "push" ? "tie" : "loss",
         })
       );
       store(
         b,
-        callAward("pvp", b.userId, b.displayName, {
+        await callAward("pvp", b.userId, b.displayName, {
           ...xpPayload(b),
           result: cmp === "b" ? "win" : cmp === "push" ? "tie" : "loss",
         })
@@ -1383,35 +1386,35 @@ function createBlackjackService(options = {}) {
       game.handResult = "pass-win";
       store(
         winner,
-        callAward("pvp", winner.userId, winner.displayName, {
+        await callAward("pvp", winner.userId, winner.displayName, {
           ...xpPayload(winner),
           result: "pass-win",
         })
       );
       for (const passer of passes) {
-        store(passer, callAward("pass", passer.userId, passer.displayName, xpPayload(passer)));
+        store(passer, await callAward("pass", passer.userId, passer.displayName, xpPayload(passer)));
       }
     } else {
       game.handResult = "both-pass";
       for (const passer of humans) {
-        store(passer, callAward("pass", passer.userId, passer.displayName, xpPayload(passer)));
+        store(passer, await callAward("pass", passer.userId, passer.displayName, xpPayload(passer)));
       }
     }
 
     if (humans.length === 2 && typeof awards.markPair === "function") {
       try {
-        awards.markPair(humans[0].userId, humans[1].userId);
+        await Promise.resolve(awards.markPair(humans[0].userId, humans[1].userId));
       } catch (_err) {
         /* ignore */
       }
     }
 
     game.xpResults = results;
-    noteHumanPvpIfNeeded(game);
+    await noteHumanPvpIfNeeded(game);
     return results;
   }
 
-  function noteHumanPvpIfNeeded(game) {
+  async function noteHumanPvpIfNeeded(game) {
     if (!game || game.pvpProgressNoted) {
       return;
     }
@@ -1433,7 +1436,8 @@ function createBlackjackService(options = {}) {
     }
     for (const player of humans) {
       try {
-        noteFn(
+        await Promise.resolve(
+          noteFn(
           player.userId,
           {
             game: "blackjack",
@@ -1445,6 +1449,7 @@ function createBlackjackService(options = {}) {
             pointsFile: options.pointsFile,
           },
           options.pointsFile
+        )
         );
       } catch (err) {
         logError(
@@ -1532,14 +1537,14 @@ function createBlackjackService(options = {}) {
     return lines.join("\n");
   }
 
-  function finishGame(game) {
+  async function finishGame(game) {
     if (game.status === STATUS.FINISHED || game.status === STATUS.CANCELLED) {
       return { ok: true, status: game.status };
     }
     setStatus(game, STATUS.RESOLVING, "resolving");
     clearGameTimers(game);
     clearPending(game);
-    settleAwards(game);
+    await settleAwards(game);
     setStatus(game, STATUS.FINISHED, "finished");
     bumpRevision(game);
     const text = buildResultText(game);
@@ -1555,10 +1560,10 @@ function createBlackjackService(options = {}) {
     return humanPlayers(game).every((p) => p.decision === "play" || p.decision === "pass");
   }
 
-  function applyDecision(game, player, choice) {
+  async function applyDecision(game, player, choice) {
     player.decision = choice;
     const opponent = humanPlayers(game).find((p) => p.userId !== player.userId);
-    const reserved = callAward("reserve", player.userId, player.displayName, {
+    const reserved = await callAward("reserve", player.userId, player.displayName, {
       opponentUserId: opponent ? opponent.userId : undefined,
     });
     player.slotConsumed = Boolean(reserved && reserved.slotConsumed);
@@ -1575,7 +1580,7 @@ function createBlackjackService(options = {}) {
     noteProgress(game, choice);
   }
 
-  function closeDecisions(gameId, token, instanceSeqExpected) {
+  async function closeDecisions(gameId, token, instanceSeqExpected) {
     if (token != null && !isLiveTask(token)) {
       return { ok: false, reason: "queue-timeout" };
     }
@@ -1591,7 +1596,7 @@ function createBlackjackService(options = {}) {
     clearPending(game, PENDING.DECISION_TIMEOUT);
     for (const player of humanPlayers(game)) {
       if (!player.decision) {
-        applyDecision(game, player, "pass");
+        await applyDecision(game, player, "pass");
       }
     }
     return finishFromDecisions(game);
@@ -1845,7 +1850,7 @@ function createBlackjackService(options = {}) {
     return { ok: true, text, extra: joinKeyboard(game.id), snapshot: snapshot(game) };
   }
 
-  function tryDecide({ gameId, userId, isBot, chatId, threadId, choice } = {}) {
+  async function tryDecide({ gameId, userId, isBot, chatId, threadId, choice } = {}) {
     const game = gamesById.get(gameId);
     if (!game || game.status === STATUS.FINISHED || game.status === STATUS.CANCELLED) {
       return { ok: false, reason: "stale", toast: STALE_CALLBACK };
@@ -1870,7 +1875,7 @@ function createBlackjackService(options = {}) {
     if (choice !== "play" && choice !== "pass") {
       return { ok: false, reason: "invalid", toast: STALE_CALLBACK };
     }
-    applyDecision(game, player, choice);
+    await applyDecision(game, player, choice);
     if (allHumansDecided(game)) {
       clearGameTimer(game, "decision");
       return finishFromDecisions(game);

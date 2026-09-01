@@ -1273,12 +1273,12 @@ function createTriviaService(options = {}) {
     awardXpFn = typeof fn === "function" ? fn : null;
   }
 
-  function awardAttempt(uid, name, correct) {
+  async function awardAttempt(uid, name, correct) {
     if (typeof awardXpFn !== "function") {
       return null;
     }
     try {
-      return awardXpFn(uid, name, { correct });
+      return await Promise.resolve(awardXpFn(uid, name, { correct }));
     } catch (_err) {
       return null;
     }
@@ -1323,9 +1323,9 @@ function createTriviaService(options = {}) {
   }
 
   /**
-   * Fully synchronous answer attempt for the current question.
+   * Answer attempt for the current question. XP persistence is async when not deferred.
    */
-  function tryAnswer({
+  async function tryAnswer({
     sessionId,
     userId,
     answerIndex,
@@ -1383,7 +1383,7 @@ function createTriviaService(options = {}) {
       target.pendingXp = { uid, name, correct };
     } else {
       target.pendingXp = null;
-      xpResult = awardAttempt(uid, name, correct);
+      xpResult = await awardAttempt(uid, name, correct);
       target.lastXpResult = xpResult;
     }
     touchActivity(target);
@@ -1438,7 +1438,7 @@ function createTriviaService(options = {}) {
     };
   }
 
-  function settleDeferredXp(sessionId) {
+  async function settleDeferredXp(sessionId) {
     const target = getSession(sessionId);
     if (!target) {
       return { ok: false, reason: "invalid-session" };
@@ -1453,7 +1453,7 @@ function createTriviaService(options = {}) {
       };
     }
     target.pendingXp = null;
-    const xpResult = awardAttempt(pending.uid, pending.name, pending.correct);
+    const xpResult = await awardAttempt(pending.uid, pending.name, pending.correct);
     target.lastXpResult = xpResult;
     lastSession = target;
     const rendered = pending.correct

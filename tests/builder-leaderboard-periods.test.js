@@ -108,6 +108,20 @@ function harness(now) {
   };
 }
 
+async function waitUntil(predicate) {
+  for (let i = 0; i < 80; i += 1) {
+    try {
+      if (predicate()) {
+        return;
+      }
+    } catch (_err) {
+      /* File may be mid-rename; retry. */
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.ok(predicate(), "timed out waiting for async builder XP");
+}
+
 function generateSolanaWallet() {
   const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
   const publicKeyRaw = publicKey.export({ type: "spki", format: "der" }).subarray(-32);
@@ -212,22 +226,22 @@ async function main() {
     const h = harness(now);
     registerManualWallet(INVITER, generateSolanaWallet().address, h.walletFile);
     const created = await seedInvite(h);
-    handleChatMemberUpdate(joinUpdate(REFERRED, created.inviteUrl), h.opts);
+    await handleChatMemberUpdate(joinUpdate(REFERRED, created.inviteUrl), h.opts);
     const afterJoin = loadBuilderStore(h.storeFile);
     const joinId = builderEventId(REFERRED, BUILDER_EVENT_REASON.JOIN);
     assert.ok(afterJoin.builderEvents[joinId]);
     assert.strictEqual(afterJoin.builderEvents[joinId].reason, BUILDER_EVENT_REASON.JOIN);
     assert.strictEqual(afterJoin.builderEvents[joinId].points, 1);
     assert.strictEqual(afterJoin.builderEvents[joinId].createdAt, now);
-    handleChatMemberUpdate(joinUpdate(REFERRED, created.inviteUrl), h.opts);
+    await handleChatMemberUpdate(joinUpdate(REFERRED, created.inviteUrl), h.opts);
     assert.strictEqual(
       Object.keys(loadBuilderStore(h.storeFile).builderEvents).length,
       1
     );
 
     registerManualWallet(REFERRED, generateSolanaWallet().address, h.walletFile);
-    tryWalletMilestone(REFERRED, h.opts);
-    tryWalletMilestone(REFERRED, h.opts);
+    await tryWalletMilestone(REFERRED, h.opts);
+    await tryWalletMilestone(REFERRED, h.opts);
     const afterWallet = loadBuilderStore(h.storeFile);
     const walletId = builderEventId(REFERRED, BUILDER_EVENT_REASON.WALLET);
     assert.ok(afterWallet.builderEvents[walletId]);
@@ -386,7 +400,7 @@ async function main() {
     }, h.storeFile);
     registerManualWallet(INVITER, generateSolanaWallet().address, h.walletFile);
     const created = await seedInvite(h);
-    handleChatMemberUpdate(joinUpdate(REFERRED, created.inviteUrl), h.opts);
+    await handleChatMemberUpdate(joinUpdate(REFERRED, created.inviteUrl), h.opts);
     const alltime = getBuilderLeaderboard({ ...h.opts, period: "alltime", now });
     assert.strictEqual(alltime[0].points, 11);
   });
@@ -591,10 +605,15 @@ async function main() {
     const h = harness(Date.now());
     registerManualWallet(INVITER, generateSolanaWallet().address, h.walletFile);
     const created = await seedInvite(h);
-    handleChatMemberUpdate(joinUpdate(REFERRED, created.inviteUrl, { name: "Bob" }), h.opts);
+    await handleChatMemberUpdate(joinUpdate(REFERRED, created.inviteUrl, { name: "Bob" }), h.opts);
     assert.strictEqual(builderSummary(INVITER, h.opts).builderPoints, 1);
     registerManualWallet(REFERRED, generateSolanaWallet().address, h.walletFile);
-    tryWalletMilestone(REFERRED, h.opts);
+    await waitUntil(
+      () =>
+        builderSummary(INVITER, h.opts).builderPoints === 2 &&
+        loadPoints(h.pointsFile).users[INVITER] &&
+        loadPoints(h.pointsFile).users[INVITER].points === 2
+    );
     assert.strictEqual(builderSummary(INVITER, h.opts).builderPoints, 2);
     mutatePoints((data) => {
       data.users[REFERRED] = { name: "Bob", points: 5, weeklyPoints: 0 };
@@ -603,7 +622,7 @@ async function main() {
     assert.strictEqual(builderSummary(INVITER, h.opts).builderPoints, 4);
     assert.strictEqual(loadPoints(h.pointsFile).users[INVITER].points, 2);
     assert.strictEqual(canEarnXp(INVITER, h.walletFile), true);
-    const bomb = awardMangoBombXp(INVITER, "Alice", 1, "round-p", h.pointsFile, h.walletFile);
+    const bomb = await awardMangoBombXp(INVITER, "Alice", 1, "round-p", h.pointsFile, h.walletFile);
     assert.strictEqual(bomb.awarded, true);
     const alltime = getBuilderLeaderboard(h.opts);
     assert.strictEqual(alltime[0].points, 4);
@@ -763,7 +782,7 @@ async function main() {
 
     registerManualWallet(INVITER, generateSolanaWallet().address, h.walletFile);
     const created = await seedInvite(h);
-    handleChatMemberUpdate(joinUpdate(OTHER, created.inviteUrl), { ...h.opts, now });
+    await handleChatMemberUpdate(joinUpdate(OTHER, created.inviteUrl), { ...h.opts, now });
     assert.strictEqual(builderSummary(INVITER, h.opts).builderPoints, 5);
     assert.ok(loadBuilderStore(h.storeFile).builderEvents[`${OTHER}:join`]);
   });

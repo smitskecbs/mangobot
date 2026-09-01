@@ -35,7 +35,7 @@ function registerChatFightListener(bot, options = {}) {
       : awardChatFightXp;
   const pointsFile = options.pointsFile;
 
-  bot.on("text", (ctx, next) => {
+  bot.on("text", async (ctx, next) => {
     const continueChain =
       typeof next === "function" ? next : () => undefined;
 
@@ -67,8 +67,8 @@ function registerChatFightListener(bot, options = {}) {
 
     const awardResult =
       pointsFile !== undefined
-        ? awardXp(ctx.from.id, userName, pointsFile)
-        : awardXp(ctx.from.id, userName);
+        ? await Promise.resolve(awardXp(ctx.from.id, userName, pointsFile))
+        : await Promise.resolve(awardXp(ctx.from.id, userName));
 
     if (!ctx.state || typeof ctx.state !== "object") {
       ctx.state = {};

@@ -446,19 +446,19 @@ function createMockCtx(opts = {}) {
   await runTest("22-23. Play/Pass recorded once", async () => {
     const { service } = createService();
     const gameId = await pvpTable(service);
-    const play = service.tryDecide({ ...actInput(gameId, USER_A), choice: "play" });
+    const play = await service.tryDecide({ ...actInput(gameId, USER_A), choice: "play" });
     assert.strictEqual(play.ok, true);
-    const again = service.tryDecide({ ...actInput(gameId, USER_A), choice: "pass" });
+    const again = await service.tryDecide({ ...actInput(gameId, USER_A), choice: "pass" });
     assert.strictEqual(again.ok, false);
     assert.strictEqual(again.reason, "already");
-    const pass = service.tryDecide({ ...actInput(gameId, USER_B), choice: "pass" });
+    const pass = await service.tryDecide({ ...actInput(gameId, USER_B), choice: "pass" });
     assert.strictEqual(pass.ok, true);
   });
 
   await runTest("24. user cannot decide for opponent", async () => {
     const { service } = createService();
     const gameId = await pvpTable(service);
-    const outsider = service.tryDecide({ ...actInput(gameId, USER_C), choice: "play" });
+    const outsider = await service.tryDecide({ ...actInput(gameId, USER_C), choice: "play" });
     assert.strictEqual(outsider.ok, false);
     assert.strictEqual(outsider.reason, "not-seat");
   });
@@ -487,8 +487,8 @@ function createMockCtx(opts = {}) {
   await runTest("27. both Pass finishes", async () => {
     const { service } = createService();
     const gameId = await pvpTable(service);
-    service.tryDecide({ ...actInput(gameId, USER_A), choice: "pass" });
-    service.tryDecide({ ...actInput(gameId, USER_B), choice: "pass" });
+    await service.tryDecide({ ...actInput(gameId, USER_A), choice: "pass" });
+    await service.tryDecide({ ...actInput(gameId, USER_B), choice: "pass" });
     await service.whenIdle(COMMUNITY_CHAT);
     assert.strictEqual(service.getGame(gameId), null);
     const final = service.getFinalUi(gameId);
@@ -498,8 +498,8 @@ function createMockCtx(opts = {}) {
   await runTest("28. one Pass one Play default win without cards", async () => {
     const { service } = createService();
     const gameId = await pvpTable(service);
-    service.tryDecide({ ...actInput(gameId, USER_A), choice: "pass" });
-    service.tryDecide({ ...actInput(gameId, USER_B), choice: "play" });
+    await service.tryDecide({ ...actInput(gameId, USER_A), choice: "pass" });
+    await service.tryDecide({ ...actInput(gameId, USER_B), choice: "play" });
     await service.whenIdle(COMMUNITY_CHAT);
     const final = service.getFinalUi(gameId);
     assert.ok(final.text.includes("WINNER"));
@@ -516,12 +516,12 @@ function createMockCtx(opts = {}) {
       createCard("5", "clubs"),
       createCard("6", "spades"),
     ]);
-    service.tryDecide({ ...actInput(gameId, USER_A), choice: "play" });
-    service.tryDecide({ ...actInput(gameId, USER_B), choice: "play" });
+    await service.tryDecide({ ...actInput(gameId, USER_A), choice: "play" });
+    await service.tryDecide({ ...actInput(gameId, USER_B), choice: "play" });
     await service.whenIdle(COMMUNITY_CHAT);
     const before = player(service.getGame(gameId), USER_A);
     assert.strictEqual(before.hand.length, 2);
-    const hit = service.tryHit(actInput(gameId, USER_A));
+    const hit = await service.tryHit(actInput(gameId, USER_A));
     assert.strictEqual(hit.ok, true);
     const after = player(service.getGame(gameId), USER_A);
     assert.strictEqual(after.hand.length, 3);
@@ -530,10 +530,10 @@ function createMockCtx(opts = {}) {
   await runTest("31. Stand resolves turn", async () => {
     const { service } = createService();
     const gameId = await pvpTable(service);
-    service.tryDecide({ ...actInput(gameId, USER_A), choice: "play" });
-    service.tryDecide({ ...actInput(gameId, USER_B), choice: "play" });
+    await service.tryDecide({ ...actInput(gameId, USER_A), choice: "play" });
+    await service.tryDecide({ ...actInput(gameId, USER_B), choice: "play" });
     await service.whenIdle(COMMUNITY_CHAT);
-    const stand = service.tryStand(actInput(gameId, USER_A));
+    const stand = await service.tryStand(actInput(gameId, USER_A));
     assert.strictEqual(stand.ok, true);
     const game = service.getGame(gameId);
     assert.strictEqual(game.currentTurn, String(USER_B));
@@ -549,10 +549,10 @@ function createMockCtx(opts = {}) {
       createCard("7", "clubs"),
       createCard("A", "spades"),
     ]);
-    service.tryDecide({ ...actInput(gameId, USER_A), choice: "play" });
-    service.tryDecide({ ...actInput(gameId, USER_B), choice: "play" });
+    await service.tryDecide({ ...actInput(gameId, USER_A), choice: "play" });
+    await service.tryDecide({ ...actInput(gameId, USER_B), choice: "play" });
     await service.whenIdle(COMMUNITY_CHAT);
-    service.tryHit(actInput(gameId, USER_A));
+    await service.tryHit(actInput(gameId, USER_A));
     const game = service.getGame(gameId);
     assert.strictEqual(player(game, USER_A).resolved, true);
     assert.strictEqual(game.currentTurn, String(USER_B));
@@ -568,10 +568,10 @@ function createMockCtx(opts = {}) {
       createCard("7", "clubs"),
       createCard("5", "spades"),
     ]);
-    service.tryDecide({ ...actInput(gameId, USER_A), choice: "play" });
-    service.tryDecide({ ...actInput(gameId, USER_B), choice: "play" });
+    await service.tryDecide({ ...actInput(gameId, USER_A), choice: "play" });
+    await service.tryDecide({ ...actInput(gameId, USER_B), choice: "play" });
     await service.whenIdle(COMMUNITY_CHAT);
-    service.tryHit(actInput(gameId, USER_A));
+    await service.tryHit(actInput(gameId, USER_A));
     const game = service.getGame(gameId);
     assert.strictEqual(player(game, USER_A).bust, true);
     assert.strictEqual(game.currentTurn, String(USER_B));
@@ -580,10 +580,10 @@ function createMockCtx(opts = {}) {
   await runTest("34. wrong player cannot act", async () => {
     const { service } = createService();
     const gameId = await pvpTable(service);
-    service.tryDecide({ ...actInput(gameId, USER_A), choice: "play" });
-    service.tryDecide({ ...actInput(gameId, USER_B), choice: "play" });
+    await service.tryDecide({ ...actInput(gameId, USER_A), choice: "play" });
+    await service.tryDecide({ ...actInput(gameId, USER_B), choice: "play" });
     await service.whenIdle(COMMUNITY_CHAT);
-    const hit = service.tryHit(actInput(gameId, USER_B));
+    const hit = await service.tryHit(actInput(gameId, USER_B));
     assert.strictEqual(hit.ok, false);
     assert.strictEqual(hit.toast, STALE_TURN_TOAST);
   });
@@ -605,8 +605,8 @@ function createMockCtx(opts = {}) {
   await runTest("36. turn timeout auto-stands", async () => {
     const { service } = createService({ turnMs: 30_000 });
     const gameId = await pvpTable(service);
-    service.tryDecide({ ...actInput(gameId, USER_A), choice: "play" });
-    service.tryDecide({ ...actInput(gameId, USER_B), choice: "play" });
+    await service.tryDecide({ ...actInput(gameId, USER_A), choice: "play" });
+    await service.tryDecide({ ...actInput(gameId, USER_B), choice: "play" });
     await service.whenIdle(COMMUNITY_CHAT);
     await service.forceTurnTimeout(gameId);
     await service.whenIdle(COMMUNITY_CHAT);
@@ -625,9 +625,9 @@ function createMockCtx(opts = {}) {
       createCard("6", "diamonds"),
       createCard("A", "clubs"),
     ]);
-    service.tryDecide({ ...actInput(started.gameId, USER_A), choice: "play" });
+    await service.tryDecide({ ...actInput(started.gameId, USER_A), choice: "play" });
     await service.whenIdle(COMMUNITY_CHAT);
-    service.tryStand(actInput(started.gameId, USER_A));
+    await service.tryStand(actInput(started.gameId, USER_A));
     await service.whenIdle(COMMUNITY_CHAT);
     const final = service.getFinalUi(started.gameId);
     assert.ok(final.text.includes("ManGo Bot"));
@@ -643,11 +643,11 @@ function createMockCtx(opts = {}) {
       createCard("8", "diamonds"),
       createCard("7", "clubs"),
     ]);
-    service.tryDecide({ ...actInput(gameId, USER_A), choice: "play" });
-    service.tryDecide({ ...actInput(gameId, USER_B), choice: "play" });
+    await service.tryDecide({ ...actInput(gameId, USER_A), choice: "play" });
+    await service.tryDecide({ ...actInput(gameId, USER_B), choice: "play" });
     await service.whenIdle(COMMUNITY_CHAT);
-    service.tryStand(actInput(gameId, USER_A));
-    service.tryStand(actInput(gameId, USER_B));
+    await service.tryStand(actInput(gameId, USER_A));
+    await service.tryStand(actInput(gameId, USER_B));
     await service.whenIdle(COMMUNITY_CHAT);
     const final = service.getFinalUi(gameId);
     assert.ok(final.text.includes("WINNER"));
@@ -665,9 +665,9 @@ function createMockCtx(opts = {}) {
       createCard("7", "clubs"),
       createCard("2", "spades"),
     ]);
-    service.tryDecide({ ...actInput(started.gameId, USER_A), choice: "play" });
+    await service.tryDecide({ ...actInput(started.gameId, USER_A), choice: "play" });
     await service.whenIdle(COMMUNITY_CHAT);
-    service.tryStand(actInput(started.gameId, USER_A));
+    await service.tryStand(actInput(started.gameId, USER_A));
     await service.whenIdle(COMMUNITY_CHAT);
     const final = service.getFinalUi(started.gameId);
     assert.ok(final.text.includes("You beat the ManGo Bot"));

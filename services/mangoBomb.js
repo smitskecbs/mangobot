@@ -1037,12 +1037,17 @@ function createMangoBombService(options = {}) {
     });
   }
 
-  function award(userId, displayName, amount, roundId) {
+  async function award(userId, displayName, amount, roundId) {
     if (typeof awardXpFn !== "function" || !amount) {
       return { awarded: false, pointsToAdd: 0 };
     }
     try {
-      return awardXpFn(userId, displayName, amount, roundId) || { awarded: false, pointsToAdd: 0 };
+      return (
+        (await Promise.resolve(awardXpFn(userId, displayName, amount, roundId))) || {
+          awarded: false,
+          pointsToAdd: 0,
+        }
+      );
     } catch (_err) {
       return { awarded: false, pointsToAdd: 0 };
     }
@@ -1109,7 +1114,7 @@ function createMangoBombService(options = {}) {
     return holder;
   }
 
-  function finishWinner(game) {
+  async function finishWinner(game) {
     const winnerId = Array.from(game.alive)[0];
     const winner = winnerId ? game.players.get(winnerId) : null;
     const name = (winner && winner.displayName) || "Player";
@@ -1119,7 +1124,7 @@ function createMangoBombService(options = {}) {
     clearGameTimers(game);
     let xpLine = "";
     if (winnerId) {
-      const result = award(winnerId, name, XP_WIN, game.id);
+      const result = await award(winnerId, name, XP_WIN, game.id);
       if (result && result.awarded && result.pointsToAdd > 0) {
         xpLine = `+${result.pointsToAdd} XP`;
       } else if (result && result.reason === "wallet-required") {
@@ -1138,7 +1143,7 @@ function createMangoBombService(options = {}) {
     return { ok: true, status: STATUS.FINISHED, winnerId: winnerRef };
   }
 
-  function explode(gameId, generation, token, instanceSeqExpected) {
+  async function explode(gameId, generation, token, instanceSeqExpected) {
     if (token != null && !isLiveTask(token)) {
       return { ok: false, reason: "queue-timeout" };
     }
@@ -1169,7 +1174,7 @@ function createMangoBombService(options = {}) {
     const survivors = Array.from(game.alive);
     for (const uid of survivors) {
       const row = game.players.get(uid);
-      award(uid, row && row.displayName, XP_SURVIVE, game.id);
+      await award(uid, row && row.displayName, XP_SURVIVE, game.id);
     }
     log("[mango-bomb] eliminated");
 
@@ -1241,7 +1246,7 @@ function createMangoBombService(options = {}) {
     return { ok: true, status: STATUS.RUNNING };
   }
 
-  function closeLobby(gameId, token, instanceSeqExpected) {
+  async function closeLobby(gameId, token, instanceSeqExpected) {
     if (token != null && !isLiveTask(token)) {
       return { ok: false, reason: "queue-timeout" };
     }
@@ -1270,7 +1275,7 @@ function createMangoBombService(options = {}) {
       return { ok: true, status: STATUS.CANCELLED, empty };
     }
     for (const [userId, row] of game.players.entries()) {
-      const result = award(userId, row.displayName, XP_PARTICIPATE, game.id);
+      const result = await award(userId, row.displayName, XP_PARTICIPATE, game.id);
       if (result && result.reason === "wallet-required") {
         maybeRemind(userId, result, game);
       }

@@ -129,7 +129,7 @@ function assertNoUser(file, userId = USER_ID) {
 }
 
 async function main() {
-  await runTest("event module load order: chat-fight before points-trigger", () => {
+  await runTest("event module load order: chat-fight before points-trigger", async () => {
     const files = listEventModulesSorted();
     assert.ok(files.includes("chat-fight.js"));
     assert.ok(files.includes("points-trigger.js"));
@@ -139,7 +139,7 @@ async function main() {
     );
   });
 
-  await runTest("Telegraf 4.16.3 Composer.on accepts filter arrays", () => {
+  await runTest("Telegraf 4.16.3 Composer.on accepts filter arrays", async () => {
     const telegrafMain = require.resolve("telegraf");
     const composerPath = path.join(path.dirname(telegrafMain), "composer.js");
     const src = fs.readFileSync(composerPath, "utf8");
@@ -151,7 +151,7 @@ async function main() {
     );
   });
 
-  await runTest("isGroupChat(supergroup) true; isAllowedChatFightChat(prod id) true", () => {
+  await runTest("isGroupChat(supergroup) true; isAllowedChatFightChat(prod id) true", async () => {
     const ctx = {
       chat: { id: PROD_CHAT, type: "supergroup" },
       from: { id: USER_ID, is_bot: false, first_name: "ActivityTest" },
@@ -163,9 +163,9 @@ async function main() {
     assert.strictEqual(isEligibleCommunityActivityMessage(ctx), true);
   });
 
-  await runTest("awardDailyActivityPoint standalone writes activityDate+streak", () => {
+  await runTest("awardDailyActivityPoint standalone writes activityDate+streak", async () => {
     const file = pointsFile();
-    const r = awardDailyActivityPoint(USER_ID, "ActivityTest", file);
+    const r = await awardDailyActivityPoint(USER_ID, "ActivityTest", file);
     assert.strictEqual(r.awarded, true);
     assertDailyAwarded(file);
   });

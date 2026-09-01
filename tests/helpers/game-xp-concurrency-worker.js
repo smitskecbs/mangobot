@@ -35,23 +35,25 @@ if (
   process.exit(2);
 }
 
-try {
-  for (let i = 0; i < count; i += 1) {
-    const userId = String(idBase + i);
-    const name = `User${userId}`;
+(async () => {
+  try {
+    for (let i = 0; i < count; i += 1) {
+      const userId = String(idBase + i);
+      const name = `User${userId}`;
 
-    if (mode === "chat") {
-      awardDailyActivityPoint(userId, name, pointsFile);
-    } else if (mode === "snake") {
-      awardSnakeGameXp(userId, name, pointsFile);
-    } else if (mode === "trigger") {
-      awardTriggerPoints(userId, name, "gmango", pointsFile);
-    } else {
-      throw new Error(`Unknown mode: ${mode}`);
+      if (mode === "chat") {
+        await awardDailyActivityPoint(userId, name, pointsFile);
+      } else if (mode === "snake") {
+        await awardSnakeGameXp(userId, name, pointsFile);
+      } else if (mode === "trigger") {
+        await awardTriggerPoints(userId, name, "gmango", pointsFile);
+      } else {
+        throw new Error(`Unknown mode: ${mode}`);
+      }
     }
+    process.exit(0);
+  } catch (err) {
+    console.error(err && err.stack ? err.stack : err);
+    process.exit(1);
   }
-  process.exit(0);
-} catch (err) {
-  console.error(err && err.stack ? err.stack : err);
-  process.exit(1);
-}
+})();

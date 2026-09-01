@@ -147,7 +147,7 @@ function connectUser(file, userId, wallet, now) {
   return created;
 }
 
-runTest("1. /wallet group → private deep-link", () => {
+runTest("1. /wallet group → private deep-link", async () => {
   const ctx = createMockCtx({ chatType: "supergroup", userId: 999 });
   handleWallet(ctx, { walletFile: walletFile() });
   assert.strictEqual(ctx.replies[0].text, GROUP_WALLET_TEXT);
@@ -162,7 +162,7 @@ runTest("1. /wallet group → private deep-link", () => {
   assert.ok(!blob.includes("?t="));
 });
 
-runTest("2. /wallet private unverified", () => {
+runTest("2. /wallet private unverified", async () => {
   const file = walletFile();
   const ctx = createMockCtx({ chatType: "private", userId: 222 });
   handleWallet(ctx, { walletFile: file, now: 1000 });
@@ -177,7 +177,7 @@ runTest("2. /wallet private unverified", () => {
   assert.strictEqual(buttons[2].callback_data, WALLET_HUB_CALLBACK.BACK);
 });
 
-runTest("3. /wallet private verified hub", () => {
+runTest("3. /wallet private verified hub", async () => {
   const file = walletFile();
   const wallet = generateSolanaWallet();
   connectUser(file, 333, wallet, 2000);
@@ -215,7 +215,7 @@ runTest("Manage Wallet shows replace/disconnect", async () => {
   assert.ok(ctx.edits[0].text.includes("Coming soon"));
 });
 
-runTest("4. /start wallet", () => {
+runTest("4. /start wallet", async () => {
   const file = walletFile();
   const ctx = createMockCtx({
     chatType: "private",
@@ -226,7 +226,7 @@ runTest("4. /start wallet", () => {
   assert.strictEqual(ctx.replies[0].text, UNVERIFIED_TEXT);
 });
 
-runTest("/start wallet group does not dump wallet", () => {
+runTest("/start wallet group does not dump wallet", async () => {
   const file = walletFile();
   const wallet = generateSolanaWallet();
   connectUser(file, 555, wallet, 5000);
@@ -240,7 +240,7 @@ runTest("/start wallet group does not dump wallet", () => {
   assert.ok(!ctx.replies[0].text.includes("Verified"));
 });
 
-runTest("/mywallet same handler as /wallet", () => {
+runTest("/mywallet same handler as /wallet", async () => {
   const file = walletFile();
   const a = createMockCtx({ userId: 10 });
   const b = createMockCtx({ userId: 10 });
@@ -249,7 +249,7 @@ runTest("/mywallet same handler as /wallet", () => {
   assert.strictEqual(a.replies[0].text, b.replies[0].text);
 });
 
-runTest("10. owner works same as member", () => {
+runTest("10. owner works same as member", async () => {
   const prev = process.env.ADMIN_USER_ID;
   process.env.ADMIN_USER_ID = "9001";
   try {
@@ -273,7 +273,7 @@ runTest("10. owner works same as member", () => {
   }
 });
 
-runTest("11. no XP on wallet connect", () => {
+runTest("11. no XP on wallet connect", async () => {
   const file = walletFile();
   fs.writeFileSync(pointsFile, JSON.stringify({ users: {} }), "utf8");
   const wallet = generateSolanaWallet();
@@ -283,7 +283,7 @@ runTest("11. no XP on wallet connect", () => {
   assert.strictEqual(isWalletVerified(77, file), true);
 });
 
-runTest("12. points wallet status", () => {
+runTest("12. points wallet status", async () => {
   const file = walletFile();
   fs.writeFileSync(pointsFile, JSON.stringify({ users: {} }), "utf8");
   const unverified = createMockCtx({ userId: 80 });
@@ -299,10 +299,10 @@ runTest("12. points wallet status", () => {
   assert.ok(!verified.replies[0].text.includes(wallet.address));
 });
 
-runTest("wallet connect does not change existing XP", () => {
+runTest("wallet connect does not change existing XP", async () => {
   const file = walletFile();
   fs.writeFileSync(pointsFile, JSON.stringify({ users: {} }), "utf8");
-  awardDailyActivityPoint(81, "Ada", pointsFile);
+  await awardDailyActivityPoint(81, "Ada", pointsFile);
   const before = loadPoints(pointsFile).users["81"].points;
   const wallet = generateSolanaWallet();
   connectUser(file, 81, wallet, 8100);
@@ -375,7 +375,7 @@ runTest("20. bot callbacks no uid/wallet", async () => {
   );
 });
 
-runTest("menu Wallet Status deep-link", () => {
+runTest("menu Wallet Status deep-link", async () => {
   const ctx = createMockCtx({ chatType: "group" });
   const extra = getGroupProfileMenuExtra(ctx);
   const rows = extra.reply_markup.inline_keyboard;
@@ -397,7 +397,7 @@ runTest("menu Wallet Status deep-link", () => {
   );
 });
 
-runTest("help lists /wallet /mywallet /presale", () => {
+runTest("help lists /wallet /mywallet /presale", async () => {
   const ctx = createMockCtx();
   handleHelp(ctx);
   assert.ok(HELP_MESSAGE.includes("/wallet"));
@@ -407,7 +407,7 @@ runTest("help lists /wallet /mywallet /presale", () => {
   assert.strictEqual(ctx.replies[0].text, HELP_MESSAGE);
 });
 
-runTest("group /wallet has no personal wallet dump", () => {
+runTest("group /wallet has no personal wallet dump", async () => {
   const file = walletFile();
   const wallet = generateSolanaWallet();
   connectUser(file, 1001, wallet, 10_000);
@@ -417,7 +417,7 @@ runTest("group /wallet has no personal wallet dump", () => {
   assert.ok(!JSON.stringify(ctx.replies[0]).includes(wallet.address));
 });
 
-runTest("token in connect URL is hashed at rest", () => {
+runTest("token in connect URL is hashed at rest", async () => {
   const file = walletFile();
   const ctx = createMockCtx({ userId: 1200 });
   handleWallet(ctx, { walletFile: file, now: 12_000 });

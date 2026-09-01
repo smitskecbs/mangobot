@@ -558,7 +558,9 @@ function registerManualWallet(userId, wallet, walletFile, now = Date.now()) {
   }, walletFile);
   if (result && result.ok === true) {
     try {
-      require("./communityBuilder").onWalletLinked(uid, { walletFile });
+      Promise.resolve(
+        require("./communityBuilder").onWalletLinked(uid, { walletFile })
+      ).catch(() => {});
     } catch (_err) {
       /* Referral wallet milestone must never break wallet linking. */
     }

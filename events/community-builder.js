@@ -16,13 +16,13 @@ function registerCommunityBuilderListener(bot, options = {}) {
   if (!bot || typeof bot.on !== "function") {
     return;
   }
-  bot.on("chat_member", (ctx) => {
+  bot.on("chat_member", async (ctx) => {
     const update = ctx && ctx.update && ctx.update.chat_member;
     if (!update) {
       return;
     }
     try {
-      return handleChatMemberUpdate(update, {
+      return await handleChatMemberUpdate(update, {
         ...options,
         telegram: ctx.telegram,
         botId: ctx.botInfo && ctx.botInfo.id,

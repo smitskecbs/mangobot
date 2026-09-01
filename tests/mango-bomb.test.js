@@ -349,7 +349,7 @@ async function flushMicrotasks() {
 }
 
 async function main() {
-  await runTest("1. start lobby", () => {
+  await runTest("1. start lobby", async () => {
     const { service } = createService();
     const started = service.startLobby({ chatId: COMMUNITY_CHAT });
     assert.strictEqual(started.ok, true);
@@ -360,7 +360,7 @@ async function main() {
     assert.strictEqual(service.getGame(started.gameId).status, STATUS.LOBBY);
   });
 
-  await runTest("2. join", () => {
+  await runTest("2. join", async () => {
     const { service } = createService();
     const started = service.startLobby({ chatId: COMMUNITY_CHAT });
     const result = join(service, started.gameId, USER_A, "Kevin");
@@ -369,7 +369,7 @@ async function main() {
     assert.deepStrictEqual(service.getGame(started.gameId).alivePlayers, [String(USER_A)]);
   });
 
-  await runTest("3. duplicate join ignored", () => {
+  await runTest("3. duplicate join ignored", async () => {
     const { service } = createService();
     const started = service.startLobby({ chatId: COMMUNITY_CHAT });
     assert.strictEqual(join(service, started.gameId, USER_A, "Kevin").ok, true);
@@ -379,7 +379,7 @@ async function main() {
     assert.strictEqual(service.getGame(started.gameId).playerCount, 1);
   });
 
-  await runTest("4. bot cannot join", () => {
+  await runTest("4. bot cannot join", async () => {
     const { service } = createService();
     const started = service.startLobby({ chatId: COMMUNITY_CHAT });
     const result = service.tryJoin({
@@ -528,7 +528,7 @@ async function main() {
     assert.strictEqual(game.status, STATUS.BETWEEN_ROUNDS);
   });
 
-  await runTest("20. random timer bounds", () => {
+  await runTest("20. random timer bounds", async () => {
     const seen = [];
     const { service } = createService({
       bombMinMs: BOMB_MIN_MS,
@@ -716,18 +716,18 @@ async function main() {
     const pFile = pointsFile();
     const wFile = walletFile();
     setWalletFileForTests(wFile);
-    const first = awardMangoBombXp(USER_A, "Kevin", 1, "round-1", pFile, wFile);
+    const first = await awardMangoBombXp(USER_A, "Kevin", 1, "round-1", pFile, wFile);
     assert.strictEqual(first.awarded, true);
-    const same = awardMangoBombXp(USER_A, "Kevin", 5, "round-1", pFile, wFile);
+    const same = await awardMangoBombXp(USER_A, "Kevin", 5, "round-1", pFile, wFile);
     assert.strictEqual(same.awarded, true);
-    const next = awardMangoBombXp(USER_A, "Kevin", 1, "round-2", pFile, wFile);
+    const next = await awardMangoBombXp(USER_A, "Kevin", 1, "round-2", pFile, wFile);
     assert.strictEqual(next.awarded, false);
     assert.strictEqual(next.reason, "daily-cap");
     assert.strictEqual(MANGO_BOMB_DAILY_ROUND_CAP, 1);
     assert.strictEqual(pointsOf(pFile, USER_A), 6);
   });
 
-  await runTest("34. existing XP gate unchanged", () => {
+  await runTest("34. existing XP gate unchanged", async () => {
     const gateSrc = fs.readFileSync(
       path.join(__dirname, "../services/xpWalletGate.js"),
       "utf8"
@@ -738,7 +738,7 @@ async function main() {
     assert.ok(awardSrc.includes("function awardMangoBombXp"));
   });
 
-  await runTest("35. Games submenu contains ManGo Bomb", () => {
+  await runTest("35. Games submenu contains ManGo Bomb", async () => {
     const extra = getGroupGamesMenuExtra({
       bot: { botInfo: { username: "ManGoTestBot" } },
     });
@@ -921,7 +921,7 @@ async function main() {
     assert.notStrictEqual(service.getGame(started.gameId).currentHolder, holder);
   });
 
-  await runTest("routing. activity engine does not start ManGo Bomb / no General fallback", () => {
+  await runTest("routing. activity engine does not start ManGo Bomb / no General fallback", async () => {
     const engineSrc = fs.readFileSync(
       path.join(__dirname, "../services/communityActivityEngine.js"),
       "utf8"
@@ -1202,7 +1202,7 @@ async function main() {
     xpGuard.reset();
   });
 
-  await runTest("44. no production files touched", () => {
+  await runTest("44. no production files touched", async () => {
     for (const file of prodRoots) {
       if (!fs.existsSync(file)) continue;
       assert.strictEqual(fs.statSync(file).mtimeMs, prodMtimes[file], file);
@@ -1222,7 +1222,7 @@ async function main() {
     assert.strictEqual(pointsOf(pFile, USER_A), 0);
   });
 
-  await runTest("per chat one game + start cooldown", () => {
+  await runTest("per chat one game + start cooldown", async () => {
     const { service } = createService({ startCooldownMs: 90_000 });
     assert.strictEqual(service.startLobby({ chatId: COMMUNITY_CHAT }).ok, true);
     const second = service.startLobby({ chatId: COMMUNITY_CHAT });
@@ -1279,11 +1279,11 @@ async function main() {
     assert.strictEqual(result.reason, "wrong-chat");
   });
 
-  await runTest("award result keeps rankUp fields", () => {
+  await runTest("award result keeps rankUp fields", async () => {
     const pFile = pointsFile();
     const wFile = walletFile();
     setWalletFileForTests(wFile);
-    const result = awardMangoBombXp(USER_A, "Kevin", 5, "r1", pFile, wFile);
+    const result = await awardMangoBombXp(USER_A, "Kevin", 5, "r1", pFile, wFile);
     assert.strictEqual(typeof result.rankUp, "boolean");
     assert.ok(result.rank);
     assert.ok(result.previousRank);

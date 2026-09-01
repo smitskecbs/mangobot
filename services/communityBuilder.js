@@ -453,7 +453,7 @@ function lifetimePointsOf(userId, pointsFile) {
   return user && typeof user.points === "number" ? user.points : 0;
 }
 
-function awardInviterXp(inviterId, displayName, amount, options) {
+async function awardInviterXp(inviterId, displayName, amount, options) {
   if (!amount) {
     return { awarded: false, pointsToAdd: 0, reason: "none" };
   }
@@ -1136,7 +1136,7 @@ function extractUsedInviteLink(update) {
   return "";
 }
 
-function applyJoinAttribution(input, options = {}) {
+async function applyJoinAttribution(input, options = {}) {
   const opts = resolveOptions(options);
   const referredId = normalizeUserId(input.userId);
   const chatId = input.chatId;
@@ -1225,7 +1225,7 @@ function applyJoinAttribution(input, options = {}) {
     return result;
   }
 
-  const xp = awardInviterXp(
+  const xp = await awardInviterXp(
     result.inviterUserId,
     result.inviterName,
     JOIN_XP,
@@ -1243,7 +1243,7 @@ function applyJoinAttribution(input, options = {}) {
     opts
   );
 
-  tryFollowUpMilestones(referredId, opts);
+  await tryFollowUpMilestones(referredId, opts);
   return {
     ...result,
     xpAwarded,
@@ -1698,7 +1698,7 @@ function grantManualBuilderAward(input = {}, options = {}) {
   return result;
 }
 
-function handleChatMemberUpdate(update, options = {}) {
+async function handleChatMemberUpdate(update, options = {}) {
   if (!update || typeof update !== "object") {
     return { ok: false, reason: "invalid-update" };
   }
@@ -1706,7 +1706,7 @@ function handleChatMemberUpdate(update, options = {}) {
   const newMember = update.new_chat_member || {};
   const oldMember = update.old_chat_member || {};
   const user = newMember.user || oldMember.user || {};
-  const attribution = applyJoinAttribution(
+  const attribution = await applyJoinAttribution(
     {
       chatId,
       userId: user.id,
@@ -1740,7 +1740,7 @@ function handleChatMemberUpdate(update, options = {}) {
   return attribution;
 }
 
-function tryWalletMilestone(referredId, options = {}) {
+async function tryWalletMilestone(referredId, options = {}) {
   const opts = resolveOptions(options);
   const uid = normalizeUserId(referredId);
   if (!uid) {
@@ -1791,7 +1791,7 @@ function tryWalletMilestone(referredId, options = {}) {
     return result;
   }
 
-  const xp = awardInviterXp(
+  const xp = await awardInviterXp(
     result.inviterUserId,
     result.inviterName,
     WALLET_XP,
@@ -1878,23 +1878,23 @@ function tryActiveMilestone(referredId, options = {}) {
   return result;
 }
 
-function tryFollowUpMilestones(referredId, options = {}) {
+async function tryFollowUpMilestones(referredId, options = {}) {
   const opts = resolveOptions(options);
   const uid = normalizeUserId(referredId);
   if (!uid) {
     return;
   }
   if (getLinkedWalletForUser(uid, opts.walletFile)) {
-    tryWalletMilestone(uid, opts);
+    await tryWalletMilestone(uid, opts);
   }
   if (lifetimePointsOf(uid, opts.pointsFile) >= ACTIVE_LIFETIME_XP) {
     tryActiveMilestone(uid, opts);
   }
 }
 
-function onWalletLinked(userId, options = {}) {
+async function onWalletLinked(userId, options = {}) {
   try {
-    return tryWalletMilestone(userId, options);
+    return await tryWalletMilestone(userId, options);
   } catch (err) {
     logError(
       "[community-builder] wallet milestone failed:",

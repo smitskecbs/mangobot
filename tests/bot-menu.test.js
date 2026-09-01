@@ -212,7 +212,7 @@ function resetPointsFile(contents = { users: {} }) {
   );
 }
 
-runTest("isPrivateChat / isGroupChat helpers", () => {
+runTest("isPrivateChat / isGroupChat helpers", async () => {
   assert.strictEqual(isPrivateChat(createMockCtx({ chatType: "private" })), true);
   assert.strictEqual(isPrivateChat(createMockCtx({ chatType: "group" })), false);
   assert.strictEqual(isPrivateChat(createMockCtx({ chatType: "supergroup" })), false);
@@ -221,7 +221,7 @@ runTest("isPrivateChat / isGroupChat helpers", () => {
   assert.strictEqual(isGroupChat(createMockCtx({ chatType: "private" })), false);
 });
 
-runTest("private /snake → signed Snake link", () => {
+runTest("private /snake → signed Snake link", async () => {
   const ctx = createMockCtx({ chatType: "private", userId: USER_A });
   handleSnake(ctx, { secret: TEST_SECRET, now: FIXED_NOW });
 
@@ -241,7 +241,7 @@ runTest("private /snake → signed Snake link", () => {
   assert.strictEqual(verified.name, "Ada");
 });
 
-runTest("group /snake → geen t= token", () => {
+runTest("group /snake → geen t= token", async () => {
   const ctx = createMockCtx({ chatType: "group", userId: USER_A });
   handleSnake(ctx, { secret: TEST_SECRET, now: FIXED_NOW });
 
@@ -254,7 +254,7 @@ runTest("group /snake → geen t= token", () => {
   assert.ok(!/[?&]t=/.test(blob));
 });
 
-runTest("group /snake → private deep-link button", () => {
+runTest("group /snake → private deep-link button", async () => {
   const ctx = createMockCtx({ chatType: "supergroup", userId: USER_A });
   handleSnake(ctx, { secret: TEST_SECRET, now: FIXED_NOW });
 
@@ -263,7 +263,7 @@ runTest("group /snake → private deep-link button", () => {
   assert.strictEqual(button.url, `https://t.me/${BOT_USERNAME}?start=snake`);
 });
 
-runTest("private /bounch → signed Bounch link", () => {
+runTest("private /bounch → signed Bounch link", async () => {
   const ctx = createMockCtx({ chatType: "private", userId: USER_A });
   handleBounch(ctx, { secret: TEST_SECRET, now: FIXED_NOW });
 
@@ -278,7 +278,7 @@ runTest("private /bounch → signed Bounch link", () => {
   assert.strictEqual(verified.name, "Ada");
 });
 
-runTest("group /bounch → geen t=", () => {
+runTest("group /bounch → geen t=", async () => {
   const ctx = createMockCtx({ chatType: "group", userId: USER_A });
   handleBounch(ctx, { secret: TEST_SECRET, now: FIXED_NOW });
 
@@ -288,7 +288,7 @@ runTest("group /bounch → geen t=", () => {
   assert.ok(!/[?&]t=/.test(blob));
 });
 
-runTest("group /bounch → private deep-link button", () => {
+runTest("group /bounch → private deep-link button", async () => {
   const ctx = createMockCtx({ chatType: "group", userId: USER_A });
   handleBounch(ctx, { secret: TEST_SECRET, now: FIXED_NOW });
 
@@ -297,7 +297,7 @@ runTest("group /bounch → private deep-link button", () => {
   assert.strictEqual(button.url, `https://t.me/${BOT_USERNAME}?start=bounch`);
 });
 
-runTest("/start snake private → signed Snake link", () => {
+runTest("/start snake private → signed Snake link", async () => {
   const ctx = createMockCtx({
     chatType: "private",
     userId: USER_A,
@@ -310,7 +310,7 @@ runTest("/start snake private → signed Snake link", () => {
   assert.ok(parsed.token);
 });
 
-runTest("/start bounch private → signed Bounch link", () => {
+runTest("/start bounch private → signed Bounch link", async () => {
   const ctx = createMockCtx({
     chatType: "private",
     userId: USER_A,
@@ -323,7 +323,7 @@ runTest("/start bounch private → signed Bounch link", () => {
   assert.ok(parsed.token);
 });
 
-runTest("/start snake group → geen signed token", () => {
+runTest("/start snake group → geen signed token", async () => {
   const ctx = createMockCtx({
     chatType: "group",
     userId: USER_A,
@@ -336,7 +336,7 @@ runTest("/start snake group → geen signed token", () => {
   assert.ok(!JSON.stringify(ctx.replies[0]).includes("mango-labs"));
 });
 
-runTest("gewone /start private → menu zichtbaar", () => {
+runTest("gewone /start private → menu zichtbaar", async () => {
   const ctx = createMockCtx({ chatType: "private", startPayload: "" });
   handleStart(ctx);
 
@@ -348,7 +348,7 @@ runTest("gewone /start private → menu zichtbaar", () => {
   assert.notStrictEqual(markup.one_time_keyboard, true);
 });
 
-runTest("menu niet zichtbaar in group /start", () => {
+runTest("menu niet zichtbaar in group /start", async () => {
   const ctx = createMockCtx({ chatType: "group" });
   handleStart(ctx);
 
@@ -357,7 +357,7 @@ runTest("menu niet zichtbaar in group /start", () => {
   assert.ok(!extra || !extra.reply_markup || !extra.reply_markup.keyboard);
 });
 
-runTest("menu bevat private opties zonder PvP", () => {
+runTest("menu bevat private opties zonder PvP", async () => {
   assert.deepStrictEqual(MENU_LABEL_LIST, [
     MENU_LABELS.MY_PROFILE,
     MENU_LABELS.WALLET,
@@ -390,7 +390,7 @@ runTest("menu bevat private opties zonder PvP", () => {
   assert.strictEqual(kb.reply_markup.resize_keyboard, true);
 });
 
-runTest("Snake menu-button → persoonlijke Snake link", () => {
+runTest("Snake menu-button → persoonlijke Snake link", async () => {
   const ctx = createMockCtx({ chatType: "private", userId: USER_A });
   handleSnake(ctx, { secret: TEST_SECRET, now: FIXED_NOW });
   const parsed = parsePlayUrl(extractPlayUrl(ctx.replies[0].text));
@@ -404,14 +404,14 @@ runTest("Snake menu-button → persoonlijke Snake link", () => {
   );
 });
 
-runTest("Bounch menu-button → persoonlijke Bounch link", () => {
+runTest("Bounch menu-button → persoonlijke Bounch link", async () => {
   const ctx = createMockCtx({ chatType: "private", userId: USER_A });
   handleBounch(ctx, { secret: TEST_SECRET, now: FIXED_NOW });
   const parsed = parsePlayUrl(extractPlayUrl(ctx.replies[0].text));
   assert.strictEqual(parsed.game, "bounch");
 });
 
-runTest("Points menu-button → bestaande points output", () => {
+runTest("Points menu-button → bestaande points output", async () => {
   resetPointsFile({
     users: {
       [String(USER_A)]: {
@@ -432,21 +432,21 @@ runTest("Points menu-button → bestaande points output", () => {
   assert.ok(ctx.replies[0].text.includes("Current streak:"));
 });
 
-runTest("Leaderboard menu-button → bestaande leaderboard output", () => {
+runTest("Leaderboard menu-button → bestaande leaderboard output", async () => {
   resetPointsFile({ users: {} });
   const ctx = createMockCtx({ chatType: "private", userId: USER_A });
   handleLeaderboard(ctx, { pointsFile: testPointsFile });
   assert.ok(ctx.replies[0].text.includes("Leaderboard is empty"));
 });
 
-runTest("Weekly menu-button → bestaande weekly output", () => {
+runTest("Weekly menu-button → bestaande weekly output", async () => {
   resetPointsFile({ users: {} });
   const ctx = createMockCtx({ chatType: "private", userId: USER_A });
   handleWeekly(ctx, { pointsFile: testPointsFile });
   assert.ok(ctx.replies[0].text.includes("Weekly leaderboard is empty"));
 });
 
-runTest("Help menu-button → bestaande help output", () => {
+runTest("Help menu-button → bestaande help output", async () => {
   const ctx = createMockCtx({ chatType: "private", userId: USER_A });
   handleHelp(ctx);
   assert.strictEqual(ctx.replies[0].text, HELP_MESSAGE);
@@ -479,7 +479,7 @@ runTest(
   }
 );
 
-runTest("missing GAME_LINK_SECRET → geen crash, generieke fout", () => {
+runTest("missing GAME_LINK_SECRET → geen crash, generieke fout", async () => {
   const previous = process.env.GAME_LINK_SECRET;
   delete process.env.GAME_LINK_SECRET;
 
@@ -497,7 +497,7 @@ runTest("missing GAME_LINK_SECRET → geen crash, generieke fout", () => {
   }
 });
 
-runTest("token/uid niet zichtbaar in groepsbericht", () => {
+runTest("token/uid niet zichtbaar in groepsbericht", async () => {
   const ctx = createMockCtx({ chatType: "supergroup", userId: USER_A });
   handleSnake(ctx, { secret: TEST_SECRET, now: FIXED_NOW });
   handleBounch(ctx, { secret: TEST_SECRET, now: FIXED_NOW });
@@ -512,13 +512,13 @@ runTest("token/uid niet zichtbaar in groepsbericht", () => {
   }
 });
 
-runTest("menu-labels veroorzaken geen gm/gn trigger", () => {
+runTest("menu-labels veroorzaken geen gm/gn trigger", async () => {
   for (const label of MENU_LABEL_LIST) {
     assert.strictEqual(detectTrigger(label), null, label);
   }
 });
 
-runTest("menu-labels veroorzaken geen Daily Activity XP in private", () => {
+runTest("menu-labels veroorzaken geen Daily Activity XP in private", async () => {
   resetPointsFile({ users: {} });
 
   for (const label of MENU_LABEL_LIST) {
@@ -531,7 +531,7 @@ runTest("menu-labels veroorzaken geen Daily Activity XP in private", () => {
   for (const label of MENU_LABEL_LIST) {
     const ctx = createMockCtx({ chatType: "private", userId: USER_A });
     if (!shouldSkipCommunityActivity(ctx, label)) {
-      awardDailyActivityPoint(USER_A, "Ada", testPointsFile);
+      await awardDailyActivityPoint(USER_A, "Ada", testPointsFile);
     }
   }
 
@@ -541,7 +541,7 @@ runTest("menu-labels veroorzaken geen Daily Activity XP in private", () => {
     false
   );
 
-  const awarded = awardDailyActivityPoint(USER_A, "Ada", testPointsFile);
+  const awarded = await awardDailyActivityPoint(USER_A, "Ada", testPointsFile);
   assert.strictEqual(awarded.awarded, true);
   assert.strictEqual(
     hasClaimedDailyActivity(loadPoints(testPointsFile).users[String(USER_A)]),
@@ -558,7 +558,7 @@ runTest("menu-labels veroorzaken geen Daily Activity XP in private", () => {
   );
 });
 
-runTest("unknown /start payload → normale welcome, geen crash", () => {
+runTest("unknown /start payload → normale welcome, geen crash", async () => {
   const ctx = createMockCtx({
     chatType: "private",
     startPayload: "not-a-real-payload",
@@ -568,7 +568,7 @@ runTest("unknown /start payload → normale welcome, geen crash", () => {
   assert.ok(ctx.replies[0].extra.reply_markup.keyboard);
 });
 
-runTest("getBotUsername / buildPrivateDeepLink helpers", () => {
+runTest("getBotUsername / buildPrivateDeepLink helpers", async () => {
   assert.strictEqual(
     getBotUsername({ botInfo: { username: "MyBot" } }),
     "MyBot"
@@ -584,7 +584,7 @@ runTest("getBotUsername / buildPrivateDeepLink helpers", () => {
   assert.deepStrictEqual(getGroupGameGateExtra({ botInfo: {} }, "snake"), {});
 });
 
-runTest("Points menu-button includes game claimed + unlock lines", () => {
+runTest("Points menu-button includes game claimed + unlock lines", async () => {
   resetPointsFile({
     users: {
       [String(USER_A)]: {
@@ -606,7 +606,7 @@ runTest("Points menu-button includes game claimed + unlock lines", () => {
   assert.ok(text.includes("🎮 Bounch unlocks: 0 / 7"));
 });
 
-runTest("isPrivateMenuLabel exact match only", () => {
+runTest("isPrivateMenuLabel exact match only", async () => {
   assert.strictEqual(isPrivateMenuLabel(MENU_LABELS.MY_PROFILE), true);
   assert.strictEqual(isPrivateMenuLabel(MENU_LABELS.WALLET), true);
   assert.strictEqual(isPrivateMenuLabel(MENU_LABELS.POINTS), true);
@@ -615,7 +615,7 @@ runTest("isPrivateMenuLabel exact match only", () => {
   assert.strictEqual(isPrivateMenuLabel("gmango"), false);
 });
 
-runTest("/menu group toont Wallet en Rewards op hoofdmenu", () => {
+runTest("/menu group toont Wallet en Rewards op hoofdmenu", async () => {
   const ctx = createMockCtx({ chatType: "supergroup", firstName: "Kevin" });
   handleMenu(ctx);
   assert.strictEqual(ctx.replies[0].text, formatGroupMenuText("Kevin"));
@@ -643,7 +643,7 @@ runTest("/menu group toont Wallet en Rewards op hoofdmenu", () => {
   assert.strictEqual(rewards.url, `https://t.me/${BOT_USERNAME}?start=rewards`);
 });
 
-runTest("group hoofdmenu callbacks bevatten geen uid/token", () => {
+runTest("group hoofdmenu callbacks bevatten geen uid/token", async () => {
   const ctx = createMockCtx({ chatType: "group" });
   handleMenu(ctx);
   const blob = JSON.stringify(ctx.replies[0]);
@@ -653,7 +653,7 @@ runTest("group hoofdmenu callbacks bevatten geen uid/token", () => {
   assert.ok(!blob.includes(String(USER_A)));
 });
 
-runTest("Rankings submenu layout", () => {
+runTest("Rankings submenu layout", async () => {
   const rows = getInlineRows(getGroupRankingsMenuExtra());
   assert.ok(rows.every((row) => row.length <= 2));
   assert.deepStrictEqual(
@@ -673,7 +673,7 @@ runTest("Rankings submenu layout", () => {
   );
 });
 
-runTest("Games submenu Snake/Bounch safe deep-links", () => {
+runTest("Games submenu Snake/Bounch safe deep-links", async () => {
   const ctx = createMockCtx({ chatType: "group" });
   const rows = getInlineRows(getGroupGamesMenuExtra(ctx));
   assert.ok(rows.every((row) => row.length <= 2));
@@ -695,7 +695,7 @@ runTest("Games submenu Snake/Bounch safe deep-links", () => {
   assert.ok(!blob.includes("uid="));
 });
 
-runTest("My Profile submenu deep-links", () => {
+runTest("My Profile submenu deep-links", async () => {
   const ctx = createMockCtx({ chatType: "group" });
   const rows = getInlineRows(getGroupProfileMenuExtra(ctx));
   assert.ok(rows.every((row) => row.length <= 2));
@@ -733,7 +733,7 @@ runTest("My Profile submenu deep-links", () => {
   );
 });
 
-runTest("/menu private toont reply-keyboard hint", () => {
+runTest("/menu private toont reply-keyboard hint", async () => {
   const ctx = createMockCtx({ chatType: "private" });
   handleMenu(ctx);
   assert.strictEqual(ctx.replies[0].text, PRIVATE_MENU_HINT);
@@ -749,7 +749,7 @@ runTest("/menu private toont reply-keyboard hint", () => {
   assert.ok(rows.every((row) => row.length <= 2));
 });
 
-runTest("/start points private → persoonlijke points", () => {
+runTest("/start points private → persoonlijke points", async () => {
   resetPointsFile({
     users: {
       [String(USER_A)]: {
@@ -775,7 +775,7 @@ runTest("/start points private → persoonlijke points", () => {
   assert.ok(ctx.replies[0].text.includes("Current streak:"));
 });
 
-runTest("/start points group → geen persoonlijke points", () => {
+runTest("/start points group → geen persoonlijke points", async () => {
   resetPointsFile({
     users: {
       [String(USER_A)]: {
@@ -1096,7 +1096,7 @@ runTest("ManGo Bomb menu lets members start (no admin required)", async () => {
   }
 });
 
-runTest("/start streak private → persoonlijke streak, geen uid", () => {
+runTest("/start streak private → persoonlijke streak, geen uid", async () => {
   const ctx = createMockCtx({
     chatType: "private",
     userId: USER_A,
@@ -1108,7 +1108,7 @@ runTest("/start streak private → persoonlijke streak, geen uid", () => {
   assert.ok(!JSON.stringify(ctx.replies[0]).includes("uid="));
 });
 
-runTest("/start streak group → geen persoonlijke streak dump", () => {
+runTest("/start streak group → geen persoonlijke streak dump", async () => {
   const ctx = createMockCtx({
     chatType: "group",
     userId: USER_A,
@@ -1338,7 +1338,7 @@ runTest("stale callback without mapping fails closed", async () => {
   assert.deepStrictEqual(ctx.answered, [MENU_UNAUTHORIZED_GENERIC]);
 });
 
-runTest("/menu command skips daily activity", () => {
+runTest("/menu command skips daily activity", async () => {
   assert.strictEqual(shouldSkipCommunityActivity(createMockCtx(), "/menu"), true);
 });
 

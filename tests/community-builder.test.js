@@ -179,6 +179,20 @@ function pointsOf(file, userId) {
   return user && typeof user.points === "number" ? user.points : 0;
 }
 
+async function waitUntil(predicate) {
+  for (let i = 0; i < 80; i += 1) {
+    try {
+      if (predicate()) {
+        return;
+      }
+    } catch (_err) {
+      /* File may be mid-rename; retry. */
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.ok(predicate(), "timed out waiting for async builder effect");
+}
+
 function joinUpdate(options) {
   const userId = options.userId;
   return {
@@ -298,7 +312,7 @@ async function main() {
     const h = harness();
     registerManualWallet(INVITER, generateSolanaWallet().address, h.walletFile);
     const created = await seedInvite(h);
-    const joined = handleChatMemberUpdate(
+    const joined = await handleChatMemberUpdate(
       joinUpdate({
         userId: REFERRED,
         name: "Bob",
@@ -314,7 +328,7 @@ async function main() {
 
     const h2 = harness();
     const created2 = await seedInvite(h2);
-    const locked = handleChatMemberUpdate(
+    const locked = await handleChatMemberUpdate(
       joinUpdate({
         userId: REFERRED,
         name: "Bob",
@@ -332,7 +346,7 @@ async function main() {
   await runTest("9. self-referral reject", async () => {
     const h = harness();
     const created = await seedInvite(h);
-    const result = handleChatMemberUpdate(
+    const result = await handleChatMemberUpdate(
       joinUpdate({
         userId: INVITER,
         name: "Alice",
@@ -348,7 +362,7 @@ async function main() {
   await runTest("10. bot join reject", async () => {
     const h = harness();
     const created = await seedInvite(h);
-    const result = handleChatMemberUpdate(
+    const result = await handleChatMemberUpdate(
       joinUpdate({
         userId: "777",
         isBot: true,
@@ -363,7 +377,7 @@ async function main() {
   await runTest("11. public/non-referral join no attribution", async () => {
     const h = harness();
     await seedInvite(h);
-    const result = handleChatMemberUpdate(
+    const result = await handleChatMemberUpdate(
       joinUpdate({ userId: REFERRED, name: "Bob", inviteLink: null }),
       h.opts
     );
@@ -376,15 +390,15 @@ async function main() {
     const h = harness();
     registerManualWallet(INVITER, generateSolanaWallet().address, h.walletFile);
     const created = await seedInvite(h);
-    const first = handleChatMemberUpdate(
+    const first = await handleChatMemberUpdate(
       joinUpdate({ userId: REFERRED, inviteLink: created.inviteUrl }),
       h.opts
     );
-    const dup = handleChatMemberUpdate(
+    const dup = await handleChatMemberUpdate(
       joinUpdate({ userId: REFERRED, inviteLink: created.inviteUrl }),
       h.opts
     );
-    const rejoin = handleChatMemberUpdate(
+    const rejoin = await handleChatMemberUpdate(
       joinUpdate({
         userId: REFERRED,
         oldStatus: "left",
@@ -408,11 +422,11 @@ async function main() {
       ...h.opts,
       createChatInviteLink: async () => ({ invite_link: "https://t.me/+otherhash" }),
     });
-    handleChatMemberUpdate(
+    await handleChatMemberUpdate(
       joinUpdate({ userId: REFERRED, inviteLink: a.inviteUrl }),
       h.opts
     );
-    const steal = handleChatMemberUpdate(
+    const steal = await handleChatMemberUpdate(
       joinUpdate({ userId: REFERRED, inviteLink: b.inviteUrl }),
       h.opts
     );
@@ -431,7 +445,7 @@ async function main() {
       { id: ADMIN_ID, first_name: "Kevin" },
       h.opts
     );
-    const joined = handleChatMemberUpdate(
+    const joined = await handleChatMemberUpdate(
       joinUpdate({
         userId: REFERRED,
         name: "Bob",
@@ -457,7 +471,7 @@ async function main() {
       { id: GROUP_ADMIN, first_name: "Mod" },
       h.opts
     );
-    const joined = handleChatMemberUpdate(
+    const joined = await handleChatMemberUpdate(
       joinUpdate({
         userId: "5005",
         name: "NewMember",
@@ -475,13 +489,13 @@ async function main() {
   await runTest("prior group member never attributed: invite rejoin awards BP", async () => {
     const h = harness();
     const created = await seedInvite(h);
-    const firstSeen = handleChatMemberUpdate(
+    const firstSeen = await handleChatMemberUpdate(
       joinUpdate({ userId: "6006", name: "Returning", inviteLink: null }),
       h.opts
     );
     assert.strictEqual(firstSeen.reason, JOIN_EVENT.PUBLIC_JOIN);
     assert.strictEqual(builderSummary(INVITER, h.opts).builderPoints, 0);
-    const viaInvite = handleChatMemberUpdate(
+    const viaInvite = await handleChatMemberUpdate(
       joinUpdate({
         userId: "6006",
         name: "Returning",
@@ -498,7 +512,7 @@ async function main() {
   await runTest("game XP admin can earn", async () => {
     const h = harness();
     registerManualWallet(ADMIN_ID, generateSolanaWallet().address, h.walletFile);
-    const bomb = awardMangoBombXp(
+    const bomb = await awardMangoBombXp(
       ADMIN_ID,
       "Kevin",
       1,
@@ -508,7 +522,7 @@ async function main() {
     );
     assert.strictEqual(bomb.awarded, true);
     assert.notStrictEqual(bomb.reason, "excluded");
-    const daily = awardDailyActivityPoint(
+    const daily = await awardDailyActivityPoint(
       ADMIN_ID,
       "Kevin",
       h.pointsFile,
@@ -528,7 +542,7 @@ async function main() {
     const h = harness();
     registerManualWallet(INVITER, generateSolanaWallet().address, h.walletFile);
     const created = await seedInvite(h);
-    handleChatMemberUpdate(
+    await handleChatMemberUpdate(
       joinUpdate({ userId: REFERRED, inviteLink: created.inviteUrl }),
       h.opts
     );
@@ -537,7 +551,11 @@ async function main() {
     const wallet = generateSolanaWallet();
     const manual = registerManualWallet(REFERRED, wallet.address, h.walletFile);
     assert.strictEqual(manual.ok, true);
-    assert.strictEqual(builderSummary(INVITER, h.opts).builderPoints, beforeBp + 1);
+    await waitUntil(
+      () =>
+        builderSummary(INVITER, h.opts).builderPoints === beforeBp + 1 &&
+        pointsOf(h.pointsFile, INVITER) === beforeXp + 1
+    );
     assert.strictEqual(pointsOf(h.pointsFile, INVITER), beforeXp + 1);
 
     verifyUser(h.walletFile, REFERRED, wallet, 5000);
@@ -546,13 +564,13 @@ async function main() {
     disconnectWallet(REFERRED, h.walletFile);
     registerManualWallet(REFERRED, generateSolanaWallet().address, h.walletFile);
     assert.strictEqual(builderSummary(INVITER, h.opts).builderPoints, beforeBp + 1);
-    assert.strictEqual(tryWalletMilestone(REFERRED, h.opts).reason, "already-claimed");
+    assert.strictEqual((await tryWalletMilestone(REFERRED, h.opts)).reason, "already-claimed");
   });
 
   await runTest("19-21. active milestone +2 BP exactly once, concurrent safe", async () => {
     const h = harness();
     const created = await seedInvite(h);
-    handleChatMemberUpdate(
+    await handleChatMemberUpdate(
       joinUpdate({ userId: REFERRED, inviteLink: created.inviteUrl }),
       h.opts
     );
@@ -581,7 +599,7 @@ async function main() {
 
     const h2 = harness();
     const created2 = await seedInvite(h2);
-    handleChatMemberUpdate(
+    await handleChatMemberUpdate(
       joinUpdate({ userId: REFERRED, inviteLink: created2.inviteUrl }),
       h2.opts
     );
@@ -706,7 +724,7 @@ async function main() {
   await runTest("29-32. security: no client inviter, fake invite, wrong chat, bots", async () => {
     const h = harness();
     const created = await seedInvite(h);
-    const fake = handleChatMemberUpdate(
+    const fake = await handleChatMemberUpdate(
       joinUpdate({
         userId: REFERRED,
         inviteLink: "https://t.me/+not-a-real-hash",
@@ -714,7 +732,7 @@ async function main() {
       h.opts
     );
     assert.strictEqual(fake.reason, "unknown-invite");
-    const wrong = handleChatMemberUpdate(
+    const wrong = await handleChatMemberUpdate(
       joinUpdate({
         userId: REFERRED,
         chatId: Number(OTHER_CHAT),
@@ -723,7 +741,7 @@ async function main() {
       h.opts
     );
     assert.strictEqual(wrong.reason, "wrong-chat");
-    const supplied = applyJoinAttribution(
+    const supplied = await applyJoinAttribution(
       {
         userId: REFERRED,
         chatId: COMMUNITY_CHAT,
@@ -739,14 +757,14 @@ async function main() {
     assert.strictEqual(supplied.ok, true);
     assert.strictEqual(supplied.inviterUserId, INVITER);
     assert.notStrictEqual(supplied.inviterUserId, OTHER);
-    const bot = handleChatMemberUpdate(
+    const bot = await handleChatMemberUpdate(
       joinUpdate({ userId: "8", isBot: true, inviteLink: created.inviteUrl }),
       h.opts
     );
     assert.strictEqual(bot.reason, "bot");
   });
 
-  await runTest("33. production files untouched", () => {
+  await runTest("33. production files untouched", async () => {
     for (const file of prodRoots) {
       if (!fs.existsSync(file)) continue;
       assert.strictEqual(fs.statSync(file).mtimeMs, prodMtimes[file], file);
@@ -758,12 +776,12 @@ async function main() {
     assert.strictEqual(canEarnXp(INVITER, h.walletFile), false);
     registerManualWallet(INVITER, generateSolanaWallet().address, h.walletFile);
     assert.strictEqual(canEarnXp(INVITER, h.walletFile), true);
-    const bomb = awardMangoBombXp(INVITER, "Alice", 1, "round-1", h.pointsFile, h.walletFile);
+    const bomb = await awardMangoBombXp(INVITER, "Alice", 1, "round-1", h.pointsFile, h.walletFile);
     assert.strictEqual(bomb.awarded, true);
     assert.strictEqual(bomb.pointsToAdd, 1);
   });
 
-  await runTest("37-38. Mystery Gift / presale files not used by builder store", () => {
+  await runTest("37-38. Mystery Gift / presale files not used by builder store", async () => {
     const src = fs.readFileSync(
       path.join(__dirname, "..", "services", "communityBuilder.js"),
       "utf8"
@@ -780,11 +798,16 @@ async function main() {
     const h = harness();
     registerManualWallet(INVITER, generateSolanaWallet().address, h.walletFile);
     const created = await seedInvite(h);
-    handleChatMemberUpdate(
+    await handleChatMemberUpdate(
       joinUpdate({ userId: REFERRED, inviteLink: created.inviteUrl }),
       h.opts
     );
     registerManualWallet(REFERRED, generateSolanaWallet().address, h.walletFile);
+    await waitUntil(
+      () =>
+        builderSummary(INVITER, h.opts).builderPoints === 2 &&
+        pointsOf(h.pointsFile, INVITER) === 2
+    );
     mutatePoints((data) => {
       if (!data.users[REFERRED]) {
         data.users[REFERRED] = { name: "Bob", points: 0, weeklyPoints: 0 };
@@ -825,7 +848,7 @@ async function main() {
   await runTest("builderstats admin private; invite URLs not shown", async () => {
     const h = harness();
     const created = await seedInvite(h);
-    handleChatMemberUpdate(
+    await handleChatMemberUpdate(
       joinUpdate({ userId: REFERRED, inviteLink: created.inviteUrl, name: "Bob" }),
       h.opts
     );
@@ -843,13 +866,13 @@ async function main() {
     const h = harness();
     registerManualWallet(INVITER, generateSolanaWallet().address, h.walletFile);
     const created = await seedInvite(h);
-    handleChatMemberUpdate(
+    await handleChatMemberUpdate(
       joinUpdate({ userId: REFERRED, inviteLink: created.inviteUrl }),
       h.opts
     );
     const store = loadBuilderStore(h.storeFile);
     assert.ok(store.referrals[REFERRED]);
-    const again = handleChatMemberUpdate(
+    const again = await handleChatMemberUpdate(
       joinUpdate({ userId: REFERRED, inviteLink: created.inviteUrl }),
       h.opts
     );
@@ -857,12 +880,12 @@ async function main() {
     assert.strictEqual(builderSummary(INVITER, h.opts).builderPoints, 1);
   });
 
-  await runTest("invite identity never embeds telegram uid", () => {
+  await runTest("invite identity never embeds telegram uid", async () => {
     assert.strictEqual(inviteIdentity("https://t.me/+AbC_12"), "AbC_12");
     assert.ok(!inviteIdentity("https://t.me/+AbC_12").includes("1001"));
   });
 
-  await runTest("corrupt builder JSON fails closed on mutate", () => {
+  await runTest("corrupt builder JSON fails closed on mutate", async () => {
     const file = path.join(tempDir, "corrupt.json");
     fs.writeFileSync(file, "{not-json", "utf8");
     assert.throws(() => {
@@ -873,7 +896,7 @@ async function main() {
     assert.strictEqual(fs.readFileSync(file, "utf8"), "{not-json");
   });
 
-  await runTest("onLifetimeXpMutated ignores non-referrals", () => {
+  await runTest("onLifetimeXpMutated ignores non-referrals", async () => {
     const h = harness();
     onLifetimeXpMutated({ 1: 0 }, { 1: 9 }, h.opts);
     assert.strictEqual(builderSummary(INVITER, h.opts).builderPoints, 0);
@@ -918,7 +941,7 @@ async function main() {
 }
 
 main()
-  .then(() => {
+  .then(async () => {
     configureCommunityBuilderForTests({});
     setCommunityBuilderFileForTests(null);
     setWalletFileForTests(null);
@@ -926,6 +949,7 @@ main()
     else process.env.TELEGRAM_CHAT_ID = originalChat;
     if (originalAdmin === undefined) delete process.env.ADMIN_USER_ID;
     else process.env.ADMIN_USER_ID = originalAdmin;
+    await new Promise((resolve) => setTimeout(resolve, 50));
     fs.rmSync(tempDir, { recursive: true, force: true });
     console.log("\nAll community-builder tests passed.");
   })

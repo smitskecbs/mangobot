@@ -120,11 +120,11 @@ function assertHumanGameQuest(files, userId, extra = {}) {
   return snap;
 }
 
-function playTttWinLine(service, sessionId) {
-  service.move({ sessionId, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
-  service.move({ sessionId, userId: USER_B, cell: 3, chatId: COMMUNITY_CHAT });
-  service.move({ sessionId, userId: USER_A, cell: 1, chatId: COMMUNITY_CHAT });
-  service.move({ sessionId, userId: USER_B, cell: 4, chatId: COMMUNITY_CHAT });
+async function playTttWinLine(service, sessionId) {
+  await service.move({ sessionId, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
+  await service.move({ sessionId, userId: USER_B, cell: 3, chatId: COMMUNITY_CHAT });
+  await service.move({ sessionId, userId: USER_A, cell: 1, chatId: COMMUNITY_CHAT });
+  await service.move({ sessionId, userId: USER_B, cell: 4, chatId: COMMUNITY_CHAT });
   return service.move({
     sessionId,
     userId: USER_A,
@@ -133,7 +133,7 @@ function playTttWinLine(service, sessionId) {
   });
 }
 
-function playTttDrawLine(service, sessionId) {
+async function playTttDrawLine(service, sessionId) {
   const moves = [
     [USER_A, 0],
     [USER_B, 1],
@@ -147,7 +147,7 @@ function playTttDrawLine(service, sessionId) {
   ];
   let last;
   for (const [uid, cell] of moves) {
-    last = service.move({
+    last = await service.move({
       sessionId,
       userId: uid,
       cell,
@@ -337,7 +337,7 @@ function startVsBot(service) {
 async function main() {
   resetEnv();
 
-  await runTest("1. create session", () => {
+  await runTest("1. create session", async () => {
     const { service } = createService();
     const r = service.startChallenge({
       chatId: COMMUNITY_CHAT,
@@ -426,7 +426,7 @@ async function main() {
     assert.ok(ctx.replies[0].includes("not available"));
   });
 
-  await runTest("5-9. join flow: starter is X, O joins, same user, bot, third", () => {
+  await runTest("5-9. join flow: starter is X, O joins, same user, bot, third", async () => {
     const { service } = createService();
     const started = startOpen(service);
     const id = started.session.id;
@@ -468,7 +468,7 @@ async function main() {
     assert.ok(["full", "not-waiting"].includes(third.reason));
   });
 
-  await runTest("10-16. board, turns, occupied, outsider", () => {
+  await runTest("10-16. board, turns, occupied, outsider", async () => {
     const { service } = createService();
     const started = startOpen(service);
     joinBoth(service, started.session.id);
@@ -477,7 +477,7 @@ async function main() {
     assert.deepStrictEqual(s.board, emptyBoard());
     assert.strictEqual(s.currentPlayer, "X");
 
-    const oEarly = service.move({
+    const oEarly = await service.move({
       sessionId: id,
       userId: USER_B,
       cell: 0,
@@ -485,7 +485,7 @@ async function main() {
     });
     assert.strictEqual(oEarly.reason, "not-your-turn");
 
-    const m1 = service.move({
+    const m1 = await service.move({
       sessionId: id,
       userId: USER_A,
       cell: 0,
@@ -495,7 +495,7 @@ async function main() {
     assert.strictEqual(m1.session.board[0], "X");
     assert.strictEqual(m1.session.currentPlayer, "O");
 
-    const occ = service.move({
+    const occ = await service.move({
       sessionId: id,
       userId: USER_B,
       cell: 0,
@@ -503,7 +503,7 @@ async function main() {
     });
     assert.strictEqual(occ.reason, "occupied");
 
-    const out = service.move({
+    const out = await service.move({
       sessionId: id,
       userId: USER_C,
       cell: 1,
@@ -511,7 +511,7 @@ async function main() {
     });
     assert.strictEqual(out.reason, "outsider");
 
-    const m2 = service.move({
+    const m2 = await service.move({
       sessionId: id,
       userId: USER_B,
       cell: 1,
@@ -521,17 +521,17 @@ async function main() {
     assert.strictEqual(m2.session.currentPlayer, "X");
   });
 
-  await runTest("17. row win", () => {
+  await runTest("17. row win", async () => {
     const { service } = createService();
     const started = startOpen(service);
     const id = started.session.id;
     joinBoth(service, id);
     // X0 O3 X1 O4 X2
-    service.move({ sessionId: id, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
-    service.move({ sessionId: id, userId: USER_B, cell: 3, chatId: COMMUNITY_CHAT });
-    service.move({ sessionId: id, userId: USER_A, cell: 1, chatId: COMMUNITY_CHAT });
-    service.move({ sessionId: id, userId: USER_B, cell: 4, chatId: COMMUNITY_CHAT });
-    const win = service.move({
+    await service.move({ sessionId: id, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
+    await service.move({ sessionId: id, userId: USER_B, cell: 3, chatId: COMMUNITY_CHAT });
+    await service.move({ sessionId: id, userId: USER_A, cell: 1, chatId: COMMUNITY_CHAT });
+    await service.move({ sessionId: id, userId: USER_B, cell: 4, chatId: COMMUNITY_CHAT });
+    const win = await service.move({
       sessionId: id,
       userId: USER_A,
       cell: 2,
@@ -542,16 +542,16 @@ async function main() {
     assert.strictEqual(checkWinner(win.session.board), "X");
   });
 
-  await runTest("18. column win", () => {
+  await runTest("18. column win", async () => {
     const { service } = createService();
     const started = startOpen(service);
     const id = started.session.id;
     joinBoth(service, id);
-    service.move({ sessionId: id, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
-    service.move({ sessionId: id, userId: USER_B, cell: 1, chatId: COMMUNITY_CHAT });
-    service.move({ sessionId: id, userId: USER_A, cell: 3, chatId: COMMUNITY_CHAT });
-    service.move({ sessionId: id, userId: USER_B, cell: 2, chatId: COMMUNITY_CHAT });
-    const win = service.move({
+    await service.move({ sessionId: id, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
+    await service.move({ sessionId: id, userId: USER_B, cell: 1, chatId: COMMUNITY_CHAT });
+    await service.move({ sessionId: id, userId: USER_A, cell: 3, chatId: COMMUNITY_CHAT });
+    await service.move({ sessionId: id, userId: USER_B, cell: 2, chatId: COMMUNITY_CHAT });
+    const win = await service.move({
       sessionId: id,
       userId: USER_A,
       cell: 6,
@@ -561,16 +561,16 @@ async function main() {
     assert.strictEqual(win.session.winnerSeat, "X");
   });
 
-  await runTest("19. diagonal win", () => {
+  await runTest("19. diagonal win", async () => {
     const { service } = createService();
     const started = startOpen(service);
     const id = started.session.id;
     joinBoth(service, id);
-    service.move({ sessionId: id, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
-    service.move({ sessionId: id, userId: USER_B, cell: 1, chatId: COMMUNITY_CHAT });
-    service.move({ sessionId: id, userId: USER_A, cell: 4, chatId: COMMUNITY_CHAT });
-    service.move({ sessionId: id, userId: USER_B, cell: 2, chatId: COMMUNITY_CHAT });
-    const win = service.move({
+    await service.move({ sessionId: id, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
+    await service.move({ sessionId: id, userId: USER_B, cell: 1, chatId: COMMUNITY_CHAT });
+    await service.move({ sessionId: id, userId: USER_A, cell: 4, chatId: COMMUNITY_CHAT });
+    await service.move({ sessionId: id, userId: USER_B, cell: 2, chatId: COMMUNITY_CHAT });
+    const win = await service.move({
       sessionId: id,
       userId: USER_A,
       cell: 8,
@@ -579,7 +579,7 @@ async function main() {
     assert.strictEqual(win.session.status, STATUS.WON);
   });
 
-  await runTest("20-21. draw + only one winner", () => {
+  await runTest("20-21. draw + only one winner", async () => {
     const { service } = createService();
     const started = startOpen(service);
     const id = started.session.id;
@@ -600,7 +600,7 @@ async function main() {
     ];
     let last;
     for (const [uid, cell] of moves) {
-      last = service.move({
+      last = await service.move({
         sessionId: id,
         userId: uid,
         cell,
@@ -611,7 +611,7 @@ async function main() {
     assert.strictEqual(last.session.winnerUserId, null);
     assert.strictEqual(last.needsXp, false);
 
-    const again = service.move({
+    const again = await service.move({
       sessionId: id,
       userId: USER_A,
       cell: 0,
@@ -620,23 +620,23 @@ async function main() {
     assert.strictEqual(again.reason, "already-ended");
   });
 
-  await runTest("22-26. awardPvpWinXp + daily cap + legacy + next day", () => {
+  await runTest("22-26. awardPvpWinXp + daily cap + legacy + next day", async () => {
     const file = pointsFile();
-    const r1 = awardPvpWinXp(USER_A, "Kevin", file);
+    const r1 = await awardPvpWinXp(USER_A, "Kevin", file);
     assert.strictEqual(r1.awarded, true);
     assert.strictEqual(r1.pointsToAdd, PVP_WIN_XP);
     assert.strictEqual(r1.points, 3);
 
-    const r2 = awardPvpWinXp(USER_A, "Kevin", file);
+    const r2 = await awardPvpWinXp(USER_A, "Kevin", file);
     assert.strictEqual(r2.awarded, true);
     assert.strictEqual(r2.points, 6);
 
-    const r3 = awardPvpWinXp(USER_A, "Kevin", file);
+    const r3 = await awardPvpWinXp(USER_A, "Kevin", file);
     assert.strictEqual(r3.awarded, true);
     assert.strictEqual(r3.points, 9);
     assert.strictEqual(r3.rewardedWinsToday, 3);
 
-    const r4 = awardPvpWinXp(USER_A, "Kevin", file);
+    const r4 = await awardPvpWinXp(USER_A, "Kevin", file);
     assert.strictEqual(r4.awarded, false);
     assert.strictEqual(r4.reason, "daily-cap");
     assert.strictEqual(r4.pointsToAdd, 0);
@@ -663,7 +663,7 @@ async function main() {
       },
       file
     );
-    const legacy = awardPvpWinXp(USER_B, "Alice", file);
+    const legacy = await awardPvpWinXp(USER_B, "Alice", file);
     assert.strictEqual(legacy.awarded, true);
     assert.strictEqual(legacy.points, 8);
 
@@ -672,22 +672,22 @@ async function main() {
       d.users[String(USER_B)].pvp.date = "2000-01-01";
       d.users[String(USER_B)].pvp.rewardedWins = 3;
     }, file);
-    const next = awardPvpWinXp(USER_B, "Alice", file);
+    const next = await awardPvpWinXp(USER_B, "Alice", file);
     assert.strictEqual(next.awarded, true);
     assert.strictEqual(next.rewardedWinsToday, 1);
   });
 
-  await runTest("27. pair cooldown → play ok, no XP", () => {
+  await runTest("27. pair cooldown → play ok, no XP", async () => {
     const { service } = createService({ pairCooldownMs: 60_000 });
     const file = pointsFile();
     const s1 = startOpen(service);
     joinBoth(service, s1.session.id);
     // quick win
-    service.move({ sessionId: s1.session.id, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
-    service.move({ sessionId: s1.session.id, userId: USER_B, cell: 3, chatId: COMMUNITY_CHAT });
-    service.move({ sessionId: s1.session.id, userId: USER_A, cell: 1, chatId: COMMUNITY_CHAT });
-    service.move({ sessionId: s1.session.id, userId: USER_B, cell: 4, chatId: COMMUNITY_CHAT });
-    const win1 = service.move({
+    await service.move({ sessionId: s1.session.id, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
+    await service.move({ sessionId: s1.session.id, userId: USER_B, cell: 3, chatId: COMMUNITY_CHAT });
+    await service.move({ sessionId: s1.session.id, userId: USER_A, cell: 1, chatId: COMMUNITY_CHAT });
+    await service.move({ sessionId: s1.session.id, userId: USER_B, cell: 4, chatId: COMMUNITY_CHAT });
+    const win1 = await service.move({
       sessionId: s1.session.id,
       userId: USER_A,
       cell: 2,
@@ -696,16 +696,16 @@ async function main() {
     assert.strictEqual(win1.needsXp, true);
     const claim1 = service.claimXpAward(s1.session.id);
     assert.strictEqual(claim1.shouldAward, true);
-    awardPvpWinXp(USER_A, "Kevin", file);
+    await awardPvpWinXp(USER_A, "Kevin", file);
 
     const s2 = startOpen(service);
     joinBoth(service, s2.session.id);
     assert.strictEqual(service.getSession(s2.session.id).rewardEligible, false);
-    service.move({ sessionId: s2.session.id, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
-    service.move({ sessionId: s2.session.id, userId: USER_B, cell: 3, chatId: COMMUNITY_CHAT });
-    service.move({ sessionId: s2.session.id, userId: USER_A, cell: 1, chatId: COMMUNITY_CHAT });
-    service.move({ sessionId: s2.session.id, userId: USER_B, cell: 4, chatId: COMMUNITY_CHAT });
-    service.move({
+    await service.move({ sessionId: s2.session.id, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
+    await service.move({ sessionId: s2.session.id, userId: USER_B, cell: 3, chatId: COMMUNITY_CHAT });
+    await service.move({ sessionId: s2.session.id, userId: USER_A, cell: 1, chatId: COMMUNITY_CHAT });
+    await service.move({ sessionId: s2.session.id, userId: USER_B, cell: 4, chatId: COMMUNITY_CHAT });
+    await service.move({
       sessionId: s2.session.id,
       userId: USER_A,
       cell: 2,
@@ -718,7 +718,7 @@ async function main() {
     assert.strictEqual(data.users[String(USER_A)].points, PVP_WIN_XP);
   });
 
-  await runTest("28. timeout winner", () => {
+  await runTest("28. timeout winner", async () => {
     const { service, timers } = createService({ turnTimeoutMs: 1000 });
     const started = startOpen(service);
     joinBoth(service, started.session.id);
@@ -735,7 +735,7 @@ async function main() {
     assert.strictEqual(service.reservation.has(USER_B), false);
   });
 
-  await runTest("29. join timeout", () => {
+  await runTest("29. join timeout", async () => {
     const { service, timers } = createService({ joinTimeoutMs: 5000 });
     const started = startOpen(service);
     timers.advance(5000);
@@ -750,7 +750,7 @@ async function main() {
     assert.ok(rendered.extra.reply_markup.inline_keyboard.length > 0);
   });
 
-  await runTest("lobby. player 2 join starts immediately", () => {
+  await runTest("lobby. player 2 join starts immediately", async () => {
     const { service } = createService({ joinTimeoutMs: 5000 });
     const started = startOpen(service);
     const before = service.manager.getSession(started.session.id);
@@ -773,7 +773,7 @@ async function main() {
     assert.ok(raw.timers.turnTimeoutId != null);
   });
 
-  await runTest("lobby. join timeout is cleared and stale expire is a no-op", () => {
+  await runTest("lobby. join timeout is cleared and stale expire is a no-op", async () => {
     const { service, timers } = createService({ joinTimeoutMs: 5000 });
     const started = startOpen(service);
     service.join({
@@ -793,7 +793,7 @@ async function main() {
     assert.strictEqual(session.players.O.userId, String(USER_B));
   });
 
-  await runTest("lobby. without player 2 existing timeout remains", () => {
+  await runTest("lobby. without player 2 existing timeout remains", async () => {
     const { service, timers } = createService({ joinTimeoutMs: 5000 });
     const started = startOpen(service);
     assert.ok(service.manager.getSession(started.session.id).timers.joinTimeoutId != null);
@@ -805,7 +805,7 @@ async function main() {
     assert.strictEqual(session.opponentType, "bot");
   });
 
-  await runTest("lobby. duplicate join starts the game exactly once", () => {
+  await runTest("lobby. duplicate join starts the game exactly once", async () => {
     const { service } = createService();
     const started = startOpen(service);
     const first = service.join({
@@ -837,11 +837,11 @@ async function main() {
     assert.strictEqual(session.players.X.userId, String(USER_A));
   });
 
-  await runTest("UX. active board remains visible in message text", () => {
+  await runTest("UX. active board remains visible in message text", async () => {
     const { service } = createService();
     const started = startOpen(service);
     joinBoth(service, started.session.id);
-    const moved = service.move({
+    const moved = await service.move({
       sessionId: started.session.id,
       userId: USER_A,
       cell: 0,
@@ -856,16 +856,16 @@ async function main() {
     assert.strictEqual(session.board[0], "X");
   });
 
-  await runTest("UX. win leaves final board and strips buttons", () => {
+  await runTest("UX. win leaves final board and strips buttons", async () => {
     const { service } = createService();
     const started = startOpen(service);
     const id = started.session.id;
     joinBoth(service, id);
-    service.move({ sessionId: id, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
-    service.move({ sessionId: id, userId: USER_B, cell: 3, chatId: COMMUNITY_CHAT });
-    service.move({ sessionId: id, userId: USER_A, cell: 1, chatId: COMMUNITY_CHAT });
-    service.move({ sessionId: id, userId: USER_B, cell: 4, chatId: COMMUNITY_CHAT });
-    const win = service.move({
+    await service.move({ sessionId: id, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
+    await service.move({ sessionId: id, userId: USER_B, cell: 3, chatId: COMMUNITY_CHAT });
+    await service.move({ sessionId: id, userId: USER_A, cell: 1, chatId: COMMUNITY_CHAT });
+    await service.move({ sessionId: id, userId: USER_B, cell: 4, chatId: COMMUNITY_CHAT });
+    const win = await service.move({
       sessionId: id,
       userId: USER_A,
       cell: 2,
@@ -882,23 +882,23 @@ async function main() {
     assert.strictEqual(again.shouldAward, false);
   });
 
-  await runTest("UX. draw leaves final board and strips buttons", () => {
+  await runTest("UX. draw leaves final board and strips buttons", async () => {
     const { service } = createService();
     const started = startOpen(service);
     joinBoth(service, started.session.id);
-    const last = playTttDrawLine(service, started.session.id);
+    const last = await playTttDrawLine(service, started.session.id);
     assert.strictEqual(last.session.status, STATUS.DRAW);
     assert.ok(last.rendered.text.includes("DRAW"));
     assert.ok(last.rendered.text.includes(formatBoard(last.session.board)));
     assert.deepStrictEqual(last.rendered.extra.reply_markup.inline_keyboard, []);
   });
 
-  await runTest("30. timer reset after move", () => {
+  await runTest("30. timer reset after move", async () => {
     const { service, timers } = createService({ turnTimeoutMs: 1000 });
     const started = startOpen(service);
     joinBoth(service, started.session.id);
     timers.advance(900);
-    service.move({
+    await service.move({
       sessionId: started.session.id,
       userId: USER_A,
       cell: 0,
@@ -920,11 +920,11 @@ async function main() {
     const started = startOpen(service);
     const id = started.session.id;
     joinBoth(service, id);
-    service.move({ sessionId: id, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
-    service.move({ sessionId: id, userId: USER_B, cell: 3, chatId: COMMUNITY_CHAT });
-    service.move({ sessionId: id, userId: USER_A, cell: 1, chatId: COMMUNITY_CHAT });
-    service.move({ sessionId: id, userId: USER_B, cell: 4, chatId: COMMUNITY_CHAT });
-    service.move({ sessionId: id, userId: USER_A, cell: 2, chatId: COMMUNITY_CHAT });
+    await service.move({ sessionId: id, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
+    await service.move({ sessionId: id, userId: USER_B, cell: 3, chatId: COMMUNITY_CHAT });
+    await service.move({ sessionId: id, userId: USER_A, cell: 1, chatId: COMMUNITY_CHAT });
+    await service.move({ sessionId: id, userId: USER_B, cell: 4, chatId: COMMUNITY_CHAT });
+    await service.move({ sessionId: id, userId: USER_A, cell: 2, chatId: COMMUNITY_CHAT });
 
     const awardFn = (uid, name) => awardPvpWinXp(uid, name, file);
     const fin1 = await finalizeWinXp(service, id, awardFn);
@@ -935,18 +935,18 @@ async function main() {
     assert.strictEqual(data.users[String(USER_A)].points, PVP_WIN_XP);
   });
 
-  await runTest("32. concurrent two moves same cell safe", () => {
+  await runTest("32. concurrent two moves same cell safe", async () => {
     const { service } = createService();
     const started = startOpen(service);
     const id = started.session.id;
     joinBoth(service, id);
-    const a = service.move({
+    const a = await service.move({
       sessionId: id,
       userId: USER_A,
       cell: 4,
       chatId: COMMUNITY_CHAT,
     });
-    const b = service.move({
+    const b = await service.move({
       sessionId: id,
       userId: USER_A,
       cell: 4,
@@ -957,7 +957,7 @@ async function main() {
     assert.ok(["not-your-turn", "occupied", "busy"].includes(b.reason));
   });
 
-  await runTest("33. callback contains no uid", () => {
+  await runTest("33. callback contains no uid", async () => {
     const id = "abc123def456";
     const join = buildJoinCallbackData(id);
     const move = buildMoveCallbackData(id, 4);
@@ -974,7 +974,7 @@ async function main() {
     });
   });
 
-  await runTest("34-35. invalid session + wrong chat safe", () => {
+  await runTest("34-35. invalid session + wrong chat safe", async () => {
     const { service } = createService();
     const started = startOpen(service);
     const bad = service.join({
@@ -994,7 +994,7 @@ async function main() {
     assert.strictEqual(wrong.reason, "wrong-chat");
   });
 
-  await runTest("display name sanitize", () => {
+  await runTest("display name sanitize", async () => {
     assert.strictEqual(
       sanitizePvpDisplayName({ first_name: "<b>Hi</b>" }),
       "bHib"
@@ -1091,11 +1091,11 @@ async function main() {
     const { service } = createService();
     const started = startOpen(service);
     joinBoth(service, started.session.id);
-    service.move({ sessionId: started.session.id, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
-    service.move({ sessionId: started.session.id, userId: USER_B, cell: 3, chatId: COMMUNITY_CHAT });
-    service.move({ sessionId: started.session.id, userId: USER_A, cell: 1, chatId: COMMUNITY_CHAT });
-    service.move({ sessionId: started.session.id, userId: USER_B, cell: 4, chatId: COMMUNITY_CHAT });
-    service.move({ sessionId: started.session.id, userId: USER_A, cell: 2, chatId: COMMUNITY_CHAT });
+    await service.move({ sessionId: started.session.id, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
+    await service.move({ sessionId: started.session.id, userId: USER_B, cell: 3, chatId: COMMUNITY_CHAT });
+    await service.move({ sessionId: started.session.id, userId: USER_A, cell: 1, chatId: COMMUNITY_CHAT });
+    await service.move({ sessionId: started.session.id, userId: USER_B, cell: 4, chatId: COMMUNITY_CHAT });
+    await service.move({ sessionId: started.session.id, userId: USER_A, cell: 2, chatId: COMMUNITY_CHAT });
     assert.strictEqual(service.isOpen(), false);
 
     const fight = createChatFightService({
@@ -1126,19 +1126,19 @@ async function main() {
     fight.reset();
   });
 
-  await runTest("/points shows PvP wins line", () => {
+  await runTest("/points shows PvP wins line", async () => {
     const lines = formatClaimedTodayLines({});
     assert.ok(lines.includes(`PvP wins today: 0 / ${PVP_DAILY_WIN_CAP}`));
   });
 
-  await runTest("/help lists /tictactoe and /connect4", () => {
+  await runTest("/help lists /tictactoe and /connect4", async () => {
     assert.ok(HELP_MESSAGE.includes("/tictactoe"));
     assert.ok(HELP_MESSAGE.includes("/connect4"));
     assert.ok(HELP_MESSAGE.includes("/streak"));
     assert.ok(HELP_MESSAGE.includes("/streakrecord"));
   });
 
-  await runTest("activity engine metadata enabledForAuto", () => {
+  await runTest("activity engine metadata enabledForAuto", async () => {
     assert.strictEqual(ACTION_REGISTRY.tictactoe.enabledForAuto, false);
     assert.strictEqual(ACTION_REGISTRY.tictactoe.mode, "pvp");
     assert.strictEqual(ACTION_REGISTRY.connect4.enabledForAuto, false);
@@ -1147,11 +1147,11 @@ async function main() {
     assert.strictEqual(ACTION_REGISTRY.trivia.mode, "race");
   });
 
-  await runTest("locking: concurrent awardPvpWinXp safe", () => {
+  await runTest("locking: concurrent awardPvpWinXp safe", async () => {
     const file = pointsFile();
     const results = [];
     for (let i = 0; i < 5; i += 1) {
-      results.push(awardPvpWinXp(USER_C, "Bob", file));
+      results.push(await awardPvpWinXp(USER_C, "Bob", file));
     }
     const awarded = results.filter((r) => r.awarded).length;
     assert.strictEqual(awarded, PVP_DAILY_WIN_CAP);
@@ -1159,49 +1159,49 @@ async function main() {
     assert.strictEqual(data.users[String(USER_C)].points, PVP_DAILY_WIN_CAP * PVP_WIN_XP);
   });
 
-  await runTest("daily quest: GAME_SOURCES includes tictactoe and pvp", () => {
+  await runTest("daily quest: GAME_SOURCES includes tictactoe and pvp", async () => {
     assert.ok(GAME_SOURCES.includes("tictactoe"));
     assert.ok(GAME_SOURCES.includes("pvp"));
   });
 
-  await runTest("daily quest: TTT win counts", () => {
+  await runTest("daily quest: TTT win counts", async () => {
     const files = questFiles();
     linkQuestUser(files, USER_A);
     linkQuestUser(files, USER_B);
     const { service } = createService(files);
     const started = startOpen(service);
     joinBoth(service, started.session.id);
-    const win = playTttWinLine(service, started.session.id);
+    const win = await playTttWinLine(service, started.session.id);
     assert.strictEqual(win.session.status, STATUS.WON);
     assert.strictEqual(win.session.winnerUserId, String(USER_A));
     assertHumanGameQuest(files, USER_A);
   });
 
-  await runTest("daily quest: TTT loss counts", () => {
+  await runTest("daily quest: TTT loss counts", async () => {
     const files = questFiles();
     linkQuestUser(files, USER_A);
     linkQuestUser(files, USER_B);
     const { service } = createService(files);
     const started = startOpen(service);
     joinBoth(service, started.session.id);
-    playTttWinLine(service, started.session.id);
+    await playTttWinLine(service, started.session.id);
     assertHumanGameQuest(files, USER_B);
   });
 
-  await runTest("daily quest: TTT draw counts", () => {
+  await runTest("daily quest: TTT draw counts", async () => {
     const files = questFiles();
     linkQuestUser(files, USER_A);
     linkQuestUser(files, USER_B);
     const { service } = createService(files);
     const started = startOpen(service);
     joinBoth(service, started.session.id);
-    const last = playTttDrawLine(service, started.session.id);
+    const last = await playTttDrawLine(service, started.session.id);
     assert.strictEqual(last.session.status, STATUS.DRAW);
     assertHumanGameQuest(files, USER_A);
     assertHumanGameQuest(files, USER_B);
   });
 
-  await runTest("daily quest: TTT lobby only does not count", () => {
+  await runTest("daily quest: TTT lobby only does not count", async () => {
     const files = questFiles();
     linkQuestUser(files, USER_A);
     linkQuestUser(files, USER_B);
@@ -1214,7 +1214,7 @@ async function main() {
     assert.strictEqual(getLootBalance(USER_A, files.shopFile), 0);
   });
 
-  await runTest("daily quest: TTT expired lobby without gameplay does not count", () => {
+  await runTest("daily quest: TTT expired lobby without gameplay does not count", async () => {
     const files = questFiles();
     linkQuestUser(files, USER_A);
     const { service } = createService(files);
@@ -1226,19 +1226,19 @@ async function main() {
     assert.strictEqual(getLootBalance(USER_A, files.shopFile), 0);
   });
 
-  await runTest("daily quest: TTT bot win and bot loss both count", () => {
+  await runTest("daily quest: TTT bot win and bot loss both count", async () => {
     const winFiles = questFiles();
     linkQuestUser(winFiles, USER_A);
     const { service: winService } = createService(winFiles);
     const winStart = startOpen(winService);
     winService.expireJoin(winStart.session.id);
-    winService.move({
+    await winService.move({
       sessionId: winStart.session.id,
       userId: USER_A,
       cell: 0,
       chatId: COMMUNITY_CHAT,
     });
-    const humanWin = winService.resolveTurnTimeout(winStart.session.id);
+    const humanWin = await winService.resolveTurnTimeout(winStart.session.id);
     assert.strictEqual(humanWin.session.status, STATUS.WON);
     assert.strictEqual(humanWin.session.winnerUserId, String(USER_A));
     assertHumanGameQuest(winFiles, USER_A, { vsBot: true });
@@ -1249,13 +1249,13 @@ async function main() {
     const { service: lossService } = createService(lossFiles);
     const lossStart = startOpen(lossService);
     lossService.expireJoin(lossStart.session.id);
-    const botWin = lossService.resolveTurnTimeout(lossStart.session.id);
+    const botWin = await lossService.resolveTurnTimeout(lossStart.session.id);
     assert.strictEqual(botWin.session.status, STATUS.WON);
     assert.strictEqual(botWin.session.winnerUserId, BOT_USER_ID);
     assertHumanGameQuest(lossFiles, USER_A, { vsBot: true });
   });
 
-  await runTest("daily quest: TTT bot draw counts", () => {
+  await runTest("daily quest: TTT bot draw counts", async () => {
     const files = questFiles();
     linkQuestUser(files, USER_A);
     const { service } = createService(files);
@@ -1264,7 +1264,7 @@ async function main() {
     const raw = service.manager.getSession(started.session.id);
     raw.board = ["X", "O", "X", "X", "X", "O", "O", null, "O"];
     raw.currentPlayer = "X";
-    const last = service.move({
+    const last = await service.move({
       sessionId: started.session.id,
       userId: USER_A,
       cell: 7,
@@ -1275,25 +1275,25 @@ async function main() {
     assert.strictEqual(questSnap(files, BOT_USER_ID).game.completed, false);
   });
 
-  await runTest("daily quest: TTT duplicate resolution does not double-award", () => {
+  await runTest("daily quest: TTT duplicate resolution does not double-award", async () => {
     const files = questFiles();
     linkQuestUser(files, USER_A);
     linkQuestUser(files, USER_B);
     const { service } = createService({ ...files, pairCooldownMs: 0 });
     const first = startOpen(service);
     joinBoth(service, first.session.id);
-    playTttWinLine(service, first.session.id);
+    await playTttWinLine(service, first.session.id);
     assertHumanGameQuest(files, USER_A);
     assertHumanGameQuest(files, USER_B);
 
-    const retry = service.move({
+    const retry = await service.move({
       sessionId: first.session.id,
       userId: USER_A,
       cell: 0,
       chatId: COMMUNITY_CHAT,
     });
     assert.strictEqual(retry.reason, "already-ended");
-    service.resolveTurnTimeout(first.session.id);
+    await service.resolveTurnTimeout(first.session.id);
     service.claimXpAward(first.session.id);
     service.claimXpAward(first.session.id);
 
@@ -1308,64 +1308,64 @@ async function main() {
       displayName: "Alice",
       chatId: COMMUNITY_CHAT,
     });
-    playTttWinLine(service, second.session.id);
+    await playTttWinLine(service, second.session.id);
     assertHumanGameQuest(files, USER_A);
     assertHumanGameQuest(files, USER_B);
   });
 
-  await runTest("daily quest: TTT unlinked wallet completes slot without Loot", () => {
+  await runTest("daily quest: TTT unlinked wallet completes slot without Loot", async () => {
     const files = questFiles();
     const { service } = createService(files);
     const started = startOpen(service);
     joinBoth(service, started.session.id);
-    playTttWinLine(service, started.session.id);
+    await playTttWinLine(service, started.session.id);
     assertHumanGameQuest(files, USER_A, { linked: false });
     assertHumanGameQuest(files, USER_B, { linked: false });
   });
 
-  await runTest("daily quest: TTT XP cap does not block gameplay detection", () => {
+  await runTest("daily quest: TTT XP cap does not block gameplay detection", async () => {
     const files = questFiles();
     linkQuestUser(files, USER_A);
     linkQuestUser(files, USER_B);
     for (let i = 0; i < PVP_DAILY_WIN_CAP; i += 1) {
-      const xp = awardPvpWinXp(USER_A, "Kevin", files.pointsFile);
+      const xp = await awardPvpWinXp(USER_A, "Kevin", files.pointsFile);
       assert.strictEqual(xp.awarded, true);
       assert.strictEqual(xp.pointsToAdd, PVP_WIN_XP);
     }
-    const capped = awardPvpWinXp(USER_A, "Kevin", files.pointsFile);
+    const capped = await awardPvpWinXp(USER_A, "Kevin", files.pointsFile);
     assert.strictEqual(capped.awarded, false);
     assert.strictEqual(loadPoints(files.pointsFile).users[String(USER_A)].points, PVP_DAILY_WIN_CAP * PVP_WIN_XP);
 
     const { service } = createService(files);
     const started = startOpen(service);
     joinBoth(service, started.session.id);
-    playTttWinLine(service, started.session.id);
+    await playTttWinLine(service, started.session.id);
     assertHumanGameQuest(files, USER_A);
     assertHumanGameQuest(files, USER_B);
     const claim = service.claimXpAward(started.session.id);
     assert.strictEqual(claim.shouldAward, true);
-    const extra = awardPvpWinXp(claim.winnerUserId, "Kevin", files.pointsFile);
+    const extra = await awardPvpWinXp(claim.winnerUserId, "Kevin", files.pointsFile);
     assert.strictEqual(extra.awarded, false);
     assert.strictEqual(loadPoints(files.pointsFile).users[String(USER_A)].points, PVP_DAILY_WIN_CAP * PVP_WIN_XP);
     assert.strictEqual(loadPoints(files.pointsFile).users[String(USER_B)].points, 0);
   });
 
-  await runTest("daily quest: TTT XP amount unchanged after resolved win", () => {
+  await runTest("daily quest: TTT XP amount unchanged after resolved win", async () => {
     const files = questFiles();
     const { service } = createService(files);
     const started = startOpen(service);
     joinBoth(service, started.session.id);
-    playTttWinLine(service, started.session.id);
+    await playTttWinLine(service, started.session.id);
     const claim = service.claimXpAward(started.session.id);
     assert.strictEqual(claim.shouldAward, true);
-    const xp = awardPvpWinXp(claim.winnerUserId, "Kevin", files.pointsFile);
+    const xp = await awardPvpWinXp(claim.winnerUserId, "Kevin", files.pointsFile);
     assert.strictEqual(xp.awarded, true);
     assert.strictEqual(xp.pointsToAdd, PVP_WIN_XP);
     assert.strictEqual(PVP_WIN_XP, 3);
     assert.strictEqual(loadPoints(files.pointsFile).users[String(USER_A)].points, 3);
   });
 
-  await runTest("daily quest: TTT failure does not break resolution", () => {
+  await runTest("daily quest: TTT failure does not break resolution", async () => {
     const { service } = createService({
       noteDailyQuestGameFn() {
         throw new Error("quest-boom");
@@ -1373,7 +1373,7 @@ async function main() {
     });
     const started = startOpen(service);
     joinBoth(service, started.session.id);
-    const win = playTttWinLine(service, started.session.id);
+    const win = await playTttWinLine(service, started.session.id);
     assert.strictEqual(win.session.status, STATUS.WON);
     const claim = service.claimXpAward(started.session.id);
     assert.strictEqual(claim.shouldAward, true);
@@ -1397,8 +1397,7 @@ async function main() {
     assert.strictEqual(service.getSession(started.session.id).status, STATUS.WON);
     assert.strictEqual(service.getSession(started.session.id).winnerUserId, String(USER_A));
     assert.strictEqual(loadPoints(file).users[String(USER_A)].points, PVP_WIN_XP);
-    const again = await finalizeWinXp(service, started.session.id, (uid, name) =>
-      awardPvpWinXp(uid, name, file)
+    const again = await finalizeWinXp(service, started.session.id, (uid, name) => awardPvpWinXp(uid, name, file)
     );
     assert.strictEqual(again.claim.shouldAward, false);
     assert.strictEqual(again.claim.reason, "already-awarded");
@@ -1409,10 +1408,9 @@ async function main() {
     const file = pointsFile();
     const { service } = createService();
     const started = startVsBot(service);
-    const loss = service.resolveTurnTimeout(started.session.id);
+    const loss = await service.resolveTurnTimeout(started.session.id);
     assert.strictEqual(loss.session.winnerUserId, BOT_USER_ID);
-    const fin = await finalizeWinXp(service, started.session.id, (uid, name) =>
-      awardPvpWinXp(uid, name, file)
+    const fin = await finalizeWinXp(service, started.session.id, (uid, name) => awardPvpWinXp(uid, name, file)
     );
     assert.strictEqual(fin.claim.shouldAward, false);
     assert.strictEqual(fin.claim.reason, "bot-winner");
@@ -1426,7 +1424,7 @@ async function main() {
     const raw = service.manager.getSession(started.session.id);
     raw.board = ["X", "O", "X", "X", "X", "O", "O", null, "O"];
     raw.currentPlayer = "X";
-    const last = service.move({
+    const last = await service.move({
       sessionId: started.session.id,
       userId: USER_A,
       cell: 7,
@@ -1436,8 +1434,7 @@ async function main() {
     const claim = service.claimXpAward(started.session.id);
     assert.strictEqual(claim.ok, false);
     assert.strictEqual(claim.reason, "not-won");
-    const fin = await finalizeWinXp(service, started.session.id, (uid, name) =>
-      awardPvpWinXp(uid, name, file)
+    const fin = await finalizeWinXp(service, started.session.id, (uid, name) => awardPvpWinXp(uid, name, file)
     );
     assert.strictEqual(fin.claim.shouldAward, undefined);
     assert.strictEqual(loadPoints(file).users[String(USER_A)], undefined);
@@ -1446,7 +1443,7 @@ async function main() {
   await runTest("bot XP: daily PvP cap also applies to bot wins", async () => {
     const file = pointsFile();
     for (let i = 0; i < PVP_DAILY_WIN_CAP; i += 1) {
-      const xp = awardPvpWinXp(USER_A, "Kevin", file);
+      const xp = await awardPvpWinXp(USER_A, "Kevin", file);
       assert.strictEqual(xp.awarded, true);
     }
     const { service } = createService();
@@ -1454,15 +1451,14 @@ async function main() {
     const raw = service.manager.getSession(started.session.id);
     raw.board = ["X", "X", null, "O", "O", null, null, null, null];
     raw.currentPlayer = "X";
-    const win = service.move({
+    const win = await service.move({
       sessionId: started.session.id,
       userId: USER_A,
       cell: 2,
       chatId: COMMUNITY_CHAT,
     });
     assert.strictEqual(win.needsXp, true);
-    const fin = await finalizeWinXp(service, started.session.id, (uid, name) =>
-      awardPvpWinXp(uid, name, file)
+    const fin = await finalizeWinXp(service, started.session.id, (uid, name) => awardPvpWinXp(uid, name, file)
     );
     assert.strictEqual(fin.claim.shouldAward, true);
     assert.strictEqual(fin.xpResult.awarded, false);
@@ -1477,17 +1473,15 @@ async function main() {
     const file = pointsFile();
     const { service } = createService({ pairCooldownMs: 0 });
     const botMatch = startVsBot(service);
-    service.resolveTurnTimeout(botMatch.session.id);
-    await finalizeWinXp(service, botMatch.session.id, (uid, name) =>
-      awardPvpWinXp(uid, name, file)
+    await service.resolveTurnTimeout(botMatch.session.id);
+    await finalizeWinXp(service, botMatch.session.id, (uid, name) => awardPvpWinXp(uid, name, file)
     );
     assert.strictEqual(loadPoints(file).users[String(USER_A)], undefined);
 
     const pvp = startOpen(service);
     joinBoth(service, pvp.session.id);
-    playTttWinLine(service, pvp.session.id);
-    const fin = await finalizeWinXp(service, pvp.session.id, (uid, name) =>
-      awardPvpWinXp(uid, name, file)
+    await playTttWinLine(service, pvp.session.id);
+    const fin = await finalizeWinXp(service, pvp.session.id, (uid, name) => awardPvpWinXp(uid, name, file)
     );
     assert.strictEqual(fin.claim.shouldAward, true);
     assert.strictEqual(fin.xpResult.pointsToAdd, PVP_WIN_XP);
@@ -1505,14 +1499,13 @@ async function main() {
       const raw = service.manager.getSession(started.session.id);
       raw.board = ["X", "X", null, "O", "O", null, null, null, null];
       raw.currentPlayer = "X";
-      service.move({
+      await service.move({
         sessionId: started.session.id,
         userId: USER_A,
         cell: 2,
         chatId: COMMUNITY_CHAT,
       });
-      const fin = await finalizeWinXp(service, started.session.id, (uid, name) =>
-        awardPvpWinXp(uid, name, file)
+      const fin = await finalizeWinXp(service, started.session.id, (uid, name) => awardPvpWinXp(uid, name, file)
       );
       assert.strictEqual(fin.claim.shouldAward, true);
       assert.strictEqual(fin.xpResult.awarded, true);

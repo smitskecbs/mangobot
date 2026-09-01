@@ -44,9 +44,9 @@ const concurrencyWorker = path.join(
   "game-xp-concurrency-worker.js"
 );
 
-function runTest(name, fn) {
+async function runTest(name, fn) {
   try {
-    fn();
+    await fn();
     console.log(`✓ ${name}`);
   } catch (err) {
     console.error(`✗ ${name}`);
@@ -103,26 +103,26 @@ function publicXpFromAward(result) {
   };
 }
 
-function tryAwardSnake(identity, name) {
+async function tryAwardSnake(identity, name) {
   if (!identity || !identity.verified || !identity.uid) {
     return emptyGameXpPayload();
   }
   try {
     return publicXpFromAward(
-      awardSnakeGameXp(identity.uid, name, pointsFile)
+      await awardSnakeGameXp(identity.uid, name, pointsFile)
     );
   } catch {
     return emptyGameXpPayload();
   }
 }
 
-function tryAwardBounch(identity, name, level) {
+async function tryAwardBounch(identity, name, level) {
   if (!identity || !identity.verified || !identity.uid) {
     return emptyGameXpPayload();
   }
   try {
     return publicXpFromAward(
-      awardBounchGameXp(identity.uid, name, level, pointsFile)
+      await awardBounchGameXp(identity.uid, name, level, pointsFile)
     );
   } catch {
     return emptyGameXpPayload();
@@ -132,7 +132,7 @@ function tryAwardBounch(identity, name, level) {
 /**
  * Mirrors highscore-server success path: save score first, then XP, then response.
  */
-function simulateSnakeHighscore(body) {
+async function simulateSnakeHighscore(body) {
   const identity = verifyOptionalGameIdentity(body.t, "snake", {
     secret: TEST_SECRET,
     now: FIXED_NOW,
@@ -140,7 +140,7 @@ function simulateSnakeHighscore(body) {
   const submission = submitScore(snakeFile, body.name, body.score);
   assert.ok(!submission.error, submission.error);
 
-  const xp = tryAwardSnake(identity, body.name);
+  const xp = await tryAwardSnake(identity, body.name);
   const { data, result } = submission;
   const response = {
     ...buildApiResponse(data, {
@@ -163,7 +163,7 @@ function simulateSnakeHighscore(body) {
   return { identity, submission, response, stored: readScoresFile(snakeFile) };
 }
 
-function simulateBounchHighscore(body) {
+async function simulateBounchHighscore(body) {
   const identity = verifyOptionalGameIdentity(body.t, "bounch", {
     secret: TEST_SECRET,
     now: FIXED_NOW,
@@ -175,7 +175,7 @@ function simulateBounchHighscore(body) {
   );
   assert.ok(!submission.error, submission.error);
 
-  const xp = tryAwardBounch(identity, body.name, body.level);
+  const xp = await tryAwardBounch(identity, body.name, body.level);
   const { data, result } = submission;
   const response = {
     ...bounchScores.buildApiResponse(data, {
@@ -214,9 +214,10 @@ function sumAllPoints() {
 
 resetPoints();
 
-runTest("1. Snake first day +1", () => {
+(async () => {
+await runTest("1. Snake first day +1", async () => {
   resetPoints();
-  const result = awardSnakeGameXp(UID, "Ada", pointsFile);
+  const result = await awardSnakeGameXp(UID, "Ada", pointsFile);
   assert.strictEqual(result.awarded, true);
   assert.strictEqual(result.xp.awarded, 1);
   assert.strictEqual(result.xp.dailyPlay, 1);
@@ -225,30 +226,30 @@ runTest("1. Snake first day +1", () => {
   assert.strictEqual(loadPoints(pointsFile).users[UID].game.snakePlayDate, todayUtc());
 });
 
-runTest("2. Snake second same day +0", () => {
-  const result = awardSnakeGameXp(UID, "Ada", pointsFile);
+await runTest("2. Snake second same day +0", async () => {
+  const result = await awardSnakeGameXp(UID, "Ada", pointsFile);
   assert.strictEqual(result.awarded, false);
   assert.deepStrictEqual(result.xp, { awarded: 0, dailyPlay: 0, unlock: 0 });
   assert.strictEqual(result.points, 1);
 });
 
-runTest("3. Snake next day +1", () => {
+await runTest("3. Snake next day +1", async () => {
   setGameDates(UID, { snakePlayDate: "2000-01-01" });
-  const result = awardSnakeGameXp(UID, "Ada", pointsFile);
+  const result = await awardSnakeGameXp(UID, "Ada", pointsFile);
   assert.strictEqual(result.awarded, true);
   assert.strictEqual(result.xp.dailyPlay, 1);
   assert.strictEqual(result.points, 2);
 });
 
-runTest("4. Snake weekly +1", () => {
+await runTest("4. Snake weekly +1", async () => {
   resetPoints();
-  const result = awardSnakeGameXp(UID, "Ada", pointsFile);
+  const result = await awardSnakeGameXp(UID, "Ada", pointsFile);
   const user = loadPoints(pointsFile).users[UID];
   assert.strictEqual(result.points, 1);
   assert.strictEqual(getEffectiveWeeklyPoints(user), 1);
 });
 
-runTest("5. Snake rank-up", () => {
+await runTest("5. Snake rank-up", async () => {
   resetPoints({
     users: {
       [UID]: {
@@ -262,15 +263,15 @@ runTest("5. Snake rank-up", () => {
       },
     },
   });
-  const result = awardSnakeGameXp(UID, "Ada", pointsFile);
+  const result = await awardSnakeGameXp(UID, "Ada", pointsFile);
   assert.strictEqual(result.points, 25);
   assert.strictEqual(result.rankUp, true);
   assert.strictEqual(result.rank.title, "Sprout");
 });
 
-runTest("6. Bounch L1 first day total +2", () => {
+await runTest("6. Bounch L1 first day total +2", async () => {
   resetPoints();
-  const result = awardBounchGameXp(UID, "Ada", 1, pointsFile);
+  const result = await awardBounchGameXp(UID, "Ada", 1, pointsFile);
   assert.strictEqual(result.xp.dailyPlay, 1);
   assert.strictEqual(result.xp.unlock, 1);
   assert.strictEqual(result.xp.awarded, 2);
@@ -278,9 +279,9 @@ runTest("6. Bounch L1 first day total +2", () => {
   assert.strictEqual(loadPoints(pointsFile).users[UID].game.bounchUnlockedMax, 1);
 });
 
-runTest("7. Bounch direct L4 total +5", () => {
+await runTest("7. Bounch direct L4 total +5", async () => {
   resetPoints();
-  const result = awardBounchGameXp(UID, "Ada", 4, pointsFile);
+  const result = await awardBounchGameXp(UID, "Ada", 4, pointsFile);
   assert.strictEqual(result.xp.dailyPlay, 1);
   assert.strictEqual(result.xp.unlock, 4);
   assert.strictEqual(result.xp.awarded, 5);
@@ -288,14 +289,14 @@ runTest("7. Bounch direct L4 total +5", () => {
   assert.strictEqual(loadPoints(pointsFile).users[UID].game.bounchUnlockedMax, 4);
 });
 
-runTest("8. repeated L4 same day +0", () => {
-  const result = awardBounchGameXp(UID, "Ada", 4, pointsFile);
+await runTest("8. repeated L4 same day +0", async () => {
+  const result = await awardBounchGameXp(UID, "Ada", 4, pointsFile);
   assert.deepStrictEqual(result.xp, { awarded: 0, dailyPlay: 0, unlock: 0 });
   assert.strictEqual(result.points, 5);
 });
 
-runTest("9. L4 → L7 same day +3", () => {
-  const result = awardBounchGameXp(UID, "Ada", 7, pointsFile);
+await runTest("9. L4 → L7 same day +3", async () => {
+  const result = await awardBounchGameXp(UID, "Ada", 7, pointsFile);
   assert.strictEqual(result.xp.dailyPlay, 0);
   assert.strictEqual(result.xp.unlock, 3);
   assert.strictEqual(result.xp.awarded, 3);
@@ -303,23 +304,23 @@ runTest("9. L4 → L7 same day +3", () => {
   assert.strictEqual(loadPoints(pointsFile).users[UID].game.bounchUnlockedMax, 7);
 });
 
-runTest("10. next day L7 +1 daily", () => {
+await runTest("10. next day L7 +1 daily", async () => {
   setGameDates(UID, { bounchPlayDate: "2000-01-01", bounchUnlockedMax: 7 });
   const before = loadPoints(pointsFile).users[UID].points;
-  const result = awardBounchGameXp(UID, "Ada", 7, pointsFile);
+  const result = await awardBounchGameXp(UID, "Ada", 7, pointsFile);
   assert.strictEqual(result.xp.dailyPlay, 1);
   assert.strictEqual(result.xp.unlock, 0);
   assert.strictEqual(result.xp.awarded, 1);
   assert.strictEqual(result.points, before + 1);
 });
 
-runTest("11. bounchUnlockedMax persists", () => {
+await runTest("11. bounchUnlockedMax persists", async () => {
   assert.strictEqual(loadPoints(pointsFile).users[UID].game.bounchUnlockedMax, 7);
-  awardBounchGameXp(UID, "Ada", 7, pointsFile);
+  await awardBounchGameXp(UID, "Ada", 7, pointsFile);
   assert.strictEqual(loadPoints(pointsFile).users[UID].game.bounchUnlockedMax, 7);
 });
 
-runTest("12. old user without game object works", () => {
+await runTest("12. old user without game object works", async () => {
   resetPoints({
     users: {
       [UID]: {
@@ -330,24 +331,24 @@ runTest("12. old user without game object works", () => {
       },
     },
   });
-  const result = awardSnakeGameXp(UID, "Legacy", pointsFile);
+  const result = await awardSnakeGameXp(UID, "Legacy", pointsFile);
   assert.strictEqual(result.awarded, true);
   assert.strictEqual(result.points, 4);
   assert.ok(loadPoints(pointsFile).users[UID].game);
   assert.strictEqual(loadPoints(pointsFile).users[UID].game.snakePlayDate, todayUtc());
 });
 
-runTest("13. invalid Bounch levels rejected safely", () => {
+await runTest("13. invalid Bounch levels rejected safely", async () => {
   resetPoints();
   for (const level of [0, 8, 3.5, "4", null, undefined, -1]) {
-    const result = awardBounchGameXp(UID, "Ada", level, pointsFile);
+    const result = await awardBounchGameXp(UID, "Ada", level, pointsFile);
     assert.strictEqual(result.awarded, false);
     assert.deepStrictEqual(result.xp, emptyGameXpPayload());
   }
   assert.deepStrictEqual(loadPoints(pointsFile), { users: {} });
 });
 
-runTest("14. rank-up on multi-XP award", () => {
+await runTest("14. rank-up on multi-XP award", async () => {
   resetPoints({
     users: {
       [UID]: {
@@ -358,17 +359,17 @@ runTest("14. rank-up on multi-XP award", () => {
       },
     },
   });
-  const result = awardBounchGameXp(UID, "Ada", 4, pointsFile);
+  const result = await awardBounchGameXp(UID, "Ada", 4, pointsFile);
   assert.strictEqual(result.points, 79);
   assert.strictEqual(result.xp.awarded, 5);
   assert.strictEqual(result.rankUp, true);
   assert.strictEqual(result.rank.title, "Tree");
 });
 
-runTest("15. unverified highscore submit → XP 0", () => {
+await runTest("15. unverified highscore submit → XP 0", async () => {
   resetPoints();
   if (fs.existsSync(snakeFile)) fs.unlinkSync(snakeFile);
-  const { response, stored } = simulateSnakeHighscore({
+  const { response, stored } = await simulateSnakeHighscore({
     name: "Guest",
     score: 10,
   });
@@ -378,14 +379,14 @@ runTest("15. unverified highscore submit → XP 0", () => {
   assert.deepStrictEqual(loadPoints(pointsFile), { users: {} });
 });
 
-runTest("16. verified Snake highscore → XP expected", () => {
+await runTest("16. verified Snake highscore → XP expected", async () => {
   resetPoints();
   if (fs.existsSync(snakeFile)) fs.unlinkSync(snakeFile);
   const token = createGameToken(UID, "snake", {
     secret: TEST_SECRET,
     now: FIXED_NOW,
   });
-  const { response } = simulateSnakeHighscore({
+  const { response } = await simulateSnakeHighscore({
     name: "Ada",
     score: 42,
     t: token,
@@ -396,14 +397,14 @@ runTest("16. verified Snake highscore → XP expected", () => {
   assert.ok(!JSON.stringify(response).includes(UID));
 });
 
-runTest("17. verified Bounch highscore → XP expected", () => {
+await runTest("17. verified Bounch highscore → XP expected", async () => {
   resetPoints();
   if (fs.existsSync(bounchFile)) fs.unlinkSync(bounchFile);
   const token = createGameToken(UID, "bounch", {
     secret: TEST_SECRET,
     now: FIXED_NOW,
   });
-  const { response } = simulateBounchHighscore({
+  const { response } = await simulateBounchHighscore({
     name: "Ada",
     level: 1,
     t: token,
@@ -413,14 +414,14 @@ runTest("17. verified Bounch highscore → XP expected", () => {
   assert.strictEqual(loadPoints(pointsFile).users[UID].points, 2);
 });
 
-runTest("18. body uid spoofing irrelevant", () => {
+await runTest("18. body uid spoofing irrelevant", async () => {
   resetPoints();
   if (fs.existsSync(snakeFile)) fs.unlinkSync(snakeFile);
   const token = createGameToken(UID, "snake", {
     secret: TEST_SECRET,
     now: FIXED_NOW,
   });
-  simulateSnakeHighscore({
+  await simulateSnakeHighscore({
     name: "Ada",
     score: 11,
     t: token,
@@ -432,21 +433,21 @@ runTest("18. body uid spoofing irrelevant", () => {
   assert.ok(!data.users["999999"]);
 });
 
-runTest("19. token not stored in points.json", () => {
+await runTest("19. token not stored in points.json", async () => {
   resetPoints();
   if (fs.existsSync(snakeFile)) fs.unlinkSync(snakeFile);
   const token = createGameToken(UID, "snake", {
     secret: TEST_SECRET,
     now: FIXED_NOW,
   });
-  simulateSnakeHighscore({ name: "Ada", score: 12, t: token });
+  await simulateSnakeHighscore({ name: "Ada", score: 12, t: token });
   const raw = fs.readFileSync(pointsFile, "utf8");
   assert.ok(!raw.includes(token));
   assert.ok(!raw.includes(TEST_SECRET));
   assert.ok(!raw.includes('"t"'));
 });
 
-runTest("20. mixed cross-process chat + game award loses no updates", () => {
+await runTest("20. mixed cross-process chat + game award loses no updates", async () => {
   resetPoints();
   const count = 40;
   const coordinator = `
@@ -481,7 +482,7 @@ runTest("20. mixed cross-process chat + game award loses no updates", () => {
   assert.strictEqual(sumAllPoints(), count * 2 + count * 1);
 });
 
-runTest("21. XP failure does not invalidate valid score submit", () => {
+await runTest("21. XP failure does not invalidate valid score submit", async () => {
   if (fs.existsSync(snakeFile)) fs.unlinkSync(snakeFile);
   const token = createGameToken(UID, "snake", {
     secret: TEST_SECRET,
@@ -499,7 +500,7 @@ runTest("21. XP failure does not invalidate valid score submit", () => {
   const missingDir = path.join(tempDir, "missing-points-dir", "points.json");
   let xp;
   try {
-    awardSnakeGameXp(identity.uid, "Ada", missingDir);
+    await awardSnakeGameXp(identity.uid, "Ada", missingDir);
     xp = { awarded: 1, dailyPlay: 1, unlock: 0 };
   } catch {
     xp = emptyGameXpPayload();
@@ -512,12 +513,18 @@ runTest("21. XP failure does not invalidate valid score submit", () => {
 });
 
 // Control: activity still works alongside game helpers in-process
-runTest("control: activity + snake same user accumulate", () => {
+await runTest("control: activity + snake same user accumulate", async () => {
   resetPoints();
-  assert.strictEqual(awardDailyActivityPoint(UID, "Ada", pointsFile).points, 1);
-  assert.strictEqual(awardSnakeGameXp(UID, "Ada", pointsFile).points, 2);
-  assert.strictEqual(awardTriggerPoints(UID, "Ada", "gm", pointsFile).points, 3);
+  assert.strictEqual((await awardDailyActivityPoint(UID, "Ada", pointsFile)).points, 1);
+  assert.strictEqual((await awardSnakeGameXp(UID, "Ada", pointsFile)).points, 2);
+  assert.strictEqual((await awardTriggerPoints(UID, "Ada", "gm", pointsFile)).points, 3);
 });
 
-fs.rmSync(tempDir, { recursive: true, force: true });
+
+  fs.rmSync(tempDir, { recursive: true, force: true });
 console.log("\nAll game-xp tests passed.");
+
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

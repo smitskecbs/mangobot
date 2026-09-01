@@ -131,7 +131,7 @@ function mockCtx({ chatType = "supergroup", chatId = COMMUNITY_CHAT } = {}) {
 }
 
 async function main() {
-  await runTest("week boundary is Monday 00:00 UTC (getWeekId)", () => {
+  await runTest("week boundary is Monday 00:00 UTC (getWeekId)", async () => {
     // Sunday 2026-08-09 23:00 UTC → still week starting 2026-08-03
     const sunday = new Date(Date.UTC(2026, 7, 9, 23, 0, 0));
     assert.strictEqual(getWeekId(sunday), "2026-08-03");
@@ -141,7 +141,7 @@ async function main() {
     assert.strictEqual(getPreviousWeekId("2026-08-10"), "2026-08-03");
   });
 
-  await runTest("Top 3 correct; owner included; max 3 stored", () => {
+  await runTest("Top 3 correct; owner included; max 3 stored", async () => {
     const standings = {
       1: { name: "Alice", weeklyPoints: 40 },
       2: { name: "Bob", weeklyPoints: 30 },
@@ -159,7 +159,7 @@ async function main() {
     assert.ok(top.some((w) => String(w.telegramUserId) === OWNER_ID));
   });
 
-  await runTest("1 / 2 / 0 participants", () => {
+  await runTest("1 / 2 / 0 participants", async () => {
     assert.strictEqual(
       rankWeeklyStandings({ 1: { name: "Solo", weeklyPoints: 5 } }).length,
       1
@@ -176,7 +176,7 @@ async function main() {
     assert.ok(emptyMsg.includes("No qualifying players"));
   });
 
-  await runTest("tie sort matches /weekly (weeklyPoints desc only, stable)", () => {
+  await runTest("tie sort matches /weekly (weeklyPoints desc only, stable)", async () => {
     const standings = {
       20: { name: "Zed", weeklyPoints: 10 },
       10: { name: "Amy", weeklyPoints: 10 },
@@ -196,7 +196,7 @@ async function main() {
     );
   });
 
-  await runTest("old ranking captured before reset/loss on week boundary", () => {
+  await runTest("old ranking captured before reset/loss on week boundary", async () => {
     const pf = pointsFile();
     const wf = winnersFile();
     setWeeklyWinnersFileForTests(wf);
@@ -364,7 +364,7 @@ async function main() {
     assert.ok(posts[0].includes("Alice"));
   });
 
-  await runTest("noteWeeklyStanding before wipe preserves score", () => {
+  await runTest("noteWeeklyStanding before wipe preserves score", async () => {
     const wf = winnersFile();
     const closedWeek = "2026-08-03";
     writeWinnersState(
@@ -415,7 +415,7 @@ async function main() {
     assert.ok(ctx2.replies[0].text.includes("A new weekly race is underway"));
   });
 
-  await runTest("/weekly still shows current week only", () => {
+  await runTest("/weekly still shows current week only", async () => {
     const pf = pointsFile();
     const week = getWeekId();
     seedUsers(
@@ -469,7 +469,7 @@ async function main() {
     assert.ok(ctx.replies.some((r) => r.text.includes("Alice — 9 XP")));
   });
 
-  await runTest("legacy/missing/corrupt winners file safe", () => {
+  await runTest("legacy/missing/corrupt winners file safe", async () => {
     const missing = path.join(tempDir, "no-such-winners.json");
     assert.doesNotThrow(() => readWinnersState(missing));
     const corrupt = winnersFile();
@@ -554,7 +554,7 @@ async function main() {
     assert.strictEqual(posts.length, 1);
   });
 
-  await runTest("ISO week label in message", () => {
+  await runTest("ISO week label in message", async () => {
     // 2026-08-03 is Monday of ISO week 32
     assert.strictEqual(getIsoWeekNumber("2026-08-03"), 32);
     const msg = formatWeeklyWinnersMessage({
@@ -564,7 +564,7 @@ async function main() {
     assert.ok(msg.includes("Week 32"));
   });
 
-  await runTest("test process never resolves to production weekly-winners path", () => {
+  await runTest("test process never resolves to production weekly-winners path", async () => {
     assert.strictEqual(isLikelyTestProcess(), true);
     setWeeklyWinnersFileForTests(null);
     delete process.env.WEEKLY_WINNERS_FILE;
@@ -576,7 +576,7 @@ async function main() {
     assert.ok(resolved.includes("mango-ww-isolate-") || resolved.includes(os.tmpdir()));
   });
 
-  await runTest("award path writes isolated weekly-winners, not the production path", () => {
+  await runTest("award path writes isolated weekly-winners, not the production path", async () => {
     setWeeklyWinnersFileForTests(null);
     delete process.env.WEEKLY_WINNERS_FILE;
     const isolated = resolveWinnersFile();
@@ -586,11 +586,11 @@ async function main() {
     // These fixture IDs previously polluted production standings when the
     // default path was used. Never open data/weekly-winners.json here — on
     // Hetzner that file is live runtime state.
-    awardDailyActivityPoint(42, "Kevin", pointsFile());
-    awardDailyActivityPoint(99, "Ada", pointsFile());
-    awardDailyActivityPoint(111, "Player", pointsFile());
-    awardDailyActivityPoint(222, "Alice", pointsFile());
-    awardDailyActivityPoint(111111111, "Ada", pointsFile());
+    await awardDailyActivityPoint(42, "Kevin", pointsFile());
+    await awardDailyActivityPoint(99, "Ada", pointsFile());
+    await awardDailyActivityPoint(111, "Player", pointsFile());
+    await awardDailyActivityPoint(222, "Alice", pointsFile());
+    await awardDailyActivityPoint(111111111, "Ada", pointsFile());
     noteWeeklyStanding(42, "Kevin", getWeekId(), 3);
 
     const state = readWinnersState(isolated);
@@ -599,7 +599,7 @@ async function main() {
     assert.strictEqual(state.current.standings["42"].name, "Kevin");
   });
 
-  await runTest("reconstruct current standings from points; preserve latest", () => {
+  await runTest("reconstruct current standings from points; preserve latest", async () => {
     const pf = pointsFile();
     const wf = winnersFile();
     const week = getWeekId();
@@ -759,7 +759,7 @@ async function main() {
     }
   );
 
-  await runTest("reconstruct without ADMIN_USER_ID includes owner (env gap)", () => {
+  await runTest("reconstruct without ADMIN_USER_ID includes owner (env gap)", async () => {
     const pf = pointsFile();
     const wf = winnersFile();
     const week = getWeekId();
@@ -790,7 +790,7 @@ async function main() {
     }
   });
 
-  await runTest("reconstruct 0 users + malformed state safe", () => {
+  await runTest("reconstruct 0 users + malformed state safe", async () => {
     const pf = pointsFile();
     const wf = winnersFile();
     savePoints({ users: {} }, pf);
@@ -867,7 +867,7 @@ async function main() {
     });
   }
 
-  await runTest("corrupt winners file is not overwritten by sync", () => {
+  await runTest("corrupt winners file is not overwritten by sync", async () => {
     const wf = winnersFile();
     fs.writeFileSync(wf, "{not-json", "utf8");
     const result = syncAndFinalizeWeeklyWinners({

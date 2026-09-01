@@ -36,10 +36,10 @@ function listTempArtifacts() {
     .filter((name) => name.includes(".tmp-") || name.endsWith(".lock"));
 }
 
-function runTest(name, fn) {
+async function runTest(name, fn) {
   try {
     resetFile();
-    fn();
+    await fn();
     console.log(`✓ ${name}`);
   } catch (err) {
     console.error(`✗ ${name}`);
@@ -47,39 +47,40 @@ function runTest(name, fn) {
   }
 }
 
-runTest("awardDailyActivityPoint blijft werken", () => {
-  const first = awardDailyActivityPoint(42, "Kevin", testFile);
+(async () => {
+await runTest("awardDailyActivityPoint blijft werken", async () => {
+  const first = await awardDailyActivityPoint(42, "Kevin", testFile);
   assert.strictEqual(first.awarded, true);
   assert.strictEqual(first.points, 1);
   assert.strictEqual(loadPoints(testFile).users["42"].points, 1);
 });
 
-runTest("awardTriggerPoints blijft werken", () => {
-  const result = awardTriggerPoints(42, "Kevin", "gmango", testFile);
+await runTest("awardTriggerPoints blijft werken", async () => {
+  const result = await awardTriggerPoints(42, "Kevin", "gmango", testFile);
   assert.strictEqual(result.awarded, true);
   assert.strictEqual(result.points, 2);
   assert.strictEqual(loadPoints(testFile).users["42"].points, 2);
 });
 
-runTest("duplicate cooldown gedrag blijft", () => {
-  assert.strictEqual(awardDailyActivityPoint(7, "Ada", testFile).awarded, true);
-  assert.strictEqual(awardDailyActivityPoint(7, "Ada", testFile).awarded, false);
-  assert.strictEqual(awardTriggerPoints(7, "Ada", "gm", testFile).awarded, true);
-  assert.strictEqual(awardTriggerPoints(7, "Ada", "gm", testFile).awarded, false);
+await runTest("duplicate cooldown gedrag blijft", async () => {
+  assert.strictEqual((await awardDailyActivityPoint(7, "Ada", testFile)).awarded, true);
+  assert.strictEqual((await awardDailyActivityPoint(7, "Ada", testFile)).awarded, false);
+  assert.strictEqual((await awardTriggerPoints(7, "Ada", "gm", testFile)).awarded, true);
+  assert.strictEqual((await awardTriggerPoints(7, "Ada", "gm", testFile)).awarded, false);
   assert.strictEqual(loadPoints(testFile).users["7"].points, 2);
 });
 
-runTest("weekly reset blijft", () => {
-  awardTriggerPoints(42, "Kevin", "gmango", testFile);
+await runTest("weekly reset blijft", async () => {
+  await awardTriggerPoints(42, "Kevin", "gmango", testFile);
   assert.strictEqual(loadPoints(testFile).users["42"].weeklyPoints, 2);
 
-  resetWeeklyForAll(testFile);
+  await resetWeeklyForAll(testFile);
   const user = loadPoints(testFile).users["42"];
   assert.strictEqual(user.weeklyPoints, 0);
   assert.strictEqual(getEffectiveWeeklyPoints(user), 0);
 });
 
-runTest("legacy records blijven werken", () => {
+await runTest("legacy records blijven werken", async () => {
   resetFile({
     users: {
       "99": {
@@ -89,7 +90,7 @@ runTest("legacy records blijven werken", () => {
     },
   });
 
-  const activity = awardDailyActivityPoint(99, "Legacy", testFile);
+  const activity = await awardDailyActivityPoint(99, "Legacy", testFile);
   assert.strictEqual(activity.awarded, true);
   const user = loadPoints(testFile).users["99"];
   assert.strictEqual(user.points, 11);
@@ -98,7 +99,7 @@ runTest("legacy records blijven werken", () => {
   assert.strictEqual(typeof user.weeklyPoints, "number");
 });
 
-runTest("twee opeenvolgende mutations blijven beide behouden", () => {
+await runTest("twee opeenvolgende mutations blijven beide behouden", async () => {
   mutatePoints((data) => {
     data.users["111"] = {
       points: 1,
@@ -127,14 +128,14 @@ runTest("twee opeenvolgende mutations blijven beide behouden", () => {
   assert.strictEqual(users["222"].points, 2);
 });
 
-runTest("atomic write resulteert in valide JSON", () => {
+await runTest("atomic write resulteert in valide JSON", async () => {
   writeJsonFileAtomic(testFile, { users: { a: { points: 1 } } });
   const raw = fs.readFileSync(testFile, "utf8");
   const parsed = JSON.parse(raw);
   assert.deepStrictEqual(parsed, { users: { a: { points: 1 } } });
 });
 
-runTest("geen temp files achter na succesvolle write", () => {
+await runTest("geen temp files achter na succesvolle write", async () => {
   mutatePoints((data) => {
     data.users["1"] = {
       points: 3,
@@ -152,7 +153,7 @@ runTest("geen temp files achter na succesvolle write", () => {
   assert.ok(fs.existsSync(testFile));
 });
 
-runTest("lock wordt vrijgegeven na succesvolle mutation", () => {
+await runTest("lock wordt vrijgegeven na succesvolle mutation", async () => {
   mutatePoints((data) => {
     data.users["1"] = { points: 1, weeklyPoints: 0, name: "T" };
   }, testFile);
@@ -163,7 +164,7 @@ runTest("lock wordt vrijgegeven na succesvolle mutation", () => {
   );
 });
 
-runTest("lock wordt vrijgegeven na thrown mutation", () => {
+await runTest("lock wordt vrijgegeven na thrown mutation", async () => {
   assert.throws(() => {
     mutatePoints(() => {
       throw new Error("boom-mutation");
@@ -180,7 +181,7 @@ runTest("lock wordt vrijgegeven na thrown mutation", () => {
   );
 });
 
-runTest("twee gelijktijdige mutation workers verliezen geen updates", () => {
+await runTest("twee gelijktijdige mutation workers verliezen geen updates", async () => {
   resetFile({ users: {} });
   const iterations = 50;
   const coordinator = `
@@ -212,7 +213,7 @@ runTest("twee gelijktijdige mutation workers verliezen geen updates", () => {
   assert.strictEqual(data.users["1"].points, iterations * 2);
 });
 
-runTest("bestaand points bestand blijft leesbaar terwijl writers serialiseren", () => {
+await runTest("bestaand points bestand blijft leesbaar terwijl writers serialiseren", async () => {
   resetFile({
     users: {
       "42": {
@@ -327,7 +328,7 @@ runTest("bestaand points bestand blijft leesbaar terwijl writers serialiseren", 
   );
 });
 
-runTest("corrupt JSON is not overwritten; empty file can initialize", () => {
+await runTest("corrupt JSON is not overwritten; empty file can initialize", async () => {
   fs.writeFileSync(testFile, "{not-json", "utf8");
   assert.deepStrictEqual(loadPoints(testFile), { users: {} });
   assert.throws(() => {
@@ -351,5 +352,11 @@ runTest("corrupt JSON is not overwritten; empty file can initialize", () => {
   assert.strictEqual(loadPoints(testFile).users["2"].points, 9);
 });
 
-fs.rmSync(tempDir, { recursive: true, force: true });
+
+  fs.rmSync(tempDir, { recursive: true, force: true });
 console.log("\nAll points-locking tests passed.");
+
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

@@ -36,7 +36,7 @@ function warnQuest(prefix, err) {
   }
 }
 
-function emitResolvedPvpDailyQuest(userIds, game, options = {}) {
+async function emitResolvedPvpDailyQuest(userIds, game, options = {}) {
   if (!Array.isArray(userIds) || !userIds.length) {
     return;
   }
@@ -72,17 +72,19 @@ function emitResolvedPvpDailyQuest(userIds, game, options = {}) {
     }
     if (humanPvp && typeof notePvpFn === "function") {
       try {
-        notePvpFn(
-          uid,
-          {
-            game,
-            matchId: options.matchId,
-            opponentType: "human",
-            shopFile: options.shopFile,
-            walletFile: options.walletFile,
-            pointsFile: options.pointsFile,
-          },
-          options.pointsFile
+        await Promise.resolve(
+          notePvpFn(
+            uid,
+            {
+              game,
+              matchId: options.matchId,
+              opponentType: "human",
+              shopFile: options.shopFile,
+              walletFile: options.walletFile,
+              pointsFile: options.pointsFile,
+            },
+            options.pointsFile
+          )
         );
       } catch (err) {
         warnQuest("[pvp] human match progress failed:", err);

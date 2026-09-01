@@ -467,9 +467,11 @@ function verifyWalletSignature(body, options = {}) {
     }
     console.log("[wallet-verify] verified persistence success");
     try {
-      require("./communityBuilder").onWalletLinked(result.persistedUserId, {
-        walletFile: options.walletFile,
-      });
+      Promise.resolve(
+        require("./communityBuilder").onWalletLinked(result.persistedUserId, {
+          walletFile: options.walletFile,
+        })
+      ).catch(() => {});
     } catch (_err) {
       /* Referral wallet milestone must never break verification. */
     }

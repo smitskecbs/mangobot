@@ -102,9 +102,9 @@ function replyCtx(extra = {}) {
   });
 }
 
-function runTest(name, fn) {
+async function runTest(name, fn) {
   try {
-    fn();
+    await fn();
     console.log(`✓ ${name}`);
   } catch (err) {
     console.error(`✗ ${name}`);
@@ -116,120 +116,125 @@ const repliesDay = findUtcDateForSelection({ social: QUEST_IDS.REPLIES_5 });
 const mediaDay = findUtcDateForSelection({ social: QUEST_IDS.MEDIA_2 });
 const messagesDay = findUtcDateForSelection({ social: QUEST_IDS.MESSAGES_5 });
 
-runTest("5 valid replies completes", () => {
-  const files = nextFiles();
-  for (let i = 0; i < 5; i += 1) {
-    processCommunityMessage(
+(async () => {
+  await runTest("5 valid replies completes", async () => {
+    const files = nextFiles();
+    for (let i = 0; i < 5; i += 1) {
+      await processCommunityMessage(
+        replyCtx({
+          reply_to_message: { from: { id: Number(OTHER), is_bot: false }, message_id: 10 + i },
+        }),
+        opts(files, repliesDay.now)
+      );
+    }
+    const snap = getDailyQuestSnapshot(USER, opts(files, repliesDay.now));
+    const q = questProgress(snap, QUEST_IDS.REPLIES_5);
+    assert.strictEqual(q.progress, 5);
+    assert.strictEqual(q.completed, true);
+    assert.strictEqual(snap.completedToday, 1);
+  });
+
+  await runTest("self reply ignored", async () => {
+    const files = nextFiles();
+    await processCommunityMessage(
       replyCtx({
-        reply_to_message: { from: { id: Number(OTHER), is_bot: false }, message_id: 10 + i },
+        reply_to_message: { from: { id: Number(USER), is_bot: false }, message_id: 1 },
       }),
       opts(files, repliesDay.now)
     );
-  }
-  const snap = getDailyQuestSnapshot(USER, opts(files, repliesDay.now));
-  const q = questProgress(snap, QUEST_IDS.REPLIES_5);
-  assert.strictEqual(q.progress, 5);
-  assert.strictEqual(q.completed, true);
-  assert.strictEqual(snap.completedToday, 1);
-});
-
-runTest("self reply ignored", () => {
-  const files = nextFiles();
-  processCommunityMessage(
-    replyCtx({
-      reply_to_message: { from: { id: Number(USER), is_bot: false }, message_id: 1 },
-    }),
-    opts(files, repliesDay.now)
-  );
-  const q = questProgress(getDailyQuestSnapshot(USER, opts(files, repliesDay.now)), QUEST_IDS.REPLIES_5);
-  assert.strictEqual(q.progress, 0);
-  assert.strictEqual(q.completed, false);
-});
-
-runTest("bot reply ignored", () => {
-  const files = nextFiles();
-  processCommunityMessage(
-    replyCtx({
-      reply_to_message: { from: { id: Number(BOT), is_bot: true }, message_id: 2 },
-    }),
-    opts(files, repliesDay.now)
-  );
-  const q = questProgress(getDailyQuestSnapshot(USER, opts(files, repliesDay.now)), QUEST_IDS.REPLIES_5);
-  assert.strictEqual(q.progress, 0);
-});
-
-runTest("duplicate message ignored", () => {
-  const files = nextFiles();
-  const ctx = replyCtx({
-    message_id: 4242,
-    reply_to_message: { from: { id: Number(OTHER), is_bot: false }, message_id: 9 },
+    const q = questProgress(getDailyQuestSnapshot(USER, opts(files, repliesDay.now)), QUEST_IDS.REPLIES_5);
+    assert.strictEqual(q.progress, 0);
+    assert.strictEqual(q.completed, false);
   });
-  processCommunityMessage(ctx, opts(files, repliesDay.now));
-  processCommunityMessage(ctx, opts(files, repliesDay.now));
-  const q = questProgress(getDailyQuestSnapshot(USER, opts(files, repliesDay.now)), QUEST_IDS.REPLIES_5);
-  assert.strictEqual(q.progress, 1);
-});
 
-runTest("2 media completes", () => {
-  const files = nextFiles();
-  processCommunityMessage(
-    groupCtx({ text: undefined, extra: { photo: [{ file_id: "p1" }] } }),
-    opts(files, mediaDay.now)
-  );
-  processCommunityMessage(
-    groupCtx({ text: undefined, extra: { animation: { file_id: "g1" } } }),
-    opts(files, mediaDay.now)
-  );
-  const q = questProgress(getDailyQuestSnapshot(USER, opts(files, mediaDay.now)), QUEST_IDS.MEDIA_2);
-  assert.strictEqual(q.progress, 2);
-  assert.strictEqual(q.completed, true);
-});
+  await runTest("bot reply ignored", async () => {
+    const files = nextFiles();
+    await processCommunityMessage(
+      replyCtx({
+        reply_to_message: { from: { id: Number(BOT), is_bot: true }, message_id: 2 },
+      }),
+      opts(files, repliesDay.now)
+    );
+    const q = questProgress(getDailyQuestSnapshot(USER, opts(files, repliesDay.now)), QUEST_IDS.REPLIES_5);
+    assert.strictEqual(q.progress, 0);
+  });
 
-runTest("sticker ignored", () => {
-  const files = nextFiles();
-  const ctx = groupCtx({ text: undefined, extra: { sticker: { file_id: "s1" } } });
-  delete ctx.message.text;
-  processCommunityMessage(ctx, opts(files, mediaDay.now));
-  const q = questProgress(getDailyQuestSnapshot(USER, opts(files, mediaDay.now)), QUEST_IDS.MEDIA_2);
-  assert.strictEqual(q.progress, 0);
-  assert.strictEqual(q.completed, false);
-});
+  await runTest("duplicate message ignored", async () => {
+    const files = nextFiles();
+    const ctx = replyCtx({
+      message_id: 4242,
+      reply_to_message: { from: { id: Number(OTHER), is_bot: false }, message_id: 9 },
+    });
+    await processCommunityMessage(ctx, opts(files, repliesDay.now));
+    await processCommunityMessage(ctx, opts(files, repliesDay.now));
+    const q = questProgress(getDailyQuestSnapshot(USER, opts(files, repliesDay.now)), QUEST_IDS.REPLIES_5);
+    assert.strictEqual(q.progress, 1);
+  });
 
-runTest("5 messages completes", () => {
-  const files = nextFiles();
-  for (let i = 0; i < 5; i += 1) {
-    processCommunityMessage(groupCtx({ text: `hello ${i}` }), opts(files, messagesDay.now));
+  await runTest("2 media completes", async () => {
+    const files = nextFiles();
+    await processCommunityMessage(
+      groupCtx({ text: undefined, extra: { photo: [{ file_id: "p1" }] } }),
+      opts(files, mediaDay.now)
+    );
+    await processCommunityMessage(
+      groupCtx({ text: undefined, extra: { animation: { file_id: "g1" } } }),
+      opts(files, mediaDay.now)
+    );
+    const q = questProgress(getDailyQuestSnapshot(USER, opts(files, mediaDay.now)), QUEST_IDS.MEDIA_2);
+    assert.strictEqual(q.progress, 2);
+    assert.strictEqual(q.completed, true);
+  });
+
+  await runTest("sticker ignored", async () => {
+    const files = nextFiles();
+    const ctx = groupCtx({ text: undefined, extra: { sticker: { file_id: "s1" } } });
+    delete ctx.message.text;
+    await processCommunityMessage(ctx, opts(files, mediaDay.now));
+    const q = questProgress(getDailyQuestSnapshot(USER, opts(files, mediaDay.now)), QUEST_IDS.MEDIA_2);
+    assert.strictEqual(q.progress, 0);
+    assert.strictEqual(q.completed, false);
+  });
+
+  await runTest("5 messages completes", async () => {
+    const files = nextFiles();
+    for (let i = 0; i < 5; i += 1) {
+      await processCommunityMessage(groupCtx({ text: `hello ${i}` }), opts(files, messagesDay.now));
+    }
+    const q = questProgress(
+      getDailyQuestSnapshot(USER, opts(files, messagesDay.now)),
+      QUEST_IDS.MESSAGES_5
+    );
+    assert.strictEqual(q.progress, 5);
+    assert.strictEqual(q.completed, true);
+  });
+
+  await runTest("wrong chat ignored", async () => {
+    const files = nextFiles();
+    await processCommunityMessage(
+      groupCtx({ text: "hello mango", chatId: WRONG_CHAT }),
+      opts(files, messagesDay.now)
+    );
+    const q = questProgress(
+      getDailyQuestSnapshot(USER, opts(files, messagesDay.now)),
+      QUEST_IDS.MESSAGES_5
+    );
+    assert.strictEqual(q.progress, 0);
+  });
+
+  for (const [file, mtime] of Object.entries(prodMtimes)) {
+    if (fs.existsSync(file)) {
+      assert.strictEqual(fs.statSync(file).mtimeMs, mtime, file);
+    }
   }
-  const q = questProgress(
-    getDailyQuestSnapshot(USER, opts(files, messagesDay.now)),
-    QUEST_IDS.MESSAGES_5
-  );
-  assert.strictEqual(q.progress, 5);
-  assert.strictEqual(q.completed, true);
+
+  setMangoShopFileForTests(null);
+  setWalletFileForTests(null);
+  if (originalChatId === undefined) delete process.env.TELEGRAM_CHAT_ID;
+  else process.env.TELEGRAM_CHAT_ID = originalChatId;
+  fs.rmSync(tempDir, { recursive: true, force: true });
+  console.log("All daily-quest-social tests passed.");
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
 });
-
-runTest("wrong chat ignored", () => {
-  const files = nextFiles();
-  processCommunityMessage(
-    groupCtx({ text: "hello mango", chatId: WRONG_CHAT }),
-    opts(files, messagesDay.now)
-  );
-  const q = questProgress(
-    getDailyQuestSnapshot(USER, opts(files, messagesDay.now)),
-    QUEST_IDS.MESSAGES_5
-  );
-  assert.strictEqual(q.progress, 0);
-});
-
-for (const [file, mtime] of Object.entries(prodMtimes)) {
-  if (fs.existsSync(file)) {
-    assert.strictEqual(fs.statSync(file).mtimeMs, mtime, file);
-  }
-}
-
-setMangoShopFileForTests(null);
-setWalletFileForTests(null);
-if (originalChatId === undefined) delete process.env.TELEGRAM_CHAT_ID;
-else process.env.TELEGRAM_CHAT_ID = originalChatId;
-fs.rmSync(tempDir, { recursive: true, force: true });
-console.log("All daily-quest-social tests passed.");

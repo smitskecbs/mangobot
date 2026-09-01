@@ -308,11 +308,11 @@ function startVsBot(service) {
   return started;
 }
 
-function playColumns(service, sessionId, columns) {
+async function playColumns(service, sessionId, columns) {
   let turn = USER_A;
   let last = null;
   for (const column of columns) {
-    last = service.move({
+    last = await service.move({
       sessionId,
       userId: turn,
       column,
@@ -326,7 +326,7 @@ function playColumns(service, sessionId, columns) {
 async function main() {
   resetEnv();
 
-  await runTest("38. create", () => {
+  await runTest("38. create", async () => {
     const { service } = createService();
     const started = startOpen(service);
     assert.strictEqual(started.session.game, "connect4");
@@ -376,14 +376,14 @@ async function main() {
     assert.ok(ok.replies[0].includes("Connect Four"));
   });
 
-  await runTest("40. first player is red", () => {
+  await runTest("40. first player is red", async () => {
     const { service } = createService();
     const started = startOpen(service);
     assert.strictEqual(started.session.players.R.userId, String(USER_A));
     assert.strictEqual(started.session.status, STATUS.WAITING);
   });
 
-  await runTest("41. second player is yellow", () => {
+  await runTest("41. second player is yellow", async () => {
     const { service } = createService();
     const started = startOpen(service);
     const j2 = joinBoth(service, started.session.id);
@@ -391,7 +391,7 @@ async function main() {
     assert.strictEqual(service.getSession(started.session.id).players.Y.userId, String(USER_B));
   });
 
-  await runTest("42. same user cannot double join", () => {
+  await runTest("42. same user cannot double join", async () => {
     const { service } = createService();
     const started = startOpen(service);
     const again = service.join({
@@ -403,11 +403,11 @@ async function main() {
     assert.strictEqual(again.reason, "already-joined");
   });
 
-  await runTest("43. outsiders denied", () => {
+  await runTest("43. outsiders denied", async () => {
     const { service } = createService();
     const started = startOpen(service);
     joinBoth(service, started.session.id);
-    const outsider = service.move({
+    const outsider = await service.move({
       sessionId: started.session.id,
       userId: USER_C,
       column: 0,
@@ -416,20 +416,20 @@ async function main() {
     assert.strictEqual(outsider.reason, "outsider");
   });
 
-  await runTest("44. red starts", () => {
+  await runTest("44. red starts", async () => {
     const { service } = createService();
     const started = startOpen(service);
     joinBoth(service, started.session.id);
     const session = service.getSession(started.session.id);
     assert.strictEqual(session.currentPlayer, "R");
-    const yellowFirst = service.move({
+    const yellowFirst = await service.move({
       sessionId: started.session.id,
       userId: USER_B,
       column: 0,
       chatId: COMMUNITY_CHAT,
     });
     assert.strictEqual(yellowFirst.reason, "not-your-turn");
-    const red = service.move({
+    const red = await service.move({
       sessionId: started.session.id,
       userId: USER_A,
       column: 0,
@@ -438,7 +438,7 @@ async function main() {
     assert.strictEqual(red.ok, true);
   });
 
-  await runTest("45. gravity", () => {
+  await runTest("45. gravity", async () => {
     const board = emptyBoard();
     const d1 = dropToken(board, 0, "R");
     assert.strictEqual(d1.row, 5);
@@ -448,11 +448,11 @@ async function main() {
     assert.strictEqual(board[4][0], "Y");
   });
 
-  await runTest("46. turn switch", () => {
+  await runTest("46. turn switch", async () => {
     const { service } = createService();
     const started = startOpen(service);
     joinBoth(service, started.session.id);
-    const m1 = service.move({
+    const m1 = await service.move({
       sessionId: started.session.id,
       userId: USER_A,
       column: 0,
@@ -461,13 +461,13 @@ async function main() {
     assert.strictEqual(m1.session.currentPlayer, "Y");
   });
 
-  await runTest("47. full column denied", () => {
+  await runTest("47. full column denied", async () => {
     const { service } = createService();
     const started = startOpen(service);
     joinBoth(service, started.session.id);
     for (let i = 0; i < 6; i += 1) {
       const uid = i % 2 === 0 ? USER_A : USER_B;
-      const r = service.move({
+      const r = await service.move({
         sessionId: started.session.id,
         userId: uid,
         column: 0,
@@ -475,7 +475,7 @@ async function main() {
       });
       assert.strictEqual(r.ok, true);
     }
-    const full = service.move({
+    const full = await service.move({
       sessionId: started.session.id,
       userId: USER_A,
       column: 0,
@@ -485,26 +485,26 @@ async function main() {
     assert.strictEqual(full.reason, "full");
   });
 
-  await runTest("48. horizontal win", () => {
+  await runTest("48. horizontal win", async () => {
     const { service } = createService();
     const started = startOpen(service);
     joinBoth(service, started.session.id);
-    const last = playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
+    const last = await playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
     assert.strictEqual(last.session.status, STATUS.WON);
     assert.strictEqual(last.session.winnerSeat, "R");
     assert.strictEqual(last.needsXp, true);
   });
 
-  await runTest("49. vertical win", () => {
+  await runTest("49. vertical win", async () => {
     const { service } = createService();
     const started = startOpen(service);
     joinBoth(service, started.session.id);
-    const last = playColumns(service, started.session.id, [0, 1, 0, 1, 0, 1, 0]);
+    const last = await playColumns(service, started.session.id, [0, 1, 0, 1, 0, 1, 0]);
     assert.strictEqual(last.session.status, STATUS.WON);
     assert.strictEqual(last.session.winnerSeat, "R");
   });
 
-  await runTest("50. diagonal / win", () => {
+  await runTest("50. diagonal / win", async () => {
     const board = emptyBoard();
     board[5][0] = "R";
     board[4][1] = "R";
@@ -513,7 +513,7 @@ async function main() {
     assert.strictEqual(checkConnectFourWinner(board), "R");
   });
 
-  await runTest("51. diagonal \\ win", () => {
+  await runTest("51. diagonal \\ win", async () => {
     const board = emptyBoard();
     board[2][0] = "Y";
     board[3][1] = "Y";
@@ -522,7 +522,7 @@ async function main() {
     assert.strictEqual(checkConnectFourWinner(board), "Y");
   });
 
-  await runTest("52. edge diagonal", () => {
+  await runTest("52. edge diagonal", async () => {
     const board = emptyBoard();
     board[5][3] = "R";
     board[4][4] = "R";
@@ -537,7 +537,7 @@ async function main() {
     assert.strictEqual(checkConnectFourWinner(left), "Y");
   });
 
-  await runTest("53. draw", () => {
+  await runTest("53. draw", async () => {
     const board = emptyBoard();
     const pattern = ["R", "Y", "R", "Y", "R", "Y", "R"];
     for (let row = 0; row < 6; row += 1) {
@@ -572,7 +572,7 @@ async function main() {
     raw.board = drawBoard.map((row) => row.slice());
     raw.board[0][6] = null;
     raw.currentPlayer = "R";
-    const last = service.move({
+    const last = await service.move({
       sessionId: started.session.id,
       userId: USER_A,
       column: 6,
@@ -583,12 +583,12 @@ async function main() {
     assert.ok(last.rendered.text.includes("CONNECT FOUR DRAW"));
   });
 
-  await runTest("54. only one winner", () => {
+  await runTest("54. only one winner", async () => {
     const { service } = createService();
     const started = startOpen(service);
     joinBoth(service, started.session.id);
-    playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
-    const extra = service.move({
+    await playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
+    const extra = await service.move({
       sessionId: started.session.id,
       userId: USER_B,
       column: 0,
@@ -599,21 +599,21 @@ async function main() {
     assert.strictEqual(session.winnerUserId, String(USER_A));
   });
 
-  await runTest("55. +3 XP", () => {
+  await runTest("55. +3 XP", async () => {
     const { service } = createService();
     const file = pointsFile();
     const started = startOpen(service);
     joinBoth(service, started.session.id);
-    playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
+    await playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
     const claim = service.claimXpAward(started.session.id);
     assert.strictEqual(claim.shouldAward, true);
-    const xp = awardPvpWinXp(claim.winnerUserId, "Kevin", file);
+    const xp = await awardPvpWinXp(claim.winnerUserId, "Kevin", file);
     assert.strictEqual(xp.awarded, true);
     assert.strictEqual(xp.pointsToAdd, PVP_WIN_XP);
     assert.strictEqual(loadPoints(file).users[String(USER_A)].points, 3);
   });
 
-  await runTest("56. shared PvP daily cap with Tic-Tac-Toe", () => {
+  await runTest("56. shared PvP daily cap with Tic-Tac-Toe", async () => {
     const timers = createFakeTimers();
     const manager = createPvpSessionManager({
       now: timers.now,
@@ -637,40 +637,40 @@ async function main() {
     });
     const file = pointsFile();
 
-    function tttWin() {
+    async function tttWin() {
       const s = ttt.startChallenge({
         chatId: COMMUNITY_CHAT,
         starter: { userId: USER_A, displayName: "K", isBot: false },
       });
       ttt.join({ sessionId: s.session.id, userId: USER_B, displayName: "A", chatId: COMMUNITY_CHAT });
-      ttt.move({ sessionId: s.session.id, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
-      ttt.move({ sessionId: s.session.id, userId: USER_B, cell: 3, chatId: COMMUNITY_CHAT });
-      ttt.move({ sessionId: s.session.id, userId: USER_A, cell: 1, chatId: COMMUNITY_CHAT });
-      ttt.move({ sessionId: s.session.id, userId: USER_B, cell: 4, chatId: COMMUNITY_CHAT });
-      ttt.move({ sessionId: s.session.id, userId: USER_A, cell: 2, chatId: COMMUNITY_CHAT });
+      await ttt.move({ sessionId: s.session.id, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
+      await ttt.move({ sessionId: s.session.id, userId: USER_B, cell: 3, chatId: COMMUNITY_CHAT });
+      await ttt.move({ sessionId: s.session.id, userId: USER_A, cell: 1, chatId: COMMUNITY_CHAT });
+      await ttt.move({ sessionId: s.session.id, userId: USER_B, cell: 4, chatId: COMMUNITY_CHAT });
+      await ttt.move({ sessionId: s.session.id, userId: USER_A, cell: 2, chatId: COMMUNITY_CHAT });
       const claim = ttt.claimXpAward(s.session.id);
-      if (claim.shouldAward) awardPvpWinXp(claim.winnerUserId, "Kevin", file);
+      if (claim.shouldAward) await awardPvpWinXp(claim.winnerUserId, "Kevin", file);
     }
 
-    tttWin();
-    tttWin();
+    await tttWin();
+    await tttWin();
     const c4s = c4.startChallenge({
       chatId: COMMUNITY_CHAT,
       starter: { userId: USER_A, displayName: "K", isBot: false },
     });
     c4.join({ sessionId: c4s.session.id, userId: USER_B, displayName: "Alice", chatId: COMMUNITY_CHAT });
-    playColumns(c4, c4s.session.id, [0, 6, 1, 5, 2, 4, 3]);
+    await playColumns(c4, c4s.session.id, [0, 6, 1, 5, 2, 4, 3]);
     const claim = c4.claimXpAward(c4s.session.id);
     assert.strictEqual(claim.shouldAward, true);
-    const xp = awardPvpWinXp(claim.winnerUserId, "Kevin", file);
+    const xp = await awardPvpWinXp(claim.winnerUserId, "Kevin", file);
     assert.strictEqual(xp.awarded, true);
-    const cap = awardPvpWinXp(USER_A, "Kevin", file);
+    const cap = await awardPvpWinXp(USER_A, "Kevin", file);
     assert.strictEqual(cap.awarded, false);
     assert.strictEqual(cap.reason, "daily-cap");
     assert.strictEqual(loadPoints(file).users[String(USER_A)].points, PVP_DAILY_WIN_CAP * PVP_WIN_XP);
   });
 
-  await runTest("57. cross-game pair cooldown", () => {
+  await runTest("57. cross-game pair cooldown", async () => {
     const timers = createFakeTimers();
     const manager = createPvpSessionManager({
       now: timers.now,
@@ -697,11 +697,11 @@ async function main() {
       starter: { userId: USER_A, displayName: "K", isBot: false },
     });
     ttt.join({ sessionId: s.session.id, userId: USER_B, displayName: "A", chatId: COMMUNITY_CHAT });
-    ttt.move({ sessionId: s.session.id, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
-    ttt.move({ sessionId: s.session.id, userId: USER_B, cell: 3, chatId: COMMUNITY_CHAT });
-    ttt.move({ sessionId: s.session.id, userId: USER_A, cell: 1, chatId: COMMUNITY_CHAT });
-    ttt.move({ sessionId: s.session.id, userId: USER_B, cell: 4, chatId: COMMUNITY_CHAT });
-    ttt.move({ sessionId: s.session.id, userId: USER_A, cell: 2, chatId: COMMUNITY_CHAT });
+    await ttt.move({ sessionId: s.session.id, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
+    await ttt.move({ sessionId: s.session.id, userId: USER_B, cell: 3, chatId: COMMUNITY_CHAT });
+    await ttt.move({ sessionId: s.session.id, userId: USER_A, cell: 1, chatId: COMMUNITY_CHAT });
+    await ttt.move({ sessionId: s.session.id, userId: USER_B, cell: 4, chatId: COMMUNITY_CHAT });
+    await ttt.move({ sessionId: s.session.id, userId: USER_A, cell: 2, chatId: COMMUNITY_CHAT });
 
     const c4s = c4.startChallenge({
       chatId: COMMUNITY_CHAT,
@@ -714,7 +714,7 @@ async function main() {
       chatId: COMMUNITY_CHAT,
     });
     assert.strictEqual(j2.session.rewardEligible, false);
-    playColumns(c4, c4s.session.id, [0, 6, 1, 5, 2, 4, 3]);
+    await playColumns(c4, c4s.session.id, [0, 6, 1, 5, 2, 4, 3]);
     const claim = c4.claimXpAward(c4s.session.id);
     assert.strictEqual(claim.shouldAward, false);
     assert.strictEqual(claim.reason, "rematch-cooldown");
@@ -734,7 +734,7 @@ async function main() {
     let turn = USER_A;
     let last = null;
     for (const column of [0, 6, 1, 5, 2, 4, 3]) {
-      last = c4.move({
+      last = await c4.move({
         sessionId: c4c.session.id,
         userId: turn,
         column,
@@ -747,7 +747,7 @@ async function main() {
     assert.strictEqual(claimC.shouldAward, true);
   });
 
-  await runTest("58. join timeout", () => {
+  await runTest("58. join timeout", async () => {
     const { service, timers } = createService({ joinTimeoutMs: 5000 });
     const started = startOpen(service);
     timers.advance(5000);
@@ -757,7 +757,7 @@ async function main() {
     assert.strictEqual(session.players.Y.isBot, true);
   });
 
-  await runTest("lobby. player 2 join starts immediately", () => {
+  await runTest("lobby. player 2 join starts immediately", async () => {
     const { service } = createService({ joinTimeoutMs: 5000 });
     const started = startOpen(service);
     const before = service.manager.getSession(started.session.id);
@@ -780,7 +780,7 @@ async function main() {
     assert.ok(raw.timers.turnTimeoutId != null);
   });
 
-  await runTest("lobby. join timeout is cleared and stale expire is a no-op", () => {
+  await runTest("lobby. join timeout is cleared and stale expire is a no-op", async () => {
     const { service, timers } = createService({ joinTimeoutMs: 5000 });
     const started = startOpen(service);
     service.join({
@@ -800,7 +800,7 @@ async function main() {
     assert.strictEqual(session.players.Y.userId, String(USER_B));
   });
 
-  await runTest("lobby. without player 2 existing timeout remains", () => {
+  await runTest("lobby. without player 2 existing timeout remains", async () => {
     const { service, timers } = createService({ joinTimeoutMs: 5000 });
     const started = startOpen(service);
     assert.ok(service.manager.getSession(started.session.id).timers.joinTimeoutId != null);
@@ -812,7 +812,7 @@ async function main() {
     assert.strictEqual(session.opponentType, "bot");
   });
 
-  await runTest("lobby. duplicate join starts the game exactly once", () => {
+  await runTest("lobby. duplicate join starts the game exactly once", async () => {
     const { service } = createService();
     const started = startOpen(service);
     const first = service.join({
@@ -844,7 +844,7 @@ async function main() {
     assert.strictEqual(session.players.R.userId, String(USER_A));
   });
 
-  await runTest("59. turn timeout opponent wins", () => {
+  await runTest("59. turn timeout opponent wins", async () => {
     const { service, timers } = createService({ turnTimeoutMs: 1000 });
     const started = startOpen(service);
     joinBoth(service, started.session.id);
@@ -855,11 +855,11 @@ async function main() {
     assert.strictEqual(session.endReason, "timeout");
   });
 
-  await runTest("60. no double award", () => {
+  await runTest("60. no double award", async () => {
     const { service } = createService();
     const started = startOpen(service);
     joinBoth(service, started.session.id);
-    playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
+    await playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
     const c1 = service.claimXpAward(started.session.id);
     const c2 = service.claimXpAward(started.session.id);
     assert.strictEqual(c1.shouldAward, true);
@@ -867,11 +867,11 @@ async function main() {
     assert.strictEqual(c2.reason, "already-awarded");
   });
 
-  await runTest("61. concurrent column clicks safe", () => {
+  await runTest("61. concurrent column clicks safe", async () => {
     const { service } = createService();
     const started = startOpen(service);
     joinBoth(service, started.session.id);
-    const nested = service.manager.withSessionLock(started.session.id, () =>
+    const nested = await service.manager.withSessionLock(started.session.id, () =>
       service.move({
         sessionId: started.session.id,
         userId: USER_A,
@@ -882,7 +882,7 @@ async function main() {
     assert.strictEqual(nested.reason, "busy");
   });
 
-  await runTest("62. no uid in callback", () => {
+  await runTest("62. no uid in callback", async () => {
     const id = "abc123def456";
     const join = buildJoinCallbackData(id);
     const move = buildMoveCallbackData(id, 3);
@@ -898,15 +898,15 @@ async function main() {
     });
   });
 
-  await runTest("63. timers cleanup after win", () => {
+  await runTest("63. timers cleanup after win", async () => {
     const { service, timers } = createService({ turnTimeoutMs: 1000 });
     const started = startOpen(service);
     joinBoth(service, started.session.id);
-    playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
+    await playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
     assert.strictEqual(timers.pendingCount(), 0);
   });
 
-  await runTest("64. wrong chat safe", () => {
+  await runTest("64. wrong chat safe", async () => {
     const { service } = createService();
     const started = startOpen(service);
     const wrong = service.join({
@@ -920,7 +920,7 @@ async function main() {
     assert.strictEqual(badStart.reason, "wrong-chat");
   });
 
-  await runTest("parallel PvP: TTT and Connect Four can run together", () => {
+  await runTest("parallel PvP: TTT and Connect Four can run together", async () => {
     const timers = createFakeTimers();
     const manager = createPvpSessionManager({
       now: timers.now,
@@ -956,7 +956,7 @@ async function main() {
     joinBoth(service, started.session.id);
     for (let i = 0; i < 6; i += 1) {
       const uid = i % 2 === 0 ? USER_A : USER_B;
-      service.move({
+      await service.move({
         sessionId: started.session.id,
         userId: uid,
         column: 0,
@@ -975,7 +975,7 @@ async function main() {
     assert.strictEqual(ctx.edited.length, 0);
   });
 
-  await runTest("busy reason connect4 does not occupy community exclusive slot", () => {
+  await runTest("busy reason connect4 does not occupy community exclusive slot", async () => {
     assert.strictEqual(
       getCommunityBusyReason({
         isChatFightOpenFn: () => false,
@@ -994,12 +994,12 @@ async function main() {
     );
   });
 
-  await runTest("activity engine connect4 not auto", () => {
+  await runTest("activity engine connect4 not auto", async () => {
     assert.strictEqual(ACTION_REGISTRY.connect4.enabledForAuto, false);
     assert.strictEqual(ACTION_REGISTRY.connect4.mode, "pvp");
   });
 
-  await runTest("production TTT and Connect Four share one manager and reservation", () => {
+  await runTest("production TTT and Connect Four share one manager and reservation", async () => {
     assert.strictEqual(
       getTicTacToeRuntime().manager,
       getConnectFourRuntime().manager
@@ -1010,16 +1010,16 @@ async function main() {
     );
   });
 
-  await runTest("owner TTT and Connect Four wins award XP", () => {
+  await runTest("owner TTT and Connect Four wins award XP", async () => {
     process.env.ADMIN_USER_ID = String(USER_A);
     const file = pointsFile();
     const { service } = createService({ pairCooldownMs: 0 });
     const started = startOpen(service);
     joinBoth(service, started.session.id);
-    playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
+    await playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
     const c4Claim = service.claimXpAward(started.session.id);
     assert.strictEqual(c4Claim.shouldAward, true);
-    const c4Xp = awardPvpWinXp(c4Claim.winnerUserId, "Kevin", file);
+    const c4Xp = await awardPvpWinXp(c4Claim.winnerUserId, "Kevin", file);
     assert.strictEqual(c4Xp.awarded, true);
     assert.strictEqual(c4Xp.pointsToAdd, PVP_WIN_XP);
 
@@ -1040,49 +1040,49 @@ async function main() {
       displayName: "A",
       chatId: COMMUNITY_CHAT,
     });
-    ttt.move({ sessionId: s.session.id, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
-    ttt.move({ sessionId: s.session.id, userId: USER_B, cell: 3, chatId: COMMUNITY_CHAT });
-    ttt.move({ sessionId: s.session.id, userId: USER_A, cell: 1, chatId: COMMUNITY_CHAT });
-    ttt.move({ sessionId: s.session.id, userId: USER_B, cell: 4, chatId: COMMUNITY_CHAT });
-    ttt.move({ sessionId: s.session.id, userId: USER_A, cell: 2, chatId: COMMUNITY_CHAT });
+    await ttt.move({ sessionId: s.session.id, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
+    await ttt.move({ sessionId: s.session.id, userId: USER_B, cell: 3, chatId: COMMUNITY_CHAT });
+    await ttt.move({ sessionId: s.session.id, userId: USER_A, cell: 1, chatId: COMMUNITY_CHAT });
+    await ttt.move({ sessionId: s.session.id, userId: USER_B, cell: 4, chatId: COMMUNITY_CHAT });
+    await ttt.move({ sessionId: s.session.id, userId: USER_A, cell: 2, chatId: COMMUNITY_CHAT });
     const tttClaim = ttt.claimXpAward(s.session.id);
     assert.strictEqual(tttClaim.shouldAward, true);
-    const tttXp = awardPvpWinXp(tttClaim.winnerUserId, "Kevin", file);
+    const tttXp = await awardPvpWinXp(tttClaim.winnerUserId, "Kevin", file);
     assert.strictEqual(tttXp.awarded, true);
     assert.strictEqual(tttXp.pointsToAdd, PVP_WIN_XP);
     assert.ok(loadPoints(file).users[String(USER_A)].points >= PVP_WIN_XP);
   });
 
-  await runTest("daily quest: GAME_SOURCES includes connect4 and pvp", () => {
+  await runTest("daily quest: GAME_SOURCES includes connect4 and pvp", async () => {
     assert.ok(GAME_SOURCES.includes("connect4"));
     assert.ok(GAME_SOURCES.includes("pvp"));
   });
 
-  await runTest("daily quest: C4 win counts", () => {
+  await runTest("daily quest: C4 win counts", async () => {
     const files = questFiles();
     linkQuestUser(files, USER_A);
     linkQuestUser(files, USER_B);
     const { service } = createService(files);
     const started = startOpen(service);
     joinBoth(service, started.session.id);
-    const win = playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
+    const win = await playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
     assert.strictEqual(win.session.status, STATUS.WON);
     assert.strictEqual(win.session.winnerUserId, String(USER_A));
     assertHumanGameQuest(files, USER_A);
   });
 
-  await runTest("daily quest: C4 loss counts", () => {
+  await runTest("daily quest: C4 loss counts", async () => {
     const files = questFiles();
     linkQuestUser(files, USER_A);
     linkQuestUser(files, USER_B);
     const { service } = createService(files);
     const started = startOpen(service);
     joinBoth(service, started.session.id);
-    playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
+    await playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
     assertHumanGameQuest(files, USER_B);
   });
 
-  await runTest("daily quest: C4 draw counts", () => {
+  await runTest("daily quest: C4 draw counts", async () => {
     const files = questFiles();
     linkQuestUser(files, USER_A);
     linkQuestUser(files, USER_B);
@@ -1093,7 +1093,7 @@ async function main() {
     raw.board = makeC4DrawBoard();
     raw.board[0][6] = null;
     raw.currentPlayer = "R";
-    const last = service.move({
+    const last = await service.move({
       sessionId: started.session.id,
       userId: USER_A,
       column: 6,
@@ -1104,7 +1104,7 @@ async function main() {
     assertHumanGameQuest(files, USER_B);
   });
 
-  await runTest("daily quest: C4 lobby only does not count", () => {
+  await runTest("daily quest: C4 lobby only does not count", async () => {
     const files = questFiles();
     linkQuestUser(files, USER_A);
     linkQuestUser(files, USER_B);
@@ -1117,7 +1117,7 @@ async function main() {
     assert.strictEqual(getLootBalance(USER_A, files.shopFile), 0);
   });
 
-  await runTest("daily quest: C4 expired lobby without gameplay does not count", () => {
+  await runTest("daily quest: C4 expired lobby without gameplay does not count", async () => {
     const files = questFiles();
     linkQuestUser(files, USER_A);
     const { service } = createService(files);
@@ -1129,19 +1129,19 @@ async function main() {
     assert.strictEqual(getLootBalance(USER_A, files.shopFile), 0);
   });
 
-  await runTest("daily quest: C4 bot win and bot loss both count", () => {
+  await runTest("daily quest: C4 bot win and bot loss both count", async () => {
     const winFiles = questFiles();
     linkQuestUser(winFiles, USER_A);
     const { service: winService } = createService(winFiles);
     const winStart = startOpen(winService);
     winService.expireJoin(winStart.session.id);
-    winService.move({
+    await winService.move({
       sessionId: winStart.session.id,
       userId: USER_A,
       column: 0,
       chatId: COMMUNITY_CHAT,
     });
-    const humanWin = winService.resolveTurnTimeout(winStart.session.id);
+    const humanWin = await winService.resolveTurnTimeout(winStart.session.id);
     assert.strictEqual(humanWin.session.status, STATUS.WON);
     assert.strictEqual(humanWin.session.winnerUserId, String(USER_A));
     assertHumanGameQuest(winFiles, USER_A, { vsBot: true });
@@ -1152,13 +1152,13 @@ async function main() {
     const { service: lossService } = createService(lossFiles);
     const lossStart = startOpen(lossService);
     lossService.expireJoin(lossStart.session.id);
-    const botWin = lossService.resolveTurnTimeout(lossStart.session.id);
+    const botWin = await lossService.resolveTurnTimeout(lossStart.session.id);
     assert.strictEqual(botWin.session.status, STATUS.WON);
     assert.strictEqual(botWin.session.winnerUserId, BOT_USER_ID);
     assertHumanGameQuest(lossFiles, USER_A, { vsBot: true });
   });
 
-  await runTest("daily quest: C4 bot draw counts", () => {
+  await runTest("daily quest: C4 bot draw counts", async () => {
     const files = questFiles();
     linkQuestUser(files, USER_A);
     const { service } = createService(files);
@@ -1168,7 +1168,7 @@ async function main() {
     raw.board = makeC4DrawBoard();
     raw.board[0][6] = null;
     raw.currentPlayer = "R";
-    const last = service.move({
+    const last = await service.move({
       sessionId: started.session.id,
       userId: USER_A,
       column: 6,
@@ -1179,25 +1179,25 @@ async function main() {
     assert.strictEqual(questSnap(files, BOT_USER_ID).game.completed, false);
   });
 
-  await runTest("daily quest: C4 duplicate resolution does not double-award", () => {
+  await runTest("daily quest: C4 duplicate resolution does not double-award", async () => {
     const files = questFiles();
     linkQuestUser(files, USER_A);
     linkQuestUser(files, USER_B);
     const { service } = createService({ ...files, pairCooldownMs: 0 });
     const first = startOpen(service);
     joinBoth(service, first.session.id);
-    playColumns(service, first.session.id, [0, 6, 1, 5, 2, 4, 3]);
+    await playColumns(service, first.session.id, [0, 6, 1, 5, 2, 4, 3]);
     assertHumanGameQuest(files, USER_A);
     assertHumanGameQuest(files, USER_B);
 
-    const retry = service.move({
+    const retry = await service.move({
       sessionId: first.session.id,
       userId: USER_B,
       column: 0,
       chatId: COMMUNITY_CHAT,
     });
     assert.strictEqual(retry.reason, "already-ended");
-    service.resolveTurnTimeout(first.session.id);
+    await service.resolveTurnTimeout(first.session.id);
     service.claimXpAward(first.session.id);
     service.claimXpAward(first.session.id);
 
@@ -1212,64 +1212,64 @@ async function main() {
       displayName: "Alice",
       chatId: COMMUNITY_CHAT,
     });
-    playColumns(service, second.session.id, [0, 6, 1, 5, 2, 4, 3]);
+    await playColumns(service, second.session.id, [0, 6, 1, 5, 2, 4, 3]);
     assertHumanGameQuest(files, USER_A);
     assertHumanGameQuest(files, USER_B);
   });
 
-  await runTest("daily quest: C4 unlinked wallet completes slot without Loot", () => {
+  await runTest("daily quest: C4 unlinked wallet completes slot without Loot", async () => {
     const files = questFiles();
     const { service } = createService(files);
     const started = startOpen(service);
     joinBoth(service, started.session.id);
-    playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
+    await playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
     assertHumanGameQuest(files, USER_A, { linked: false });
     assertHumanGameQuest(files, USER_B, { linked: false });
   });
 
-  await runTest("daily quest: C4 XP cap does not block gameplay detection", () => {
+  await runTest("daily quest: C4 XP cap does not block gameplay detection", async () => {
     const files = questFiles();
     linkQuestUser(files, USER_A);
     linkQuestUser(files, USER_B);
     for (let i = 0; i < PVP_DAILY_WIN_CAP; i += 1) {
-      const xp = awardPvpWinXp(USER_A, "Kevin", files.pointsFile);
+      const xp = await awardPvpWinXp(USER_A, "Kevin", files.pointsFile);
       assert.strictEqual(xp.awarded, true);
       assert.strictEqual(xp.pointsToAdd, PVP_WIN_XP);
     }
-    const capped = awardPvpWinXp(USER_A, "Kevin", files.pointsFile);
+    const capped = await awardPvpWinXp(USER_A, "Kevin", files.pointsFile);
     assert.strictEqual(capped.awarded, false);
     assert.strictEqual(loadPoints(files.pointsFile).users[String(USER_A)].points, PVP_DAILY_WIN_CAP * PVP_WIN_XP);
 
     const { service } = createService(files);
     const started = startOpen(service);
     joinBoth(service, started.session.id);
-    playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
+    await playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
     assertHumanGameQuest(files, USER_A);
     assertHumanGameQuest(files, USER_B);
     const claim = service.claimXpAward(started.session.id);
     assert.strictEqual(claim.shouldAward, true);
-    const extra = awardPvpWinXp(claim.winnerUserId, "Kevin", files.pointsFile);
+    const extra = await awardPvpWinXp(claim.winnerUserId, "Kevin", files.pointsFile);
     assert.strictEqual(extra.awarded, false);
     assert.strictEqual(loadPoints(files.pointsFile).users[String(USER_A)].points, PVP_DAILY_WIN_CAP * PVP_WIN_XP);
     assert.strictEqual(loadPoints(files.pointsFile).users[String(USER_B)].points, 0);
   });
 
-  await runTest("daily quest: C4 XP amount unchanged after resolved win", () => {
+  await runTest("daily quest: C4 XP amount unchanged after resolved win", async () => {
     const files = questFiles();
     const { service } = createService(files);
     const started = startOpen(service);
     joinBoth(service, started.session.id);
-    playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
+    await playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
     const claim = service.claimXpAward(started.session.id);
     assert.strictEqual(claim.shouldAward, true);
-    const xp = awardPvpWinXp(claim.winnerUserId, "Kevin", files.pointsFile);
+    const xp = await awardPvpWinXp(claim.winnerUserId, "Kevin", files.pointsFile);
     assert.strictEqual(xp.awarded, true);
     assert.strictEqual(xp.pointsToAdd, PVP_WIN_XP);
     assert.strictEqual(PVP_WIN_XP, 3);
     assert.strictEqual(loadPoints(files.pointsFile).users[String(USER_A)].points, 3);
   });
 
-  await runTest("daily quest: C4 failure does not break resolution", () => {
+  await runTest("daily quest: C4 failure does not break resolution", async () => {
     const { service } = createService({
       noteDailyQuestGameFn() {
         throw new Error("quest-boom");
@@ -1277,7 +1277,7 @@ async function main() {
     });
     const started = startOpen(service);
     joinBoth(service, started.session.id);
-    const win = playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
+    const win = await playColumns(service, started.session.id, [0, 6, 1, 5, 2, 4, 3]);
     assert.strictEqual(win.session.status, STATUS.WON);
     const claim = service.claimXpAward(started.session.id);
     assert.strictEqual(claim.shouldAward, true);
@@ -1304,8 +1304,7 @@ async function main() {
     assert.strictEqual(service.getSession(started.session.id).status, STATUS.WON);
     assert.strictEqual(service.getSession(started.session.id).winnerUserId, String(USER_A));
     assert.strictEqual(loadPoints(file).users[String(USER_A)].points, PVP_WIN_XP);
-    const again = await finalizeWinXp(service, started.session.id, (uid, name) =>
-      awardPvpWinXp(uid, name, file)
+    const again = await finalizeWinXp(service, started.session.id, (uid, name) => awardPvpWinXp(uid, name, file)
     );
     assert.strictEqual(again.claim.shouldAward, false);
     assert.strictEqual(again.claim.reason, "already-awarded");
@@ -1316,10 +1315,9 @@ async function main() {
     const file = pointsFile();
     const { service } = createService();
     const started = startVsBot(service);
-    const loss = service.resolveTurnTimeout(started.session.id);
+    const loss = await service.resolveTurnTimeout(started.session.id);
     assert.strictEqual(loss.session.winnerUserId, BOT_USER_ID);
-    const fin = await finalizeWinXp(service, started.session.id, (uid, name) =>
-      awardPvpWinXp(uid, name, file)
+    const fin = await finalizeWinXp(service, started.session.id, (uid, name) => awardPvpWinXp(uid, name, file)
     );
     assert.strictEqual(fin.claim.shouldAward, false);
     assert.strictEqual(fin.claim.reason, "bot-winner");
@@ -1329,7 +1327,7 @@ async function main() {
   await runTest("bot XP: daily PvP cap also applies to bot wins", async () => {
     const file = pointsFile();
     for (let i = 0; i < PVP_DAILY_WIN_CAP; i += 1) {
-      const xp = awardPvpWinXp(USER_A, "Kevin", file);
+      const xp = await awardPvpWinXp(USER_A, "Kevin", file);
       assert.strictEqual(xp.awarded, true);
     }
     const { service } = createService();
@@ -1339,14 +1337,13 @@ async function main() {
     raw.board[4][0] = "R";
     raw.board[3][0] = "R";
     raw.currentPlayer = "R";
-    service.move({
+    await service.move({
       sessionId: started.session.id,
       userId: USER_A,
       column: 0,
       chatId: COMMUNITY_CHAT,
     });
-    const fin = await finalizeWinXp(service, started.session.id, (uid, name) =>
-      awardPvpWinXp(uid, name, file)
+    const fin = await finalizeWinXp(service, started.session.id, (uid, name) => awardPvpWinXp(uid, name, file)
     );
     assert.strictEqual(fin.claim.shouldAward, true);
     assert.strictEqual(fin.xpResult.awarded, false);
@@ -1361,15 +1358,13 @@ async function main() {
     const file = pointsFile();
     const { service } = createService({ pairCooldownMs: 0 });
     const botMatch = startVsBot(service);
-    service.resolveTurnTimeout(botMatch.session.id);
-    await finalizeWinXp(service, botMatch.session.id, (uid, name) =>
-      awardPvpWinXp(uid, name, file)
+    await service.resolveTurnTimeout(botMatch.session.id);
+    await finalizeWinXp(service, botMatch.session.id, (uid, name) => awardPvpWinXp(uid, name, file)
     );
     const pvp = startOpen(service);
     joinBoth(service, pvp.session.id);
-    playColumns(service, pvp.session.id, [0, 6, 1, 5, 2, 4, 3]);
-    const fin = await finalizeWinXp(service, pvp.session.id, (uid, name) =>
-      awardPvpWinXp(uid, name, file)
+    await playColumns(service, pvp.session.id, [0, 6, 1, 5, 2, 4, 3]);
+    const fin = await finalizeWinXp(service, pvp.session.id, (uid, name) => awardPvpWinXp(uid, name, file)
     );
     assert.strictEqual(fin.claim.shouldAward, true);
     assert.strictEqual(fin.xpResult.pointsToAdd, PVP_WIN_XP);
@@ -1389,14 +1384,13 @@ async function main() {
       raw.board[4][0] = "R";
       raw.board[3][0] = "R";
       raw.currentPlayer = "R";
-      service.move({
+      await service.move({
         sessionId: started.session.id,
         userId: USER_A,
         column: 0,
         chatId: COMMUNITY_CHAT,
       });
-      const fin = await finalizeWinXp(service, started.session.id, (uid, name) =>
-        awardPvpWinXp(uid, name, file)
+      const fin = await finalizeWinXp(service, started.session.id, (uid, name) => awardPvpWinXp(uid, name, file)
       );
       assert.strictEqual(fin.claim.shouldAward, true);
       assert.strictEqual(fin.xpResult.awarded, true);

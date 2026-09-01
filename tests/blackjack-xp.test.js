@@ -110,26 +110,22 @@ function seedPoints(files, userId, points, name = "Player") {
 
 function attachXp(service, files) {
   service.setAwardHandlers({
-    reserve: (userId, name, payload) =>
-      reserveBlackjackRewardedRound(userId, name, payload, files.pointsFile, files.walletFile),
-    pass: (userId, name, payload) =>
-      awardBlackjackPassXp(
+    reserve: (userId, name, payload) => reserveBlackjackRewardedRound(userId, name, payload, files.pointsFile, files.walletFile),
+    pass: (userId, name, payload) => awardBlackjackPassXp(
         userId,
         name,
         { ...payload, shopFile: files.shopFile },
         files.pointsFile,
         files.walletFile
       ),
-    bot: (userId, name, payload) =>
-      awardBlackjackBotResultXp(
+    bot: (userId, name, payload) => awardBlackjackBotResultXp(
         userId,
         name,
         { ...payload, shopFile: files.shopFile },
         files.pointsFile,
         files.walletFile
       ),
-    pvp: (userId, name, payload) =>
-      awardBlackjackPvpResultXp(
+    pvp: (userId, name, payload) => awardBlackjackPvpResultXp(
         userId,
         name,
         { ...payload, shopFile: files.shopFile },
@@ -137,8 +133,7 @@ function attachXp(service, files) {
         files.walletFile
       ),
     status: (userId) => getBlackjackStatus(userId, files.pointsFile),
-    markPair: (userId, opponentId) =>
-      markBlackjackPvpMatchup(userId, opponentId, files.pointsFile),
+    markPair: (userId, opponentId) => markBlackjackPvpMatchup(userId, opponentId, files.pointsFile),
   });
 }
 
@@ -222,8 +217,8 @@ async function startPvp(service) {
   return started.gameId;
 }
 
-function decide(service, gameId, userId, choice) {
-  return service.tryDecide({
+async function decide(service, gameId, userId, choice) {
+  return await service.tryDecide({
     gameId,
     userId,
     choice,
@@ -241,9 +236,9 @@ async function playBotWin(service) {
     createCard("8", "diamonds"),
     createCard("7", "clubs"),
   ]);
-  decide(service, gameId, USER_A, "play");
+  await decide(service, gameId, USER_A, "play");
   await service.whenIdle(COMMUNITY_CHAT);
-  service.tryStand({
+  await service.tryStand({
     gameId,
     userId: USER_A,
     isBot: false,
@@ -283,7 +278,7 @@ async function runTest(name, fn) {
     const { service } = createService();
     attachXp(service, files);
     const gameId = await startBotGame(service);
-    decide(service, gameId, USER_A, "pass");
+    await decide(service, gameId, USER_A, "pass");
     await service.whenIdle(COMMUNITY_CHAT);
     assert.strictEqual(pointsOf(files, USER_A), BLACKJACK_PASS_XP);
   });
@@ -301,17 +296,17 @@ async function runTest(name, fn) {
       createCard("8", "diamonds"),
       createCard("7", "clubs"),
     ]);
-    decide(service, gameId, USER_A, "play");
-    decide(service, gameId, USER_B, "play");
+    await decide(service, gameId, USER_A, "play");
+    await decide(service, gameId, USER_B, "play");
     await service.whenIdle(COMMUNITY_CHAT);
-    service.tryStand({
+    await service.tryStand({
       gameId,
       userId: USER_A,
       isBot: false,
       chatId: COMMUNITY_CHAT,
       threadId: 123,
     });
-    service.tryStand({
+    await service.tryStand({
       gameId,
       userId: USER_B,
       isBot: false,
@@ -336,17 +331,17 @@ async function runTest(name, fn) {
       createCard("K", "diamonds"),
       createCard("9", "clubs"),
     ]);
-    decide(service, gameId, USER_A, "play");
-    decide(service, gameId, USER_B, "play");
+    await decide(service, gameId, USER_A, "play");
+    await decide(service, gameId, USER_B, "play");
     await service.whenIdle(COMMUNITY_CHAT);
-    service.tryStand({
+    await service.tryStand({
       gameId,
       userId: USER_A,
       isBot: false,
       chatId: COMMUNITY_CHAT,
       threadId: 123,
     });
-    service.tryStand({
+    await service.tryStand({
       gameId,
       userId: USER_B,
       isBot: false,
@@ -371,9 +366,9 @@ async function runTest(name, fn) {
       createCard("7", "clubs"),
       createCard("2", "spades"),
     ]);
-    decide(service, gameId, USER_A, "play");
+    await decide(service, gameId, USER_A, "play");
     await service.whenIdle(COMMUNITY_CHAT);
-    service.tryStand({
+    await service.tryStand({
       gameId,
       userId: USER_A,
       isBot: false,
@@ -396,9 +391,9 @@ async function runTest(name, fn) {
       createCard("K", "diamonds"),
       createCard("9", "clubs"),
     ]);
-    decide(service, gameId, USER_A, "play");
+    await decide(service, gameId, USER_A, "play");
     await service.whenIdle(COMMUNITY_CHAT);
-    service.tryStand({
+    await service.tryStand({
       gameId,
       userId: USER_A,
       isBot: false,
@@ -421,9 +416,9 @@ async function runTest(name, fn) {
       createCard("K", "diamonds"),
       createCard("Q", "clubs"),
     ]);
-    decide(service, gameId, USER_A, "play");
+    await decide(service, gameId, USER_A, "play");
     await service.whenIdle(COMMUNITY_CHAT);
-    service.tryStand({
+    await service.tryStand({
       gameId,
       userId: USER_A,
       isBot: false,
@@ -437,7 +432,7 @@ async function runTest(name, fn) {
   await runTest("49b. second bot loss same UTC day +0", async () => {
     const files = nextFiles();
     link(files, USER_A);
-    const first = awardBlackjackBotResultXp(
+    const first = await awardBlackjackBotResultXp(
       USER_A,
       "Alice",
       { result: "loss", eligible: true },
@@ -445,7 +440,7 @@ async function runTest(name, fn) {
       files.walletFile
     );
     assert.strictEqual(first.pointsToAdd, BLACKJACK_FIRST_COMPLETED_BOT_MIN_XP);
-    const second = awardBlackjackBotResultXp(
+    const second = await awardBlackjackBotResultXp(
       USER_A,
       "Alice",
       { result: "loss", eligible: true },
@@ -456,10 +451,10 @@ async function runTest(name, fn) {
     assert.strictEqual(pointsOf(files, USER_A), BLACKJACK_FIRST_COMPLETED_BOT_MIN_XP);
   });
 
-  await runTest("50. no negative lifetime XP", () => {
+  await runTest("50. no negative lifetime XP", async () => {
     const files = nextFiles();
     link(files, USER_A);
-    const loss = awardBlackjackBotResultXp(
+    const loss = await awardBlackjackBotResultXp(
       USER_A,
       "Alice",
       { result: "loss", eligible: true },
@@ -471,11 +466,11 @@ async function runTest(name, fn) {
     assert.strictEqual(pointsOf(files, USER_A), BLACKJACK_FIRST_COMPLETED_BOT_MIN_XP);
   });
 
-  await runTest("51-52. rank-up fields and announcement predicate", () => {
+  await runTest("51-52. rank-up fields and announcement predicate", async () => {
     const files = nextFiles();
     link(files, USER_A);
     seedPoints(files, USER_A, 24, "Alice");
-    const result = awardBlackjackPvpResultXp(
+    const result = await awardBlackjackPvpResultXp(
       USER_A,
       "Alice",
       { result: "win", eligible: true },
@@ -491,9 +486,9 @@ async function runTest(name, fn) {
     assert.strictEqual(isTrueRankUp(result), true);
   });
 
-  await runTest("53-54. wallet blocked 0 XP but slot still counts", () => {
+  await runTest("53-54. wallet blocked 0 XP but slot still counts", async () => {
     const files = nextFiles();
-    const reserved = reserveBlackjackRewardedRound(
+    const reserved = await reserveBlackjackRewardedRound(
       USER_A,
       "Alice",
       {},
@@ -503,7 +498,7 @@ async function runTest(name, fn) {
     assert.strictEqual(reserved.slotConsumed, true);
     assert.strictEqual(reserved.walletOk, false);
     assert.strictEqual(reserved.reason, XP_WALLET_REQUIRED);
-    const pass = awardBlackjackPassXp(
+    const pass = await awardBlackjackPassXp(
       USER_A,
       "Alice",
       { eligible: true, funOnly: true, shopFile: files.shopFile },
@@ -516,12 +511,12 @@ async function runTest(name, fn) {
     assert.strictEqual(getBlackjackStatus(USER_A, files.pointsFile).rewardedRoundsUsed, 1);
   });
 
-  await runTest("55-56. max 2 rewarded rounds then fun-only", () => {
+  await runTest("55-56. max 2 rewarded rounds then fun-only", async () => {
     const files = nextFiles();
     link(files, USER_A);
     for (let i = 0; i < 2; i += 1) {
-      reserveBlackjackRewardedRound(USER_A, "Alice", {}, files.pointsFile, files.walletFile);
-      awardBlackjackPassXp(
+      await reserveBlackjackRewardedRound(USER_A, "Alice", {}, files.pointsFile, files.walletFile);
+      await awardBlackjackPassXp(
         USER_A,
         "Alice",
         { eligible: true, shopFile: files.shopFile },
@@ -530,7 +525,7 @@ async function runTest(name, fn) {
       );
     }
     assert.strictEqual(pointsOf(files, USER_A), 4);
-    const third = reserveBlackjackRewardedRound(
+    const third = await reserveBlackjackRewardedRound(
       USER_A,
       "Alice",
       {},
@@ -539,7 +534,7 @@ async function runTest(name, fn) {
     );
     assert.strictEqual(third.eligible, false);
     assert.strictEqual(third.funOnly, true);
-    const fun = awardBlackjackBotResultXp(
+    const fun = await awardBlackjackBotResultXp(
       USER_A,
       "Alice",
       { result: "win", eligible: false, funOnly: true, shopFile: files.shopFile },
@@ -553,10 +548,10 @@ async function runTest(name, fn) {
     assert.strictEqual(BLACKJACK_STAKE_XP, 10);
   });
 
-  await runTest("57-58. UTC reset and restart preserves cap then clears next day", () => {
+  await runTest("57-58. UTC reset and restart preserves cap then clears next day", async () => {
     const files = nextFiles();
     link(files, USER_A);
-    reserveBlackjackRewardedRound(USER_A, "Alice", {}, files.pointsFile, files.walletFile);
+    await reserveBlackjackRewardedRound(USER_A, "Alice", {}, files.pointsFile, files.walletFile);
     const yesterday = utcYesterday();
     mutatePoints((data) => {
       data.users[USER_A].blackjack.rewardDate = yesterday;
@@ -566,7 +561,7 @@ async function runTest(name, fn) {
     assert.strictEqual(reloaded.users[USER_A].blackjack.rewardedRoundsUsed, 2);
     const status = getBlackjackStatus(USER_A, files.pointsFile);
     assert.strictEqual(status.rewardedRoundsUsed, 0);
-    const next = reserveBlackjackRewardedRound(
+    const next = await reserveBlackjackRewardedRound(
       USER_A,
       "Alice",
       {},
@@ -577,12 +572,12 @@ async function runTest(name, fn) {
     assert.strictEqual(next.rewardedRoundsUsed, 1);
   });
 
-  await runTest("59. same-opponent anti-farm", () => {
+  await runTest("59. same-opponent anti-farm", async () => {
     const files = nextFiles();
     link(files, USER_A);
     link(files, USER_B);
-    markBlackjackPvpMatchup(USER_A, USER_B, files.pointsFile);
-    const blocked = reserveBlackjackRewardedRound(
+    await markBlackjackPvpMatchup(USER_A, USER_B, files.pointsFile);
+    const blocked = await reserveBlackjackRewardedRound(
       USER_A,
       "Alice",
       { opponentUserId: USER_B },
@@ -591,7 +586,7 @@ async function runTest(name, fn) {
     );
     assert.strictEqual(blocked.pairBlocked, true);
     assert.strictEqual(blocked.slotConsumed, false);
-    const vsC = reserveBlackjackRewardedRound(
+    const vsC = await reserveBlackjackRewardedRound(
       USER_A,
       "Alice",
       { opponentUserId: USER_C },
@@ -600,7 +595,7 @@ async function runTest(name, fn) {
     );
     assert.strictEqual(vsC.pairBlocked, false);
     assert.strictEqual(vsC.slotConsumed, true);
-    const vsBot = reserveBlackjackRewardedRound(
+    const vsBot = await reserveBlackjackRewardedRound(
       USER_A,
       "Alice",
       {},
@@ -616,10 +611,10 @@ async function runTest(name, fn) {
     const { service } = createService();
     attachXp(service, files);
     const gameId = await startBotGame(service);
-    decide(service, gameId, USER_A, "pass");
+    await decide(service, gameId, USER_A, "pass");
     await service.whenIdle(COMMUNITY_CHAT);
     assert.strictEqual(pointsOf(files, USER_A), 2);
-    service.tryDecide({
+    await service.tryDecide({
       gameId,
       userId: USER_A,
       choice: "pass",
@@ -637,7 +632,7 @@ async function runTest(name, fn) {
     const { service } = createService();
     attachXp(service, files);
     const gameId = await startBotGame(service);
-    decide(service, gameId, USER_A, "pass");
+    await decide(service, gameId, USER_A, "pass");
     await service.whenIdle(COMMUNITY_CHAT);
     const snap = getDailyQuestSnapshot(USER_A, {
       shopFile: files.shopFile,
@@ -674,7 +669,7 @@ async function runTest(name, fn) {
   await runTest("64. Pass resolved counts", async () => {
     const files = nextFiles();
     link(files, USER_A);
-    const pass = awardBlackjackPassXp(
+    const pass = await awardBlackjackPassXp(
       USER_A,
       "Alice",
       { eligible: true, shopFile: files.shopFile },
@@ -689,10 +684,10 @@ async function runTest(name, fn) {
     assertEligibleBotGameProgress(snap);
   });
 
-  await runTest("65-66. fun-mode resolved counts, no duplicate Daily Quest Loot", () => {
+  await runTest("65-66. fun-mode resolved counts, no duplicate Daily Quest Loot", async () => {
     const files = nextFiles();
     link(files, USER_A);
-    awardBlackjackPassXp(
+    await awardBlackjackPassXp(
       USER_A,
       "Alice",
       { eligible: false, funOnly: true, shopFile: files.shopFile },
@@ -705,7 +700,7 @@ async function runTest(name, fn) {
     });
     assertEligibleBotGameProgress(snap);
     const loot = getLootBalance(USER_A, files.shopFile);
-    awardBlackjackPassXp(
+    await awardBlackjackPassXp(
       USER_A,
       "Alice",
       { eligible: false, funOnly: true, shopFile: files.shopFile },
@@ -727,8 +722,8 @@ async function runTest(name, fn) {
     const { service } = createService();
     attachXp(service, files);
     const gameId = await startPvp(service);
-    decide(service, gameId, USER_A, "pass");
-    decide(service, gameId, USER_B, "play");
+    await decide(service, gameId, USER_A, "pass");
+    await decide(service, gameId, USER_B, "play");
     await service.whenIdle(COMMUNITY_CHAT);
     assert.strictEqual(pointsOf(files, USER_A), BLACKJACK_PASS_XP);
     assert.strictEqual(pointsOf(files, USER_B), BLACKJACK_STAKE_XP);
@@ -741,7 +736,7 @@ async function runTest(name, fn) {
     attachXp(service, files);
     const gameId = await playBotWin(service);
     assert.strictEqual(pointsOf(files, USER_A), BLACKJACK_BOT_WIN_XP);
-    service.tryStand({
+    await service.tryStand({
       gameId,
       userId: USER_A,
       isBot: false,
@@ -796,17 +791,17 @@ async function runTest(name, fn) {
       createCard("8", "diamonds"),
       createCard("7", "clubs"),
     ]);
-    decide(service, gameId, USER_A, "play");
-    decide(service, gameId, USER_B, "play");
+    await decide(service, gameId, USER_A, "play");
+    await decide(service, gameId, USER_B, "play");
     await service.whenIdle(COMMUNITY_CHAT);
-    service.tryStand({
+    await service.tryStand({
       gameId,
       userId: USER_A,
       isBot: false,
       chatId: COMMUNITY_CHAT,
       threadId: 123,
     });
-    service.tryStand({
+    await service.tryStand({
       gameId,
       userId: USER_B,
       isBot: false,
@@ -818,10 +813,10 @@ async function runTest(name, fn) {
     assert.strictEqual(pointsOf(files, USER_B), 0);
   });
 
-  await runTest("first-completed: win stays 10 not 12", () => {
+  await runTest("first-completed: win stays 10 not 12", async () => {
     const files = nextFiles();
     link(files, USER_A);
-    const win = awardBlackjackBotResultXp(
+    const win = await awardBlackjackBotResultXp(
       USER_A,
       "Alice",
       { result: "win", eligible: true },
@@ -831,10 +826,10 @@ async function runTest(name, fn) {
     assert.strictEqual(win.pointsToAdd, BLACKJACK_BOT_WIN_XP);
   });
 
-  await runTest("first-completed: pass does not consume bot Play floor", () => {
+  await runTest("first-completed: pass does not consume bot Play floor", async () => {
     const files = nextFiles();
     link(files, USER_A);
-    awardBlackjackPassXp(
+    await awardBlackjackPassXp(
       USER_A,
       "Alice",
       { eligible: true },
@@ -842,7 +837,7 @@ async function runTest(name, fn) {
       files.walletFile
     );
     assert.strictEqual(pointsOf(files, USER_A), BLACKJACK_PASS_XP);
-    const loss = awardBlackjackBotResultXp(
+    const loss = await awardBlackjackBotResultXp(
       USER_A,
       "Alice",
       { result: "loss", eligible: true },
@@ -856,9 +851,9 @@ async function runTest(name, fn) {
     );
   });
 
-  await runTest("first-completed: wallet block does not consume the claim", () => {
+  await runTest("first-completed: wallet block does not consume the claim", async () => {
     const files = nextFiles();
-    const blocked = awardBlackjackBotResultXp(
+    const blocked = await awardBlackjackBotResultXp(
       USER_A,
       "Alice",
       { result: "loss", eligible: true },
@@ -869,7 +864,7 @@ async function runTest(name, fn) {
     assert.strictEqual(blocked.reason, XP_WALLET_REQUIRED);
     assert.strictEqual(pointsOf(files, USER_A), 0);
     link(files, USER_A);
-    const later = awardBlackjackBotResultXp(
+    const later = await awardBlackjackBotResultXp(
       USER_A,
       "Alice",
       { result: "loss", eligible: true },
@@ -879,10 +874,10 @@ async function runTest(name, fn) {
     assert.strictEqual(later.pointsToAdd, BLACKJACK_FIRST_COMPLETED_BOT_MIN_XP);
   });
 
-  await runTest("first-completed: fun-only loss does not consume the claim", () => {
+  await runTest("first-completed: fun-only loss does not consume the claim", async () => {
     const files = nextFiles();
     link(files, USER_A);
-    const fun = awardBlackjackBotResultXp(
+    const fun = await awardBlackjackBotResultXp(
       USER_A,
       "Alice",
       { result: "loss", eligible: false, funOnly: true },
@@ -890,7 +885,7 @@ async function runTest(name, fn) {
       files.walletFile
     );
     assert.strictEqual(fun.pointsToAdd, 0);
-    const later = awardBlackjackBotResultXp(
+    const later = await awardBlackjackBotResultXp(
       USER_A,
       "Alice",
       { result: "loss", eligible: true },
@@ -900,10 +895,10 @@ async function runTest(name, fn) {
     assert.strictEqual(later.pointsToAdd, BLACKJACK_FIRST_COMPLETED_BOT_MIN_XP);
   });
 
-  await runTest("first-completed: PvP loss stays +0", () => {
+  await runTest("first-completed: PvP loss stays +0", async () => {
     const files = nextFiles();
     link(files, USER_A);
-    const pvp = awardBlackjackPvpResultXp(
+    const pvp = await awardBlackjackPvpResultXp(
       USER_A,
       "Alice",
       { result: "loss", eligible: true },
@@ -911,7 +906,7 @@ async function runTest(name, fn) {
       files.walletFile
     );
     assert.strictEqual(pvp.pointsToAdd, 0);
-    const botLoss = awardBlackjackBotResultXp(
+    const botLoss = await awardBlackjackBotResultXp(
       USER_A,
       "Alice",
       { result: "loss", eligible: true },
@@ -921,13 +916,13 @@ async function runTest(name, fn) {
     assert.strictEqual(botLoss.pointsToAdd, BLACKJACK_FIRST_COMPLETED_BOT_MIN_XP);
   });
 
-  await runTest("first-completed: owner loss still grants floor", () => {
+  await runTest("first-completed: owner loss still grants floor", async () => {
     const prev = process.env.ADMIN_USER_ID;
     process.env.ADMIN_USER_ID = String(USER_A);
     try {
       const files = nextFiles();
       link(files, USER_A);
-      const loss = awardBlackjackBotResultXp(
+      const loss = await awardBlackjackBotResultXp(
         USER_A,
         "Alice",
         { result: "loss", eligible: true },

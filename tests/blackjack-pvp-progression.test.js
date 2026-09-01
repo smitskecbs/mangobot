@@ -112,26 +112,22 @@ function createFakeTimers() {
 
 function attachXp(service, files) {
   service.setAwardHandlers({
-    reserve: (userId, name, payload) =>
-      reserveBlackjackRewardedRound(userId, name, payload, files.pointsFile, files.walletFile),
-    pass: (userId, name, payload) =>
-      awardBlackjackPassXp(
+    reserve: (userId, name, payload) => reserveBlackjackRewardedRound(userId, name, payload, files.pointsFile, files.walletFile),
+    pass: (userId, name, payload) => awardBlackjackPassXp(
         userId,
         name,
         { ...payload, shopFile: files.shopFile },
         files.pointsFile,
         files.walletFile
       ),
-    bot: (userId, name, payload) =>
-      awardBlackjackBotResultXp(
+    bot: (userId, name, payload) => awardBlackjackBotResultXp(
         userId,
         name,
         { ...payload, shopFile: files.shopFile },
         files.pointsFile,
         files.walletFile
       ),
-    pvp: (userId, name, payload) =>
-      awardBlackjackPvpResultXp(
+    pvp: (userId, name, payload) => awardBlackjackPvpResultXp(
         userId,
         name,
         { ...payload, shopFile: files.shopFile },
@@ -139,8 +135,7 @@ function attachXp(service, files) {
         files.walletFile
       ),
     status: (userId) => getBlackjackStatus(userId, files.pointsFile),
-    markPair: (userId, opponentId) =>
-      markBlackjackPvpMatchup(userId, opponentId, files.pointsFile),
+    markPair: (userId, opponentId) => markBlackjackPvpMatchup(userId, opponentId, files.pointsFile),
   });
 }
 
@@ -199,7 +194,7 @@ async function startPvp(service) {
   return started.gameId;
 }
 
-function decide(service, gameId, userId, choice) {
+async function decide(service, gameId, userId, choice) {
   return service.tryDecide({
     gameId,
     userId,
@@ -230,8 +225,8 @@ async function runTest(name, fn) {
     link(files, USER_B);
     const { service } = createBj(files);
     const gameId = await startPvp(service);
-    decide(service, gameId, USER_A, "pass");
-    decide(service, gameId, USER_B, "pass");
+    await decide(service, gameId, USER_A, "pass");
+    await decide(service, gameId, USER_B, "pass");
     await service.whenIdle(COMMUNITY_CHAT);
     assert.strictEqual(matchesOf(files, USER_A), 1);
     assert.strictEqual(matchesOf(files, USER_B), 1);
@@ -243,7 +238,7 @@ async function runTest(name, fn) {
     link(files, USER_A);
     const { service } = createBj(files);
     const gameId = await startBotGame(service);
-    decide(service, gameId, USER_A, "pass");
+    await decide(service, gameId, USER_A, "pass");
     await service.whenIdle(COMMUNITY_CHAT);
     assert.strictEqual(matchesOf(files, USER_A), 0);
   });
@@ -269,11 +264,11 @@ async function runTest(name, fn) {
     link(files, USER_B);
     const { service } = createBj(files);
     const gameId = await startPvp(service);
-    decide(service, gameId, USER_A, "pass");
-    decide(service, gameId, USER_B, "pass");
+    await decide(service, gameId, USER_A, "pass");
+    await decide(service, gameId, USER_B, "pass");
     await service.whenIdle(COMMUNITY_CHAT);
     assert.strictEqual(matchesOf(files, USER_A), 1);
-    noteHumanPvpMatch(
+    await noteHumanPvpMatch(
       USER_A,
       { game: "blackjack", matchId: gameId, opponentType: "human", shopFile: files.shopFile },
       files.pointsFile
@@ -302,11 +297,11 @@ async function runTest(name, fn) {
       displayName: "Bob",
       chatId: COMMUNITY_CHAT,
     });
-    ttt.move({ sessionId: started.session.id, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
-    ttt.move({ sessionId: started.session.id, userId: USER_B, cell: 3, chatId: COMMUNITY_CHAT });
-    ttt.move({ sessionId: started.session.id, userId: USER_A, cell: 1, chatId: COMMUNITY_CHAT });
-    ttt.move({ sessionId: started.session.id, userId: USER_B, cell: 4, chatId: COMMUNITY_CHAT });
-    const win = ttt.move({
+    await ttt.move({ sessionId: started.session.id, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
+    await ttt.move({ sessionId: started.session.id, userId: USER_B, cell: 3, chatId: COMMUNITY_CHAT });
+    await ttt.move({ sessionId: started.session.id, userId: USER_A, cell: 1, chatId: COMMUNITY_CHAT });
+    await ttt.move({ sessionId: started.session.id, userId: USER_B, cell: 4, chatId: COMMUNITY_CHAT });
+    const win = await ttt.move({
       sessionId: started.session.id,
       userId: USER_A,
       cell: 2,
@@ -333,8 +328,8 @@ async function runTest(name, fn) {
     ttt.setMessageId(started.session.id, 1);
     const expired = ttt.expireJoin(started.session.id);
     assert.strictEqual(expired.session.opponentType, "bot");
-    ttt.move({ sessionId: started.session.id, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
-    const ended = ttt.resolveTurnTimeout(started.session.id);
+    await ttt.move({ sessionId: started.session.id, userId: USER_A, cell: 0, chatId: COMMUNITY_CHAT });
+    const ended = await ttt.resolveTurnTimeout(started.session.id);
     assert.ok(ended.session.status === TTT_STATUS.WON || ended.session.status === TTT_STATUS.DRAW);
     assert.strictEqual(matchesOf(files, USER_A), 0);
   });

@@ -84,9 +84,9 @@ function getWeekIdForTest() {
     .slice(0, 10);
 }
 
-function runTest(name, fn) {
+async function runTest(name, fn) {
   try {
-    fn();
+    await fn();
     console.log(`✓ ${name}`);
   } catch (err) {
     console.error(`✗ ${name}`);
@@ -112,9 +112,10 @@ function groupCtx({
   };
 }
 
-runTest("1. first activity → current 1 longest 1", () => {
+(async () => {
+await runTest("1. first activity → current 1 longest 1", async () => {
   const file = pointsFile();
-  const r = awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-10");
+  const r = await awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-10");
   assert.strictEqual(r.awarded, true);
   assert.strictEqual(r.streak.current, 1);
   assert.strictEqual(r.streak.longest, 1);
@@ -126,65 +127,65 @@ runTest("1. first activity → current 1 longest 1", () => {
   });
 });
 
-runTest("2. second message same date → stays 1", () => {
+await runTest("2. second message same date → stays 1", async () => {
   const file = pointsFile();
-  awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-10");
-  const r = awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-10");
+  await awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-10");
+  const r = await awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-10");
   assert.strictEqual(r.awarded, false);
   assert.strictEqual(r.streak.current, 1);
   assert.strictEqual(readStreak(loadPoints(file).users[String(ALICE)]).current, 1);
   assert.strictEqual(loadPoints(file).users[String(ALICE)].points, 1);
 });
 
-runTest("3. next day → current 2", () => {
+await runTest("3. next day → current 2", async () => {
   const file = pointsFile();
-  awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-10");
-  const r = awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-11");
+  await awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-10");
+  const r = await awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-11");
   assert.strictEqual(r.awarded, true);
   assert.strictEqual(r.streak.current, 2);
   assert.strictEqual(r.streak.longest, 2);
 });
 
-runTest("4. third consecutive → 3", () => {
+await runTest("4. third consecutive → 3", async () => {
   const file = pointsFile();
-  awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-10");
-  awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-11");
-  const r = awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-12");
+  await awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-10");
+  await awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-11");
+  const r = await awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-12");
   assert.strictEqual(r.streak.current, 3);
   assert.strictEqual(r.streak.longest, 3);
 });
 
-runTest("5. miss a day → reset 1", () => {
+await runTest("5. miss a day → reset 1", async () => {
   const file = pointsFile();
-  awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-10");
-  awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-11");
-  const r = awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-13");
+  await awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-10");
+  await awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-11");
+  const r = await awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-13");
   assert.strictEqual(r.streak.current, 1);
 });
 
-runTest("6. longest keeps old record after miss", () => {
+await runTest("6. longest keeps old record after miss", async () => {
   const file = pointsFile();
-  awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-10");
-  awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-11");
-  awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-12");
-  const r = awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-14");
+  await awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-10");
+  await awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-11");
+  await awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-12");
+  const r = await awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-14");
   assert.strictEqual(r.streak.current, 1);
   assert.strictEqual(r.streak.longest, 3);
 });
 
-runTest("7. current can later pass longest", () => {
+await runTest("7. current can later pass longest", async () => {
   const file = pointsFile();
-  awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-01");
-  awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-02");
-  awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-04");
-  awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-05");
-  awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-06");
-  const r = awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-07");
+  await awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-01");
+  await awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-02");
+  await awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-04");
+  await awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-05");
+  await awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-06");
+  const r = await awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-07");
   assert.strictEqual(r.streak.current, 4);
   assert.strictEqual(r.streak.longest, 4);
 });
 
-runTest("8. legacy no streak → safe", () => {
+await runTest("8. legacy no streak → safe", async () => {
   const file = pointsFile();
   savePoints(
     {
@@ -208,12 +209,12 @@ runTest("8. legacy no streak → safe", () => {
     longest: 0,
     lastActiveDate: null,
   });
-  const r = awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-10");
+  const r = await awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-10");
   assert.strictEqual(r.awarded, true);
   assert.strictEqual(r.streak.current, 1);
 });
 
-runTest("9. UTC date boundary", () => {
+await runTest("9. UTC date boundary", async () => {
   assert.strictEqual(getTodayDate(new Date("2026-08-14T00:00:00.000Z")), "2026-08-14");
   assert.strictEqual(getTodayDate(new Date("2026-08-13T23:59:59.999Z")), "2026-08-13");
   assert.strictEqual(utcYesterday("2026-08-14"), "2026-08-13");
@@ -222,106 +223,106 @@ runTest("9. UTC date boundary", () => {
   assert.strictEqual(next.current, 2);
 });
 
-runTest("10. two users independent", () => {
+await runTest("10. two users independent", async () => {
   const file = pointsFile();
-  awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-10");
-  awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-11");
-  awardDailyActivityPoint(BOB, "Bob", file, "2026-08-11");
+  await awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-10");
+  await awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-11");
+  await awardDailyActivityPoint(BOB, "Bob", file, "2026-08-11");
   const data = loadPoints(file);
   assert.strictEqual(readStreak(data.users[String(ALICE)]).current, 2);
   assert.strictEqual(readStreak(data.users[String(BOB)]).current, 1);
 });
 
-runTest("11. concurrent same-day messages increment streak once", () => {
+await runTest("11. concurrent same-day messages increment streak once", async () => {
   const file = pointsFile();
-  const a = awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-10");
-  const b = awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-10");
+  const a = await awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-10");
+  const b = await awardDailyActivityPoint(ALICE, "Alice", file, "2026-08-10");
   assert.strictEqual(a.awarded, true);
   assert.strictEqual(b.awarded, false);
   assert.strictEqual(loadPoints(file).users[String(ALICE)].points, 1);
   assert.strictEqual(readStreak(loadPoints(file).users[String(ALICE)]).current, 1);
 });
 
-runTest("12. owner can earn community award", () => {
+await runTest("12. owner can earn community award", async () => {
   const file = pointsFile();
   assert.strictEqual(isCommunityCompetitionExcluded(OWNER_ID), false);
-  const r = awardDailyActivityPoint(OWNER_ID, "Kevin", file, "2026-08-10");
+  const r = await awardDailyActivityPoint(OWNER_ID, "Kevin", file, "2026-08-10");
   assert.strictEqual(r.awarded, true);
   assert.notStrictEqual(r.reason, "excluded");
   assert.strictEqual(loadPoints(file).users[OWNER_ID].points, 1);
 });
 
-runTest("13. normal text counts", () => {
+await runTest("13. normal text counts", async () => {
   const file = pointsFile();
   const ctx = groupCtx({ message: { text: "hello community" } });
   assert.strictEqual(isEligibleCommunityActivityMessage(ctx), true);
-  const result = processCommunityMessage(ctx, { pointsFile: file });
+  const result = await processCommunityMessage(ctx, { pointsFile: file });
   assert.strictEqual(result.activityResult.awarded, true);
 });
 
-runTest("14. reply counts", () => {
+await runTest("14. reply counts", async () => {
   const file = pointsFile();
   const ctx = groupCtx({
     message: { text: "nice one", reply_to_message: { message_id: 9, text: "hi" } },
   });
   assert.strictEqual(isEligibleCommunityActivityMessage(ctx), true);
-  const result = processCommunityMessage(ctx, { pointsFile: file });
+  const result = await processCommunityMessage(ctx, { pointsFile: file });
   assert.strictEqual(result.activityResult.awarded, true);
 });
 
-runTest("15. sticker counts", () => {
+await runTest("15. sticker counts", async () => {
   const file = pointsFile();
   const ctx = groupCtx({ message: { sticker: { file_id: "sticker-1" } } });
   assert.strictEqual(isEligibleCommunityActivityMessage(ctx), true);
-  const result = processCommunityMessage(ctx, { pointsFile: file });
+  const result = await processCommunityMessage(ctx, { pointsFile: file });
   assert.strictEqual(result.activityResult.awarded, true);
   assert.strictEqual(result.triggerResult, null);
 });
 
-runTest("16. GIF/animation counts", () => {
+await runTest("16. GIF/animation counts", async () => {
   const file = pointsFile();
   const ctx = groupCtx({ message: { animation: { file_id: "gif-1" } } });
   assert.strictEqual(isEligibleCommunityActivityMessage(ctx), true);
-  const result = processCommunityMessage(ctx, { pointsFile: file });
+  const result = await processCommunityMessage(ctx, { pointsFile: file });
   assert.strictEqual(result.activityResult.awarded, true);
 });
 
-runTest("17. photo/caption counts", () => {
+await runTest("17. photo/caption counts", async () => {
   const file = pointsFile();
   const ctx = groupCtx({
     message: { photo: [{ file_id: "p1" }], caption: "look at this" },
   });
   assert.strictEqual(isEligibleCommunityActivityMessage(ctx), true);
-  const result = processCommunityMessage(ctx, { pointsFile: file });
+  const result = await processCommunityMessage(ctx, { pointsFile: file });
   assert.strictEqual(result.activityResult.awarded, true);
 });
 
-runTest("18. video/media counts", () => {
+await runTest("18. video/media counts", async () => {
   const file = pointsFile();
   const videoCtx = groupCtx({ message: { video: { file_id: "v1" } } });
   const noteCtx = groupCtx({ userId: BOB, message: { video_note: { file_id: "vn1" } } });
   assert.strictEqual(isEligibleCommunityActivityMessage(videoCtx), true);
   assert.strictEqual(isEligibleCommunityActivityMessage(noteCtx), true);
   assert.strictEqual(
-    processCommunityMessage(videoCtx, { pointsFile: file }).activityResult.awarded,
+    (await processCommunityMessage(videoCtx, { pointsFile: file })).activityResult.awarded,
     true
   );
   assert.strictEqual(
-    processCommunityMessage(noteCtx, { pointsFile: file }).activityResult.awarded,
+    (await processCommunityMessage(noteCtx, { pointsFile: file })).activityResult.awarded,
     true
   );
 });
 
-runTest("19. slash command does not count", () => {
+await runTest("19. slash command does not count", async () => {
   const file = pointsFile();
   const ctx = groupCtx({ message: { text: "/points" } });
   assert.strictEqual(isEligibleCommunityActivityMessage(ctx), false);
   assert.strictEqual(shouldSkipCommunityActivity(ctx, "/points"), true);
-  const result = processCommunityMessage(ctx, { pointsFile: file });
+  const result = await processCommunityMessage(ctx, { pointsFile: file });
   assert.strictEqual(result.activityResult, null);
 });
 
-runTest("20. callback does not count", () => {
+await runTest("20. callback does not count", async () => {
   const ctx = groupCtx({
     callbackQuery: { data: "gmenu:streak" },
     message: undefined,
@@ -330,19 +331,19 @@ runTest("20. callback does not count", () => {
   assert.strictEqual(isEligibleCommunityActivityMessage(ctx), false);
 });
 
-runTest("21. bot does not count", () => {
+await runTest("21. bot does not count", async () => {
   const ctx = groupCtx({ isBot: true, message: { text: "hello" } });
   assert.strictEqual(isEligibleCommunityActivityMessage(ctx), false);
 });
 
-runTest("22. service message does not count", () => {
+await runTest("22. service message does not count", async () => {
   const ctx = groupCtx({
     message: { new_chat_members: [{ id: 1, first_name: "x" }] },
   });
   assert.strictEqual(isEligibleCommunityActivityMessage(ctx), false);
 });
 
-runTest("private hello is not community activity", () => {
+await runTest("private hello is not community activity", async () => {
   const ctx = {
     from: { id: ALICE, first_name: "Alice", is_bot: false },
     chat: { id: ALICE, type: "private" },
@@ -351,12 +352,12 @@ runTest("private hello is not community activity", () => {
   assert.strictEqual(isEligibleCommunityActivityMessage(ctx), false);
   assert.strictEqual(shouldSkipCommunityActivity(ctx, "hello"), true);
   const file = pointsFile();
-  const result = processCommunityMessage(ctx, { pointsFile: file });
+  const result = await processCommunityMessage(ctx, { pointsFile: file });
   assert.strictEqual(result.activityResult, null);
   assert.strictEqual(loadPoints(file).users[String(ALICE)], undefined);
 });
 
-runTest("23. wrong group does not count", () => {
+await runTest("23. wrong group does not count", async () => {
   const ctx = groupCtx({
     chatId: OTHER_CHAT,
     message: { text: "hello" },
@@ -364,17 +365,17 @@ runTest("23. wrong group does not count", () => {
   assert.strictEqual(isEligibleCommunityActivityMessage(ctx), false);
 });
 
-runTest("24. multiple activity types same day → max +1", () => {
+await runTest("24. multiple activity types same day → max +1", async () => {
   const file = pointsFile();
-  const text = processCommunityMessage(
+  const text = await processCommunityMessage(
     groupCtx({ message: { text: "hi" } }),
     { pointsFile: file }
   );
-  const sticker = processCommunityMessage(
+  const sticker = await processCommunityMessage(
     groupCtx({ message: { sticker: { file_id: "s" } } }),
     { pointsFile: file }
   );
-  const gif = processCommunityMessage(
+  const gif = await processCommunityMessage(
     groupCtx({ message: { animation: { file_id: "g" } } }),
     { pointsFile: file }
   );
@@ -385,10 +386,10 @@ runTest("24. multiple activity types same day → max +1", () => {
   assert.strictEqual(readStreak(loadPoints(file).users[String(ALICE)]).current, 1);
 });
 
-runTest("25. first GMango of day: activity + trigger + streak once", () => {
+await runTest("25. first GMango of day: activity + trigger + streak once", async () => {
   const file = pointsFile();
   const ctx = groupCtx({ message: { text: "GMango 🥭" } });
-  const result = processCommunityMessage(ctx, { pointsFile: file });
+  const result = await processCommunityMessage(ctx, { pointsFile: file });
   assert.strictEqual(result.activityResult.awarded, true);
   assert.strictEqual(result.triggerResult.awarded, true);
   assert.strictEqual(result.triggerResult.pointsToAdd, 2);
@@ -397,12 +398,12 @@ runTest("25. first GMango of day: activity + trigger + streak once", () => {
   assert.strictEqual(readStreak(user).current, 1);
 });
 
-runTest("26. second GMango same day: no second activity/streak; trigger duplicate", () => {
+await runTest("26. second GMango same day: no second activity/streak; trigger duplicate", async () => {
   const file = pointsFile();
-  processCommunityMessage(groupCtx({ message: { text: "GMango" } }), {
+  await processCommunityMessage(groupCtx({ message: { text: "GMango" } }), {
     pointsFile: file,
   });
-  const second = processCommunityMessage(
+  const second = await processCommunityMessage(
     groupCtx({ message: { text: "GMango again" } }),
     { pointsFile: file }
   );
@@ -412,7 +413,7 @@ runTest("26. second GMango same day: no second activity/streak; trigger duplicat
   assert.strictEqual(readStreak(loadPoints(file).users[String(ALICE)]).current, 1);
 });
 
-runTest("27. max one rank-up reply", () => {
+await runTest("27. max one rank-up reply", async () => {
   const file = pointsFile();
   savePoints(
     {
@@ -430,7 +431,7 @@ runTest("27. max one rank-up reply", () => {
     },
     file
   );
-  const result = processCommunityMessage(
+  const result = await processCommunityMessage(
     groupCtx({ message: { text: "GMango 🥭" } }),
     { pointsFile: file }
   );
@@ -445,7 +446,7 @@ runTest("27. max one rank-up reply", () => {
   assert.strictEqual(result.reply, reply);
 });
 
-runTest("28-31. owner included on lifetime/weekly/streak boards", () => {
+await runTest("28-31. owner included on lifetime/weekly/streak boards", async () => {
   const file = pointsFile();
   savePoints(
     {
@@ -501,16 +502,16 @@ runTest("28-31. owner included on lifetime/weekly/streak boards", () => {
   assert.ok(ctx2.replies[0].text.includes("🥇 Kevin — 40 days"));
 });
 
-runTest("32-35. owner can earn daily/GM/PvP/ChatFight XP", () => {
+await runTest("32-35. owner can earn daily/GM/PvP/ChatFight XP", async () => {
   const file = pointsFile();
-  assert.strictEqual(awardDailyActivityPoint(OWNER_ID, "Kevin", file).awarded, true);
-  assert.strictEqual(awardTriggerPoints(OWNER_ID, "Kevin", "gmango", file).awarded, true);
-  assert.strictEqual(awardPvpWinXp(OWNER_ID, "Kevin", file).awarded, true);
-  assert.strictEqual(awardChatFightXp(OWNER_ID, "Kevin", file).awarded, true);
+  assert.strictEqual((await awardDailyActivityPoint(OWNER_ID, "Kevin", file)).awarded, true);
+  assert.strictEqual((await awardTriggerPoints(OWNER_ID, "Kevin", "gmango", file)).awarded, true);
+  assert.strictEqual((await awardPvpWinXp(OWNER_ID, "Kevin", file)).awarded, true);
+  assert.strictEqual((await awardChatFightXp(OWNER_ID, "Kevin", file)).awarded, true);
   assert.ok(loadPoints(file).users[OWNER_ID].points > 0);
 });
 
-runTest("36-37. Snake and Bounch owner scores stay visible", () => {
+await runTest("36-37. Snake and Bounch owner scores stay visible", async () => {
   const snakeFile = path.join(tempDir, "snake.json");
   const bounchFile = path.join(tempDir, "bounch.json");
   writeScoresFile(snakeFile, {
@@ -545,21 +546,21 @@ runTest("36-37. Snake and Bounch owner scores stay visible", () => {
   assert.strictEqual(getSnakeDisplay(snakeFile, 10)[0].name, "Kevin");
   assert.strictEqual(bounchScores.getDisplayLeaderboard(bounchFile, 10)[0].name, "Kevin");
   const xpFile = pointsFile();
-  assert.strictEqual(awardSnakeGameXp(OWNER_ID, "Kevin", xpFile).awarded, true);
+  assert.strictEqual((await awardSnakeGameXp(OWNER_ID, "Kevin", xpFile)).awarded, true);
 });
 
-runTest("sticker does not GM-trigger without text", () => {
+await runTest("sticker does not GM-trigger without text", async () => {
   const file = pointsFile();
-  const result = processCommunityMessage(
+  const result = await processCommunityMessage(
     groupCtx({ message: { sticker: { file_id: "s" }, caption: undefined } }),
     { pointsFile: file }
   );
   assert.strictEqual(result.triggerResult, null);
 });
 
-runTest("photo caption GMango can trigger + activity", () => {
+await runTest("photo caption GMango can trigger + activity", async () => {
   const file = pointsFile();
-  const result = processCommunityMessage(
+  const result = await processCommunityMessage(
     groupCtx({ message: { photo: [{ file_id: "p" }], caption: "GMango" } }),
     { pointsFile: file }
   );
@@ -567,9 +568,9 @@ runTest("photo caption GMango can trigger + activity", () => {
   assert.strictEqual(result.triggerResult.awarded, true);
 });
 
-runTest("private /points shows streak fields", () => {
+await runTest("private /points shows streak fields", async () => {
   const file = pointsFile();
-  awardDailyActivityPoint(ALICE, "Alice", file, getTodayDate());
+  await awardDailyActivityPoint(ALICE, "Alice", file, getTodayDate());
   const ctx = {
     chat: { type: "private" },
     from: { id: ALICE, first_name: "Alice" },
@@ -586,7 +587,7 @@ runTest("private /points shows streak fields", () => {
   assert.ok(card.includes("XP: 1"));
 });
 
-runTest("my streak private zero state", () => {
+await runTest("my streak private zero state", async () => {
   const file = pointsFile();
   const ctx = {
     chat: { type: "private" },
@@ -612,7 +613,7 @@ runTest("my streak private zero state", () => {
   );
 });
 
-runTest("streak sort: current desc then longest then XP; ranks renumbered", () => {
+await runTest("streak sort: current desc then longest then XP; ranks renumbered", async () => {
   const users = {
     [OWNER_ID]: {
       name: "Kevin",
@@ -649,7 +650,7 @@ function seedLegacySameDayActivity(file, userId, name, extras = {}) {
   );
 }
 
-runTest("legacy same-day activityDate without streak needs repair", () => {
+await runTest("legacy same-day activityDate without streak needs repair", async () => {
   const today = getTodayDate();
   const user = {
     points: 5,
@@ -664,12 +665,12 @@ runTest("legacy same-day activityDate without streak needs repair", () => {
   });
 });
 
-runTest("legacy: activityDate=today, streak missing → next group activity repairs without XP", () => {
+await runTest("legacy: activityDate=today, streak missing → next group activity repairs without XP", async () => {
   const file = pointsFile();
   seedLegacySameDayActivity(file, ALICE, "Alice", { points: 5, weeklyPoints: 2 });
   const before = loadPoints(file).users[String(ALICE)];
   assert.strictEqual(needsSameDayStreakRepair(before, getTodayDate()), true);
-  const result = processCommunityMessage(groupCtx({ message: { text: "hello again" } }), {
+  const result = await processCommunityMessage(groupCtx({ message: { text: "hello again" } }), {
     pointsFile: file,
   });
   assert.strictEqual(result.activityResult.awarded, false);
@@ -685,7 +686,7 @@ runTest("legacy: activityDate=today, streak missing → next group activity repa
   });
 });
 
-runTest("legacy: streak 0/0/null repairs once", () => {
+await runTest("legacy: streak 0/0/null repairs once", async () => {
   const file = pointsFile();
   const today = getTodayDate();
   savePoints(
@@ -705,11 +706,11 @@ runTest("legacy: streak 0/0/null repairs once", () => {
     },
     file
   );
-  const first = awardDailyActivityPoint(ALICE, "Alice", file, today);
+  const first = await awardDailyActivityPoint(ALICE, "Alice", file, today);
   assert.strictEqual(first.awarded, false);
   assert.strictEqual(first.streakRepaired, true);
   assert.strictEqual(first.streak.current, 1);
-  const second = awardDailyActivityPoint(ALICE, "Alice", file, today);
+  const second = await awardDailyActivityPoint(ALICE, "Alice", file, today);
   assert.strictEqual(second.awarded, false);
   assert.strictEqual(second.streakRepaired, false);
   assert.strictEqual(second.streak.current, 1);
@@ -719,11 +720,11 @@ runTest("legacy: streak 0/0/null repairs once", () => {
   assert.strictEqual(readStreak(user).current, 1);
 });
 
-runTest("legacy: second message today keeps streak 1 and no extra XP", () => {
+await runTest("legacy: second message today keeps streak 1 and no extra XP", async () => {
   const file = pointsFile();
   seedLegacySameDayActivity(file, ALICE, "Alice", { points: 5, weeklyPoints: 2 });
-  processCommunityMessage(groupCtx({ message: { text: "first" } }), { pointsFile: file });
-  const second = processCommunityMessage(groupCtx({ message: { text: "second" } }), {
+  await processCommunityMessage(groupCtx({ message: { text: "first" } }), { pointsFile: file });
+  const second = await processCommunityMessage(groupCtx({ message: { text: "second" } }), {
     pointsFile: file,
   });
   assert.strictEqual(second.activityResult.awarded, false);
@@ -734,7 +735,7 @@ runTest("legacy: second message today keeps streak 1 and no extra XP", () => {
   assert.strictEqual(readStreak(user).longest, 1);
 });
 
-runTest("legacy: owner with activityDate today can repair streak without extra XP", () => {
+await runTest("legacy: owner with activityDate today can repair streak without extra XP", async () => {
   const file = pointsFile();
   const today = getTodayDate();
   savePoints(
@@ -753,7 +754,7 @@ runTest("legacy: owner with activityDate today can repair streak without extra X
     },
     file
   );
-  const result = processCommunityMessage(
+  const result = await processCommunityMessage(
     groupCtx({ userId: Number(OWNER_ID), firstName: "Kevin", message: { text: "hello" } }),
     { pointsFile: file }
   );
@@ -769,7 +770,7 @@ runTest("legacy: owner with activityDate today can repair streak without extra X
   });
 });
 
-runTest("legacy: private message does not repair", () => {
+await runTest("legacy: private message does not repair", async () => {
   const file = pointsFile();
   seedLegacySameDayActivity(file, ALICE, "Alice", { points: 5, weeklyPoints: 2 });
   const ctx = {
@@ -777,7 +778,7 @@ runTest("legacy: private message does not repair", () => {
     chat: { id: ALICE, type: "private" },
     message: { text: "hello" },
   };
-  const result = processCommunityMessage(ctx, { pointsFile: file });
+  const result = await processCommunityMessage(ctx, { pointsFile: file });
   assert.strictEqual(result.activityResult, null);
   const user = loadPoints(file).users[String(ALICE)];
   assert.strictEqual(needsSameDayStreakRepair(user, getTodayDate()), true);
@@ -789,10 +790,10 @@ runTest("legacy: private message does not repair", () => {
   assert.strictEqual(user.points, 5);
 });
 
-runTest("legacy: wrong Telegram group does not repair", () => {
+await runTest("legacy: wrong Telegram group does not repair", async () => {
   const file = pointsFile();
   seedLegacySameDayActivity(file, ALICE, "Alice", { points: 5, weeklyPoints: 2 });
-  const result = processCommunityMessage(
+  const result = await processCommunityMessage(
     groupCtx({ chatId: OTHER_CHAT, message: { text: "hello" } }),
     { pointsFile: file }
   );
@@ -802,7 +803,7 @@ runTest("legacy: wrong Telegram group does not repair", () => {
   assert.strictEqual(readStreak(user).current, 0);
 });
 
-runTest("yesterday activityDate is not treated as today's streak", () => {
+await runTest("yesterday activityDate is not treated as today's streak", async () => {
   const file = pointsFile();
   const yesterday = utcYesterday(getTodayDate());
   seedLegacySameDayActivity(file, ALICE, "Alice", {
@@ -833,7 +834,7 @@ runTest("yesterday activityDate is not treated as today's streak", () => {
   assert.strictEqual(afterRead.activityDate, yesterday);
 });
 
-runTest("/streak and /streakrecord see repaired user; boards filter zeros", () => {
+await runTest("/streak and /streakrecord see repaired user; boards filter zeros", async () => {
   const file = pointsFile();
   seedLegacySameDayActivity(file, ALICE, "Alice", { points: 5, weeklyPoints: 2 });
   savePoints(
@@ -852,7 +853,7 @@ runTest("/streak and /streakrecord see repaired user; boards filter zeros", () =
     },
     file
   );
-  processCommunityMessage(groupCtx({ message: { text: "hi" } }), { pointsFile: file });
+  await processCommunityMessage(groupCtx({ message: { text: "hi" } }), { pointsFile: file });
   const users = loadPoints(file).users;
   assert.deepStrictEqual(getCurrentStreakTop(users).map((u) => u.name), ["Alice"]);
   assert.deepStrictEqual(getLongestStreakTop(users).map((u) => u.name), ["Alice"]);
@@ -883,7 +884,7 @@ runTest("/streak and /streakrecord see repaired user; boards filter zeros", () =
   assert.ok(!recordCtx.replies[0].text.includes("No streak records yet"));
 });
 
-runTest("/streak read does not repair without activity", () => {
+await runTest("/streak read does not repair without activity", async () => {
   const file = pointsFile();
   seedLegacySameDayActivity(file, ALICE, "Alice", { points: 5, weeklyPoints: 2 });
   const ctx = {
@@ -905,7 +906,7 @@ runTest("/streak read does not repair without activity", () => {
   });
 });
 
-runTest("startup repair: activityDate=today + no streak → board visible, no XP", () => {
+await runTest("startup repair: activityDate=today + no streak → board visible, no XP", async () => {
   const {
     repairCurrentDayStreaks,
   } = require("../services/points");
@@ -951,7 +952,7 @@ runTest("startup repair: activityDate=today + no streak → board visible, no XP
     file
   );
 
-  const result = repairCurrentDayStreaks(file, today);
+  const result = await repairCurrentDayStreaks(file, today);
   assert.strictEqual(result.repaired, 3);
   assert.strictEqual(result.written, true);
 
@@ -999,20 +1000,26 @@ runTest("startup repair: activityDate=today + no streak → board visible, no XP
   handleStreakRecord(recordCtx, { pointsFile: file });
   assert.ok(recordCtx.replies[0].text.includes("Alice — 1 days"));
 
-  const again = repairCurrentDayStreaks(file, today);
+  const again = await repairCurrentDayStreaks(file, today);
   assert.strictEqual(again.repaired, 0);
   assert.strictEqual(again.written, false);
 });
 
-runTest("startup repair: no-write when count=0", () => {
+await runTest("startup repair: no-write when count=0", async () => {
   const { repairCurrentDayStreaks } = require("../services/points");
   const file = pointsFile();
   savePoints({ users: {} }, file);
-  const result = repairCurrentDayStreaks(file, getTodayDate());
+  const result = await repairCurrentDayStreaks(file, getTodayDate());
   assert.strictEqual(result.repaired, 0);
   assert.strictEqual(result.written, false);
 });
 
-fs.rmSync(tempDir, { recursive: true, force: true });
+
+  fs.rmSync(tempDir, { recursive: true, force: true });
 restoreEnv();
 console.log("\nAll streak/activity tests passed.");
+
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

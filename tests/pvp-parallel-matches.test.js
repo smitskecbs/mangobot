@@ -122,7 +122,7 @@ async function runTest(name, fn) {
 async function main() {
   resetEnv();
 
-  await runTest("two TTT matches run in parallel", () => {
+  await runTest("two TTT matches run in parallel", async () => {
     const { ttt } = createBundle();
     const a = ttt.startChallenge({
       chatId: COMMUNITY_CHAT,
@@ -159,7 +159,7 @@ async function main() {
     assert.strictEqual(ttt.getSession(b.session.id).board[0], null);
   });
 
-  await runTest("TTT and Connect Four run in parallel", () => {
+  await runTest("TTT and Connect Four run in parallel", async () => {
     const { ttt, c4 } = createBundle();
     const t = ttt.startChallenge({
       chatId: COMMUNITY_CHAT,
@@ -187,7 +187,7 @@ async function main() {
     assert.strictEqual(c4.getSession(c.session.id).status, "active");
   });
 
-  await runTest("Connect Four and Blackjack run in parallel", () => {
+  await runTest("Connect Four and Blackjack run in parallel", async () => {
     const { c4, bj } = createBundle();
     const c = c4.startChallenge({
       chatId: COMMUNITY_CHAT,
@@ -204,7 +204,7 @@ async function main() {
     assert.strictEqual(c4.isOpen(), true);
   });
 
-  await runTest("multiple Blackjack matches in the same chat", () => {
+  await runTest("multiple Blackjack matches in the same chat", async () => {
     const { bj } = createBundle();
     const one = bj.startLobby({
       chatId: COMMUNITY_CHAT,
@@ -259,7 +259,7 @@ async function main() {
     assert.notStrictEqual(bj.getGame(b.gameId).status, BJ_STATUS.LOBBY);
   });
 
-  await runTest("moves stay on the owning match", () => {
+  await runTest("moves stay on the owning match", async () => {
     const { ttt } = createBundle();
     const a = ttt.startChallenge({
       chatId: COMMUNITY_CHAT,
@@ -292,7 +292,7 @@ async function main() {
     assert.strictEqual(ttt.getSession(b.session.id).currentPlayer, "X");
   });
 
-  await runTest("cleanup of one match leaves the other running", () => {
+  await runTest("cleanup of one match leaves the other running", async () => {
     const { ttt } = createBundle();
     const a = ttt.startChallenge({
       chatId: COMMUNITY_CHAT,
@@ -318,7 +318,7 @@ async function main() {
     assert.strictEqual(ttt.isOpen(), true);
   });
 
-  await runTest("player reservation blocks a second interactive match", () => {
+  await runTest("player reservation blocks a second interactive match", async () => {
     const { ttt, bj, reservation } = createBundle();
     const t = ttt.startChallenge({
       chatId: COMMUNITY_CHAT,
@@ -466,7 +466,7 @@ async function main() {
     assert.ok(ctx.edited[0].extra.reply_markup.inline_keyboard.length > 0);
   });
 
-  await runTest("simultaneous last-seat JOIN: one winner, one full", () => {
+  await runTest("simultaneous last-seat JOIN: one winner, one full", async () => {
     const { ttt } = createBundle();
     const started = ttt.startChallenge({
       chatId: COMMUNITY_CHAT,

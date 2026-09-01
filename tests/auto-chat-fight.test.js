@@ -149,12 +149,12 @@ resetEnv();
 
 async function main() {
   // --- Config ---
-  await runTest("1. AUTO_CHATFIGHT_ENABLED default false", () => {
+  await runTest("1. AUTO_CHATFIGHT_ENABLED default false", async () => {
     assert.strictEqual(parseAutoEnabledFlag(undefined), false);
     assert.strictEqual(parseAutoChatFightConfig({}).enabled, false);
   });
 
-  await runTest("2. true parsed correct", () => {
+  await runTest("2. true parsed correct", async () => {
     assert.strictEqual(parseAutoEnabledFlag("true"), true);
     assert.strictEqual(parseAutoEnabledFlag("1"), true);
     assert.strictEqual(
@@ -163,21 +163,21 @@ async function main() {
     );
   });
 
-  await runTest("3. invalid interval fallback", () => {
+  await runTest("3. invalid interval fallback", async () => {
     const cfg = parseAutoChatFightConfig({
       AUTO_CHATFIGHT_INTERVAL_MINUTES: "nope",
     });
     assert.strictEqual(cfg.intervalMinutes, 120);
   });
 
-  await runTest("4. interval 30 accepted", () => {
+  await runTest("4. interval 30 accepted", async () => {
     const cfg = parseAutoChatFightConfig({
       AUTO_CHATFIGHT_INTERVAL_MINUTES: "30",
     });
     assert.strictEqual(cfg.intervalMinutes, 30);
   });
 
-  await runTest("5-7. chance 0 / 100 / clamp", () => {
+  await runTest("5-7. chance 0 / 100 / clamp", async () => {
     assert.strictEqual(parseChancePercent("0"), 0);
     assert.strictEqual(parseChancePercent("100"), 100);
     assert.strictEqual(parseChancePercent("-5"), 0);
@@ -185,7 +185,7 @@ async function main() {
     assert.strictEqual(parseChancePercent("x"), 100);
   });
 
-  await runTest("8-10. type parsing", () => {
+  await runTest("8-10. type parsing", async () => {
     assert.deepStrictEqual(parseAutoFightTypes(""), [...ALL_FIGHT_TYPES]);
     assert.deepStrictEqual(parseAutoFightTypes("math,emoji"), [
       FIGHT_TYPES.MATH_RUSH,
@@ -245,7 +245,7 @@ async function main() {
     assert.strictEqual(result.reason, "missing-chat-id");
   });
 
-  await runTest("13. outside active hours → no slots", () => {
+  await runTest("13. outside active hours → no slots", async () => {
     const slots = buildAutoChatFightSlots(120, 9, 22);
     assert.ok(slots.every((s) => s.hour >= 9 && s.hour < 22));
     assert.ok(!slots.some((s) => s.hour === 23));
@@ -392,7 +392,7 @@ async function main() {
     sched.stop();
   });
 
-  await runTest("19-20. 30-min and 120-min slot math", () => {
+  await runTest("19-20. 30-min and 120-min slot math", async () => {
     const s30 = buildAutoChatFightSlots(30, 9, 22);
     assert.strictEqual(s30[0].label, "09:00");
     assert.strictEqual(s30[1].label, "09:30");
@@ -476,7 +476,7 @@ async function main() {
   });
 
   // --- Type rotation ---
-  await runTest("26-28. type selection / no immediate repeat", () => {
+  await runTest("26-28. type selection / no immediate repeat", async () => {
     const picked = selectFightType(
       [FIGHT_TYPES.TYPE_RUSH, FIGHT_TYPES.MATH_RUSH],
       FIGHT_TYPES.TYPE_RUSH,
@@ -536,7 +536,7 @@ async function main() {
     assert.ok(claim.claimed);
     assert.strictEqual(claim.pointsToAdd, CHAT_FIGHT_XP);
 
-    const award = awardChatFightXp(USER_A, "Player", file);
+    const award = await awardChatFightXp(USER_A, "Player", file);
     assert.strictEqual(award.awarded, true);
     assert.strictEqual(loadPoints(file).users[String(USER_A)].points, 2);
     assert.strictEqual(loadPoints(file).users[String(USER_A)].weeklyPoints, 2);
@@ -544,7 +544,7 @@ async function main() {
     const second = service.tryClaimWinner(999, COMMUNITY_CHAT, "MANGO");
     assert.strictEqual(second.claimed, false);
 
-    const activity = awardDailyActivityPoint(USER_A, "Player", file);
+    const activity = await awardDailyActivityPoint(USER_A, "Player", file);
     assert.strictEqual(activity.awarded, true);
     assert.strictEqual(loadPoints(file).users[String(USER_A)].points, 3);
   });
@@ -737,7 +737,7 @@ async function main() {
     sched.stop();
   });
 
-  await runTest("nextAutoSlotLabel helper", () => {
+  await runTest("nextAutoSlotLabel helper", async () => {
     const cfg = parseAutoChatFightConfig(
       {},
       { enabled: true, intervalMinutes: 120 }

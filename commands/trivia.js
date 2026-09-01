@@ -617,7 +617,7 @@ async function handleTriviaAnswer(ctx, options = {}) {
   const chatId = ctx.chat && ctx.chat.id;
   const displayName = sanitizePvpDisplayName(ctx.from);
 
-  const result = runtime.tryAnswer({
+  const result = await runtime.tryAnswer({
     sessionId: parsed.sessionId,
     userId: ctx.from.id,
     answerIndex: parsed.answerIndex,
@@ -662,7 +662,7 @@ async function handleTriviaAnswer(ctx, options = {}) {
 
   let rendered = result.rendered;
   if (result.xpDeferred && typeof runtime.settleDeferredXp === "function") {
-    const settled = runtime.settleDeferredXp(parsed.sessionId);
+    const settled = await runtime.settleDeferredXp(parsed.sessionId);
     if (settled && settled.rendered) {
       rendered = settled.rendered;
     }

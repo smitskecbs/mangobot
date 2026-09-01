@@ -117,7 +117,9 @@ async function finalizeWinXp(runtime, sessionId, awardXpFn) {
 
   let xpResult;
   try {
-    xpResult = awardXpFn(claim.winnerUserId, claim.winnerName || "Player");
+    xpResult = await Promise.resolve(
+      awardXpFn(claim.winnerUserId, claim.winnerName || "Player")
+    );
   } catch (err) {
     logError(
       "[pvp] awardPvpWinXp failed:",
@@ -188,19 +190,23 @@ function wireTimeoutMessageEdits(runtime, telegram, awardXpFn) {
   const origExpire = runtime.expireJoin.bind(runtime);
   runtime.expireJoin = (sessionId) => {
     const result = origExpire(sessionId);
-    if (result && result.ok && result.rendered) {
-      Promise.resolve(handleTimedResult(result)).catch(() => {});
-    }
-    return result;
+    return Promise.resolve(result).then((resolved) => {
+      if (resolved && resolved.ok && resolved.rendered) {
+        return handleTimedResult(resolved).then(() => resolved);
+      }
+      return resolved;
+    });
   };
 
   const origTimeout = runtime.resolveTurnTimeout.bind(runtime);
   runtime.resolveTurnTimeout = (sessionId) => {
     const result = origTimeout(sessionId);
-    if (result && result.ok) {
-      Promise.resolve(handleTimedResult(result)).catch(() => {});
-    }
-    return result;
+    return Promise.resolve(result).then((resolved) => {
+      if (resolved && resolved.ok) {
+        return handleTimedResult(resolved).then(() => resolved);
+      }
+      return resolved;
+    });
   };
 }
 
@@ -279,7 +285,7 @@ async function handlePvpCallback(ctx, options = {}) {
   }
 
   if (parsed.action === "move") {
-    const result = runtime.move({
+    const result = await runtime.move({
       sessionId: parsed.sessionId,
       userId,
       cell: parsed.cell,

@@ -1,9 +1,9 @@
 /**
  * Community points system — storage, triggers, ranks, weekly tracking, and daily activity.
  *
- * All production points.json mutations go through mutatePoints() (sync).
- * mutatePointsAsync is the async successor and is not wired to production callers yet.
- * Read-only helpers never write.
+ * Production XP mutations go through mutatePointsAsync() (per-file FIFO +
+ * async lock + async atomic write). mutatePoints() remains for boot-only
+ * ensurePointsFile and tests. Read-only helpers never write.
  */
 
 const fs = require("fs");
@@ -248,7 +248,7 @@ function applySameDayStreakRepair(user, today = getTodayDate()) {
  * @param {string} [todayDate]
  * @returns {{ repaired: number, written: boolean }}
  */
-function repairCurrentDayStreaks(pointsFile = POINTS_FILE, todayDate) {
+async function repairCurrentDayStreaks(pointsFile = POINTS_FILE, todayDate) {
   const today = todayDate || getTodayDate();
   const snapshot = readPointsSnapshot(pointsFile);
   let need = 0;
@@ -264,7 +264,7 @@ function repairCurrentDayStreaks(pointsFile = POINTS_FILE, todayDate) {
     return { repaired: 0, written: false };
   }
 
-  return mutatePoints((data) => {
+  return await mutatePointsAsync((data) => {
     let repaired = 0;
     for (const [userId, user] of Object.entries(data.users || {})) {
       if (isCommunityCompetitionExcluded(userId)) {
@@ -469,8 +469,8 @@ function mutatePoints(mutator, pointsFile = POINTS_FILE) {
 
 /**
  * Async exclusive mutation of points.json.
- * Production callers still use mutatePoints(); this is infrastructure for the
- * later migration.
+ * Production XP wrappers call mutatePointsAsync(). mutatePoints() remains
+ * for boot-only ensurePointsFile and tests.
  *
  * Exclusive queue slot (per resolved file path):
  *   async lock → async read → sync mutator → stringify (null, 2) via atomic
@@ -1015,7 +1015,7 @@ function buildGameXpResult(pointsBefore, pointsAfter, dailyPlay, unlock) {
 /**
  * First verified Snake play per UTC day → +1 XP.
  */
-function awardSnakeGameXp(userId, userName, pointsFile = POINTS_FILE, walletFile) {
+async function awardSnakeGameXp(userId, userName, pointsFile = POINTS_FILE, walletFile) {
   const questExtras = { game: "snake", walletFile, pointsFile };
   if (!canEarnXp(userId, walletFile)) {
     return finalizeXpAward(userId, userName, walletLockedSnapshot(userId, pointsFile), questExtras);
@@ -1024,7 +1024,7 @@ function awardSnakeGameXp(userId, userName, pointsFile = POINTS_FILE, walletFile
   return finalizeXpAward(
     userId,
     userName,
-    mutatePoints((data) => {
+    await mutatePointsAsync((data) => {
     const id = String(userId);
     const user = ensureUserRecord(data, id, userName);
     user.name = userName;
@@ -1052,7 +1052,7 @@ function awardSnakeGameXp(userId, userName, pointsFile = POINTS_FILE, walletFile
  * Verified Bounch play: +1 first UTC day + unlock XP for newly reached levels 1..7.
  * Direct level L unlocks 1..L when above current bounchUnlockedMax.
  */
-function awardBounchGameXp(userId, userName, level, pointsFile = POINTS_FILE, walletFile) {
+async function awardBounchGameXp(userId, userName, level, pointsFile = POINTS_FILE, walletFile) {
   const questExtras = { game: "bounch", walletFile, pointsFile };
   if (typeof level !== "number" || !Number.isInteger(level) || level < 1 || level > 7) {
     return finalizeXpAward(userId, userName, {
@@ -1072,7 +1072,7 @@ function awardBounchGameXp(userId, userName, level, pointsFile = POINTS_FILE, wa
   return finalizeXpAward(
     userId,
     userName,
-    mutatePoints((data) => {
+    await mutatePointsAsync((data) => {
     const id = String(userId);
     const user = ensureUserRecord(data, id, userName);
     user.name = userName;
@@ -1110,7 +1110,7 @@ function awardBounchGameXp(userId, userName, level, pointsFile = POINTS_FILE, wa
  * Award 1 lifetime/weekly point for the first normal chat message of the UTC day.
  * Silent by design — callers should not announce "+1 activity".
  */
-function awardDailyActivityPoint(userId, userName, pointsFile = POINTS_FILE, todayDate, walletFile) {
+async function awardDailyActivityPoint(userId, userName, pointsFile = POINTS_FILE, todayDate, walletFile) {
   if (isCommunityCompetitionExcluded(userId)) {
     return finalizeXpAward(userId, userName, excludedAwardResult(userId, pointsFile));
   }
@@ -1120,7 +1120,7 @@ function awardDailyActivityPoint(userId, userName, pointsFile = POINTS_FILE, tod
   return finalizeXpAward(
     userId,
     userName,
-    mutatePoints((data) => {
+    await mutatePointsAsync((data) => {
     const id = String(userId);
     const user = ensureUserRecord(data, id, userName);
 
@@ -1182,7 +1182,7 @@ function awardDailyActivityPoint(userId, userName, pointsFile = POINTS_FILE, tod
   );
 }
 
-function awardTriggerPoints(userId, userName, trigger, pointsFile = POINTS_FILE, walletFile) {
+async function awardTriggerPoints(userId, userName, trigger, pointsFile = POINTS_FILE, walletFile) {
   const pointsToAdd = TRIGGERS[trigger];
 
   if (pointsToAdd === undefined) {
@@ -1206,7 +1206,7 @@ function awardTriggerPoints(userId, userName, trigger, pointsFile = POINTS_FILE,
   return finalizeXpAward(
     userId,
     userName,
-    mutatePoints((data) => {
+    await mutatePointsAsync((data) => {
     const id = String(userId);
     const user = ensureUserRecord(data, id, userName);
     user.name = userName;
@@ -1261,7 +1261,7 @@ function awardTriggerPoints(userId, userName, trigger, pointsFile = POINTS_FILE,
  * ChatFight win: +2 lifetime XP and +2 weeklyPoints.
  * Call only after an in-process winner claim; does not enforce fight state itself.
  */
-function awardChatFightXp(userId, userName, pointsFile = POINTS_FILE, walletFile) {
+async function awardChatFightXp(userId, userName, pointsFile = POINTS_FILE, walletFile) {
   const pointsToAdd = 2;
   const questExtras = { game: "chatfight", walletFile, pointsFile };
 
@@ -1286,7 +1286,7 @@ function awardChatFightXp(userId, userName, pointsFile = POINTS_FILE, walletFile
   return finalizeXpAward(
     userId,
     userName,
-    mutatePoints((data) => {
+    await mutatePointsAsync((data) => {
     const id = String(userId);
     const user = ensureUserRecord(data, id, userName);
     user.name = userName;
@@ -1439,7 +1439,7 @@ function getTriviaRewardedRoundsToday(user) {
  * @param {number} pointsToAdd
  * @param {string} [pointsFile]
  */
-function awardTriviaRoundXp(
+async function awardTriviaRoundXp(
   userId,
   userName,
   pointsToAdd,
@@ -1481,7 +1481,7 @@ function awardTriviaRoundXp(
   return finalizeXpAward(
     userId,
     userName,
-    mutatePoints((data) => {
+    await mutatePointsAsync((data) => {
     const id = String(userId);
     const user = ensureUserRecord(data, id, userName);
     user.name = userName;
@@ -1527,7 +1527,7 @@ function awardTriviaRoundXp(
 }
 
 /** @deprecated Use awardTriviaRoundXp — kept name alias for clarity in older call sites. */
-function awardTriviaWinXp(userId, userName, pointsFile = POINTS_FILE) {
+async function awardTriviaWinXp(userId, userName, pointsFile = POINTS_FILE) {
   return awardTriviaRoundXp(userId, userName, TRIVIA_ROUND_WIN_XP, pointsFile);
 }
 
@@ -1562,7 +1562,7 @@ function triviaAttemptResult(user, extra = {}) {
  * @param {string} [pointsFile]
  * @param {string} [walletFile]
  */
-function awardTriviaAttemptXp(
+async function awardTriviaAttemptXp(
   userId,
   userName,
   payload = {},
@@ -1586,7 +1586,7 @@ function awardTriviaAttemptXp(
   return finalizeXpAward(
     userId,
     userName,
-    mutatePoints((data) => {
+    await mutatePointsAsync((data) => {
       const id = String(userId);
       const user = ensureUserRecord(data, id, userName);
       user.name = userName;
@@ -1711,7 +1711,7 @@ function getMangoBombRewardedRoundsToday(user) {
  * ManGo Bomb XP with one rewarded round per UTC day.
  * Later awards in the same roundId still pay; a new round the same day is capped.
  */
-function awardMangoBombXp(
+async function awardMangoBombXp(
   userId,
   userName,
   pointsToAdd,
@@ -1772,7 +1772,7 @@ function awardMangoBombXp(
   return finalizeXpAward(
     userId,
     userName,
-    mutatePoints((data) => {
+    await mutatePointsAsync((data) => {
     const id = String(userId);
     const user = ensureUserRecord(data, id, userName);
     user.name = userName;
@@ -1995,7 +1995,7 @@ function blackjackQuestExtras(pointsFile, walletFile, payload) {
  * @param {string} [pointsFile]
  * @param {string} [walletFile]
  */
-function reserveBlackjackRewardedRound(
+async function reserveBlackjackRewardedRound(
   userId,
   userName,
   payload = {},
@@ -2007,7 +2007,7 @@ function reserveBlackjackRewardedRound(
   const opponentUserId =
     payload && payload.opponentUserId != null ? String(payload.opponentUserId) : "";
 
-  return mutatePoints((data) => {
+  return await mutatePointsAsync((data) => {
     const id = String(userId);
     const user = ensureUserRecord(data, id, userName);
     user.name = userName;
@@ -2070,7 +2070,7 @@ function grantBlackjackXp(user, amount) {
   });
 }
 
-function settleBlackjackXp(
+async function settleBlackjackXp(
   userId,
   userName,
   amount,
@@ -2091,7 +2091,7 @@ function settleBlackjackXp(
   return finalizeXpAward(
     userId,
     userName,
-    mutatePoints((data) => {
+    await mutatePointsAsync((data) => {
       const id = String(userId);
       const user = ensureUserRecord(data, id, userName);
       user.name = userName;
@@ -2146,7 +2146,7 @@ function settleBlackjackXp(
   );
 }
 
-function awardBlackjackPassXp(
+async function awardBlackjackPassXp(
   userId,
   userName,
   payload = {},
@@ -2164,7 +2164,7 @@ function awardBlackjackPassXp(
   );
 }
 
-function awardBlackjackBotResultXp(
+async function awardBlackjackBotResultXp(
   userId,
   userName,
   payload = {},
@@ -2189,7 +2189,7 @@ function awardBlackjackBotResultXp(
   );
 }
 
-function awardBlackjackPvpResultXp(
+async function awardBlackjackPvpResultXp(
   userId,
   userName,
   payload = {},
@@ -2219,7 +2219,7 @@ function awardBlackjackPvpResultXp(
 /**
  * Record a rewarded PvP matchup so the same pair is fun-only for the rest of the UTC day.
  */
-function markBlackjackPvpMatchup(
+async function markBlackjackPvpMatchup(
   userId,
   opponentUserId,
   pointsFile = POINTS_FILE
@@ -2229,7 +2229,7 @@ function markBlackjackPvpMatchup(
   if (!uid || !opp || uid === opp || opp === "bot") {
     return { ok: false, reason: "invalid" };
   }
-  return mutatePoints((data) => {
+  return await mutatePointsAsync((data) => {
     function mark(id, other, name) {
       const user = ensureUserRecord(data, id, name || "Player");
       resetWeeklyIfNewWeek(user, id);
@@ -2334,13 +2334,13 @@ function getPvpMatchesPlayedToday(user) {
  * Record one completed human-vs-human PvP match for the UTC day.
  * Idempotent per noteKey (game:matchId).
  */
-function recordHumanPvpMatch(userId, userName, noteKey, pointsFile = POINTS_FILE) {
+async function recordHumanPvpMatch(userId, userName, noteKey, pointsFile = POINTS_FILE) {
   const uid = String(userId || "");
   const key = String(noteKey || "");
   if (!uid || !key) {
     return { ok: false, reason: "invalid" };
   }
-  return mutatePoints((data) => {
+  return await mutatePointsAsync((data) => {
     const user = ensureUserRecord(data, uid, userName || "Player");
     resetWeeklyIfNewWeek(user, uid);
     ensurePvpState(user);
@@ -2370,7 +2370,7 @@ function recordHumanPvpMatch(userId, userName, noteKey, pointsFile = POINTS_FILE
   }, pointsFile);
 }
 
-function awardPvpWinXp(userId, userName, pointsFile = POINTS_FILE, walletFile) {
+async function awardPvpWinXp(userId, userName, pointsFile = POINTS_FILE, walletFile) {
   const pointsToAdd = PVP_WIN_XP;
   const questExtras = { game: "pvp", walletFile, pointsFile };
 
@@ -2403,7 +2403,7 @@ function awardPvpWinXp(userId, userName, pointsFile = POINTS_FILE, walletFile) {
   return finalizeXpAward(
     userId,
     userName,
-    mutatePoints((data) => {
+    await mutatePointsAsync((data) => {
     const id = String(userId);
     const user = ensureUserRecord(data, id, userName);
     user.name = userName;
@@ -2452,7 +2452,7 @@ function awardPvpWinXp(userId, userName, pointsFile = POINTS_FILE, walletFile) {
  * Community Builder referral XP for the inviter.
  * Uses the existing wallet gate. No daily cap. No retroactive unlock.
  */
-function awardCommunityBuilderXp(
+async function awardCommunityBuilderXp(
   userId,
   userName,
   pointsToAdd,
@@ -2493,7 +2493,7 @@ function awardCommunityBuilderXp(
   return finalizeXpAward(
     userId,
     userName,
-    mutatePoints((data) => {
+    await mutatePointsAsync((data) => {
     const id = String(userId);
     const user = ensureUserRecord(data, id, userName);
     user.name = userName;
@@ -2518,8 +2518,8 @@ function awardCommunityBuilderXp(
   );
 }
 
-function resetWeeklyForAll(pointsFile = POINTS_FILE) {
-  mutatePoints((data) => {
+async function resetWeeklyForAll(pointsFile = POINTS_FILE) {
+  await mutatePointsAsync((data) => {
     const currentWeek = getWeekId();
 
     for (const user of Object.values(data.users)) {

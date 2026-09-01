@@ -144,10 +144,10 @@ async function runTest(name, fn) {
 }
 
 async function main() {
-  await runTest("1. new member join opens welcome opportunity", () => {
+  await runTest("1. new member join opens welcome opportunity", async () => {
     const now = Date.UTC(2026, 7, 21, 15, 0, 0);
     const h = harness(now);
-    handleChatMemberUpdate(
+    await handleChatMemberUpdate(
       joinUpdate(NEW_A, { username: "newmango", name: "New" }),
       { ...h.opts, now }
     );
@@ -287,12 +287,12 @@ async function main() {
     assert.strictEqual(builderSummary(WELCOMER, h.opts).builderPoints, 0);
   });
 
-  await runTest("17. leave/rejoin no second opportunity or reward", () => {
+  await runTest("17. leave/rejoin no second opportunity or reward", async () => {
     const now = Date.UTC(2026, 7, 21, 15, 0, 0);
     const h = harness(now);
-    handleChatMemberUpdate(joinUpdate(NEW_A), { ...h.opts, now });
+    await handleChatMemberUpdate(joinUpdate(NEW_A), { ...h.opts, now });
     const first = loadBuilderStore(h.storeFile).welcomeOpportunities[NEW_A];
-    handleChatMemberUpdate(
+    await handleChatMemberUpdate(
       joinUpdate(NEW_A, { oldStatus: "left", newStatus: "member" }),
       { ...h.opts, now: now + FIRST_WELCOME_WINDOW_MS + 60_000 }
     );
@@ -340,7 +340,7 @@ async function main() {
     assert.strictEqual(builderSummary(WELCOMER, { ...h.opts, now: nextDay }).builderPoints, 4);
   });
 
-  await runTest("21-22. restart preserves open opportunity and claimed state", () => {
+  await runTest("21-22. restart preserves open opportunity and claimed state", async () => {
     const now = Date.UTC(2026, 7, 21, 15, 0, 0);
     const h = harness(now);
     registerWelcomeOpportunity(
@@ -363,7 +363,7 @@ async function main() {
       chatId: COMMUNITY_CHAT,
       now,
     });
-    handleChatMemberUpdate(joinUpdate(NEW_A), { ...h.opts, now: now + 1000 });
+    await handleChatMemberUpdate(joinUpdate(NEW_A), { ...h.opts, now: now + 1000 });
     const duplicate = validReply(h, NEW_A, { fromId: Number(OTHER) });
     assert.strictEqual(duplicate.ok, false);
     assert.strictEqual(builderSummary(WELCOMER, h.opts).builderPoints, 1);

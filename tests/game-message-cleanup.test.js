@@ -126,7 +126,7 @@ function startAuto(service, id = 44) {
   return started;
 }
 
-function answerCorrect(service, sessionId) {
+async function answerCorrect(service, sessionId) {
   const snap = service.getSnapshot();
   return service.tryAnswer({
     sessionId,
@@ -154,11 +154,11 @@ async function runTest(name, fn) {
 async function main() {
   assert.strictEqual(GAME_MESSAGE_CLEANUP_DELAY_MS, 5 * 60 * 1000);
 
-  await runTest("1. Trivia normal end releases active state", () => {
+  await runTest("1. Trivia normal end releases active state", async () => {
     const { service, timers } = createTrivia();
     const started = startAuto(service);
     for (let q = 1; q <= 5; q += 1) {
-      answerCorrect(service, started.session.id);
+      await answerCorrect(service, started.session.id);
       timers.advance(1);
     }
     assert.strictEqual(service.isTriviaOpen(), false);
@@ -194,7 +194,7 @@ async function main() {
     assert.strictEqual(next.ok, true);
   });
 
-  await runTest("4. stale Trivia state does not permanently block a new game", () => {
+  await runTest("4. stale Trivia state does not permanently block a new game", async () => {
     const { service, timers } = createTrivia({ staleAfterMs: 500 });
     const first = service.startTrivia({
       chatId: COMMUNITY_CHAT,
@@ -202,7 +202,7 @@ async function main() {
       category: "general",
     });
     service.setMessageId(first.session.id, 11);
-    answerCorrect(service, first.session.id);
+    await answerCorrect(service, first.session.id);
     assert.strictEqual(first.ok, true);
     assert.strictEqual(service.isTriviaOpen(), true);
     timers.advance(500);

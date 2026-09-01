@@ -235,7 +235,7 @@ function isEligibleCommunityActivityMessage(ctx) {
  * @param {object} ctx
  * @param {object} [options]
  */
-function processCommunityMessage(ctx, options = {}) {
+async function processCommunityMessage(ctx, options = {}) {
   if (!ctx || !ctx.from) {
     return { activityResult: null, triggerResult: null, reply: null };
   }
@@ -251,8 +251,8 @@ function processCommunityMessage(ctx, options = {}) {
   if (!ctx.from.is_bot && isEligibleCommunityActivityMessage(ctx)) {
     activityResult =
       pointsFile !== undefined
-        ? awardDailyActivityPoint(userId, userName, pointsFile, undefined, walletFile)
-        : awardDailyActivityPoint(userId, userName);
+        ? await awardDailyActivityPoint(userId, userName, pointsFile, undefined, walletFile)
+        : await awardDailyActivityPoint(userId, userName);
     noteCommunityActivity();
   }
 
@@ -306,8 +306,8 @@ function processCommunityMessage(ctx, options = {}) {
   if (trigger && !ctx.from.is_bot) {
     triggerResult =
       pointsFile !== undefined
-        ? awardTriggerPoints(userId, userName, trigger, pointsFile, walletFile)
-        : awardTriggerPoints(userId, userName, trigger);
+        ? await awardTriggerPoints(userId, userName, trigger, pointsFile, walletFile)
+        : await awardTriggerPoints(userId, userName, trigger);
     if (trigger === "gmango" || trigger === "gnango") {
       try {
         require("../services/dailyQuest").noteDailyQuestGreeting(userId, {
@@ -351,8 +351,8 @@ function processCommunityMessage(ctx, options = {}) {
  * @param {object} [options] forwarded to processCommunityMessage (e.g. pointsFile)
  */
 function registerCommunityActivityListener(bot, options = {}) {
-  bot.on(COMMUNITY_ACTIVITY_UPDATES, (ctx, next) => {
-    const result = processCommunityMessage(ctx, options);
+  bot.on(COMMUNITY_ACTIVITY_UPDATES, async (ctx, next) => {
+    const result = await processCommunityMessage(ctx, options);
     if (result.reply) {
       ctx.reply(result.reply);
     }

@@ -61,9 +61,9 @@ const runtime = startBotRuntime({
     }
     process.exit(1);
   },
-  beforeScheduler: () => {
+  beforeScheduler: async () => {
     try {
-      const streakRepair = repairCurrentDayStreaks();
+      const streakRepair = await repairCurrentDayStreaks();
       if (streakRepair && streakRepair.repaired > 0) {
         log(
           `[streak] repaired current-day streaks count=${streakRepair.repaired}`

@@ -45,7 +45,7 @@ async function runTest(name, fn) {
 
 (async () => {
 try {
-  await runTest("Telegram administrator is not ADMIN_USER_ID", () => {
+  await runTest("Telegram administrator is not ADMIN_USER_ID", async () => {
     assert.ok(MANAGE_STATUSES.has("administrator"));
     assert.ok(MANAGE_STATUSES.has("creator"));
     assert.strictEqual(isAdmin(OWNER_ID), true);
@@ -54,14 +54,14 @@ try {
     assert.strictEqual(isCommunityCompetitionExcluded(GROUP_ADMIN_ID), false);
   });
 
-  await runTest("owner admin permissions remain isAdmin-only", () => {
+  await runTest("owner admin permissions remain isAdmin-only", async () => {
     assert.strictEqual(isAdmin(OWNER_ID), true);
     assert.strictEqual(isAdmin(GROUP_ADMIN_ID), false);
     assert.strictEqual(isAdmin("0"), false);
   });
 
-  await runTest("group admin can earn XP and appear on the leaderboard", () => {
-    const awarded = awardDailyActivityPoint(GROUP_ADMIN_ID, "Mod", pointsFile);
+  await runTest("group admin can earn XP and appear on the leaderboard", async () => {
+    const awarded = await awardDailyActivityPoint(GROUP_ADMIN_ID, "Mod", pointsFile);
     assert.strictEqual(awarded.awarded, true);
     assert.strictEqual(awarded.pointsToAdd, 1);
 
@@ -70,13 +70,13 @@ try {
     assert.ok(top.some((row) => row.name === "Mod"));
   });
 
-  await runTest("ADMIN_USER_ID can earn XP and appear on lifetime and weekly boards", () => {
-    const owner = awardDailyActivityPoint(OWNER_ID, "Kevin", pointsFile);
+  await runTest("ADMIN_USER_ID can earn XP and appear on lifetime and weekly boards", async () => {
+    const owner = await awardDailyActivityPoint(OWNER_ID, "Kevin", pointsFile);
     assert.strictEqual(owner.awarded, true);
     assert.strictEqual(owner.pointsToAdd, 1);
     assert.notStrictEqual(owner.reason, "excluded");
 
-    const game = awardPvpWinXp(OWNER_ID, "Kevin", pointsFile);
+    const game = await awardPvpWinXp(OWNER_ID, "Kevin", pointsFile);
     assert.strictEqual(game.awarded, true);
     assert.strictEqual(game.pointsToAdd, PVP_WIN_XP);
 

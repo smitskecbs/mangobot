@@ -208,26 +208,26 @@ function publicXpFromAward(result) {
  * Award game XP only for verified identity. Never throws to callers.
  * Score persistence must remain successful even if this fails.
  */
-function tryAwardSnakeGameXp(identity, playerName) {
+async function tryAwardSnakeGameXp(identity, playerName) {
   if (!identity || !identity.verified || !identity.uid) {
     return emptyGameXpPayload();
   }
 
   try {
-    return publicXpFromAward(awardSnakeGameXp(identity.uid, playerName));
+    return publicXpFromAward(await awardSnakeGameXp(identity.uid, playerName));
   } catch {
     console.error("[ManGo Highscore API] Failed to award Snake XP");
     return emptyGameXpPayload();
   }
 }
 
-function tryAwardBounchGameXp(identity, playerName, level) {
+async function tryAwardBounchGameXp(identity, playerName, level) {
   if (!identity || !identity.verified || !identity.uid) {
     return emptyGameXpPayload();
   }
 
   try {
-    return publicXpFromAward(awardBounchGameXp(identity.uid, playerName, level));
+    return publicXpFromAward(await awardBounchGameXp(identity.uid, playerName, level));
   } catch {
     console.error("[ManGo Highscore API] Failed to award Bounch XP");
     return emptyGameXpPayload();
@@ -335,7 +335,7 @@ async function handleSnakeHighscore(req, res, origin) {
   }
 
   // XP only after a valid persisted submit; failures here must not undo the score.
-  const xp = tryAwardSnakeGameXp(identity, name);
+  const xp = await tryAwardSnakeGameXp(identity, name);
   notifyWalletLockedXp(identity, xp);
 
   const { data, result } = submission;
@@ -477,7 +477,7 @@ async function handleBounchHighscore(req, res, origin) {
   }
 
   // XP only after a valid persisted submit; failures here must not undo the level.
-  const xp = tryAwardBounchGameXp(identity, name, level);
+  const xp = await tryAwardBounchGameXp(identity, name, level);
   notifyWalletLockedXp(identity, xp);
 
   const { data, result } = submission;

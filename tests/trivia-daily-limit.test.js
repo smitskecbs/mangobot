@@ -140,8 +140,7 @@ function createService(store = {}, overrides = {}) {
     questions: overrides.questions || TRIVIA_QUESTIONS,
   });
   if (files.pointsFile) {
-    service.setAwardXpHandler((uid, name, payload) =>
-      awardTriviaAttemptXp(
+    service.setAwardXpHandler((uid, name, payload) => awardTriviaAttemptXp(
         uid,
         name,
         { ...payload, shopFile: files.shopFile },
@@ -166,9 +165,9 @@ function startHub(service, category = "geography") {
   return started;
 }
 
-function answerCorrect(service, sessionId, userId, name) {
+async function answerCorrect(service, sessionId, userId, name) {
   const snap = service.getSnapshot();
-  return service.tryAnswer({
+  return await service.tryAnswer({
     sessionId,
     userId,
     answerIndex: snap.correctIndex,
@@ -177,9 +176,9 @@ function answerCorrect(service, sessionId, userId, name) {
   });
 }
 
-function answerWrong(service, sessionId, userId, name) {
+async function answerWrong(service, sessionId, userId, name) {
   const snap = service.getSnapshot();
-  return service.tryAnswer({
+  return await service.tryAnswer({
     sessionId,
     userId,
     answerIndex: (snap.correctIndex + 1) % 4,
@@ -266,30 +265,30 @@ async function runTest(name, fn) {
 async function main() {
   resetEnv();
 
-  await runTest("20. first valid answer consumes attempt 1", () => {
+  await runTest("20. first valid answer consumes attempt 1", async () => {
     const store = files();
     const { pointsFile, shopFile } = store;
     const { service } = createService(store);
     const started = startHub(service);
-    const result = answerCorrect(service, started.session.id, USER_A, "Alice");
+    const result = await answerCorrect(service, started.session.id, USER_A, "Alice");
     assert.strictEqual(result.ok, true);
     assert.strictEqual(result.xpResult.attemptsUsed, 1);
     assert.strictEqual(getTriviaAttemptStatus(USER_A, pointsFile).attemptsUsed, 1);
   });
 
-  await runTest("21. incorrect also consumes attempt", () => {
+  await runTest("21. incorrect also consumes attempt", async () => {
     const store = files();
     const { pointsFile, shopFile } = store;
     const { service } = createService(store);
     const started = startHub(service);
-    const result = answerWrong(service, started.session.id, USER_A, "Alice");
+    const result = await answerWrong(service, started.session.id, USER_A, "Alice");
     assert.strictEqual(result.correct, false);
     assert.strictEqual(result.xpResult.attemptsUsed, 1);
     assert.strictEqual(result.xpResult.pointsToAdd, 0);
     assert.strictEqual(loadPoints(pointsFile).users[String(USER_A)].points, 0);
   });
 
-  await runTest("22. open-but-no-answer does not consume", () => {
+  await runTest("22. open-but-no-answer does not consume", async () => {
     const store = files();
     const { pointsFile, shopFile } = store;
     const { service } = createService(store);
@@ -316,13 +315,13 @@ async function main() {
     assert.strictEqual(loadPoints(pointsFile).users[String(USER_A)].points, 1);
   });
 
-  await runTest("24-26. 5 XP-eligible max; 6th playable with 0 XP", () => {
+  await runTest("24-26. 5 XP-eligible max; 6th playable with 0 XP", async () => {
     const store = files();
     const { pointsFile, shopFile } = store;
     const { service } = createService(store);
     let started = startHub(service, "math");
     for (let i = 0; i < 5; i += 1) {
-      const result = answerCorrect(service, started.session.id, USER_A, "Alice");
+      const result = await answerCorrect(service, started.session.id, USER_A, "Alice");
       assert.strictEqual(result.xpResult.awarded, true);
       assert.strictEqual(result.xpResult.pointsToAdd, TRIVIA_ATTEMPT_XP);
       const next = service.nextHubQuestion();
@@ -330,7 +329,7 @@ async function main() {
       started = { session: next.session };
     }
     assert.strictEqual(loadPoints(pointsFile).users[String(USER_A)].points, 5);
-    const sixth = answerCorrect(service, started.session.id, USER_A, "Alice");
+    const sixth = await answerCorrect(service, started.session.id, USER_A, "Alice");
     assert.strictEqual(sixth.ok, true);
     assert.strictEqual(sixth.correct, true);
     assert.strictEqual(sixth.xpResult.awarded, false);
@@ -344,67 +343,67 @@ async function main() {
     );
   });
 
-  await runTest("27. categories share same total limit", () => {
+  await runTest("27. categories share same total limit", async () => {
     const store = files();
     const { pointsFile, shopFile } = store;
     const { service } = createService(store);
     const geo = startHub(service, "geography");
-    answerCorrect(service, geo.session.id, USER_A, "Alice");
+    await answerCorrect(service, geo.session.id, USER_A, "Alice");
     service.nextHubQuestion();
-    answerCorrect(service, service.getSnapshot().id, USER_A, "Alice");
+    await answerCorrect(service, service.getSnapshot().id, USER_A, "Alice");
     service.releaseHubSession("change");
     const math = startHub(service, "math");
-    answerCorrect(service, math.session.id, USER_A, "Alice");
+    await answerCorrect(service, math.session.id, USER_A, "Alice");
     service.nextHubQuestion();
-    answerWrong(service, service.getSnapshot().id, USER_A, "Alice");
+    await answerWrong(service, service.getSnapshot().id, USER_A, "Alice");
     service.releaseHubSession("change");
     const hist = startHub(service, "history");
-    answerCorrect(service, hist.session.id, USER_A, "Alice");
+    await answerCorrect(service, hist.session.id, USER_A, "Alice");
     assert.strictEqual(getTriviaAttemptStatus(USER_A, pointsFile).attemptsUsed, 5);
     const sixth = service.nextHubQuestion();
     assert.strictEqual(sixth.ok, true);
-    const fun = answerCorrect(service, sixth.session.id, USER_A, "Alice");
+    const fun = await answerCorrect(service, sixth.session.id, USER_A, "Alice");
     assert.strictEqual(fun.xpResult.awarded, false);
     assert.strictEqual(loadPoints(pointsFile).users[String(USER_A)].points, 4);
   });
 
-  await runTest("28. UTC next day resets", () => {
+  await runTest("28. UTC next day resets", async () => {
     const store = files();
     const { pointsFile, shopFile } = store;
     for (let i = 0; i < 5; i += 1) {
-      awardTriviaAttemptXp(USER_A, "Alice", { correct: true, shopFile }, pointsFile);
+      await awardTriviaAttemptXp(USER_A, "Alice", { correct: true, shopFile }, pointsFile);
     }
     assert.strictEqual(getTriviaAttemptStatus(USER_A, pointsFile).attemptsUsed, 5);
     mutatePoints((data) => {
       data.users[String(USER_A)].trivia.rewardDate = utcYesterday();
     }, pointsFile);
-    const next = awardTriviaAttemptXp(USER_A, "Alice", { correct: true, shopFile }, pointsFile);
+    const next = await awardTriviaAttemptXp(USER_A, "Alice", { correct: true, shopFile }, pointsFile);
     assert.strictEqual(next.awarded, true);
     assert.strictEqual(next.attemptsUsed, 1);
     assert.strictEqual(getTriviaAttemptStatus(USER_A, pointsFile).attemptsUsed, 1);
   });
 
-  await runTest("29. restart preserves attempts", () => {
+  await runTest("29. restart preserves attempts", async () => {
     const store = files();
     const { pointsFile, shopFile } = store;
-    awardTriviaAttemptXp(USER_A, "Alice", { correct: true, shopFile }, pointsFile);
-    awardTriviaAttemptXp(USER_A, "Alice", { correct: false, shopFile }, pointsFile);
+    await awardTriviaAttemptXp(USER_A, "Alice", { correct: true, shopFile }, pointsFile);
+    await awardTriviaAttemptXp(USER_A, "Alice", { correct: false, shopFile }, pointsFile);
     const { service } = createService(store);
     const started = startHub(service);
-    answerCorrect(service, started.session.id, USER_A, "Alice");
+    await answerCorrect(service, started.session.id, USER_A, "Alice");
     assert.strictEqual(getTriviaAttemptStatus(USER_A, pointsFile).attemptsUsed, 3);
     const again = getTriviaAttemptStatus(USER_A, pointsFile);
     assert.strictEqual(again.attemptsUsed, 3);
     assert.strictEqual(loadPoints(pointsFile).users[String(USER_A)].trivia.attemptsUsed, 3);
   });
 
-  await runTest("30. concurrent answer exactly once", () => {
+  await runTest("30. concurrent answer exactly once", async () => {
     const store = files();
     const { pointsFile, shopFile } = store;
     const { service } = createService(store);
     const started = startHub(service);
-    const a = answerCorrect(service, started.session.id, USER_A, "Alice");
-    const b = answerCorrect(service, started.session.id, USER_B, "Bob");
+    const a = await answerCorrect(service, started.session.id, USER_A, "Alice");
+    const b = await answerCorrect(service, started.session.id, USER_B, "Bob");
     assert.strictEqual(a.ok, true);
     assert.strictEqual(b.ok, false);
     assert.strictEqual(b.reason, "question-closed");
@@ -412,26 +411,26 @@ async function main() {
     assert.strictEqual(getTriviaAttemptStatus(USER_B, pointsFile).attemptsUsed, 0);
   });
 
-  await runTest("31-33. correct +1, incorrect +0, max Trivia XP 5/day", () => {
+  await runTest("31-33. correct +1, incorrect +0, max Trivia XP 5/day", async () => {
     const store = files();
     const { pointsFile, shopFile } = store;
-    const good = awardTriviaAttemptXp(USER_A, "Alice", { correct: true, shopFile }, pointsFile);
+    const good = await awardTriviaAttemptXp(USER_A, "Alice", { correct: true, shopFile }, pointsFile);
     assert.strictEqual(good.pointsToAdd, 1);
-    const bad = awardTriviaAttemptXp(USER_B, "Bob", { correct: false, shopFile }, pointsFile);
+    const bad = await awardTriviaAttemptXp(USER_B, "Bob", { correct: false, shopFile }, pointsFile);
     assert.strictEqual(bad.pointsToAdd, 0);
     assert.strictEqual(loadPoints(pointsFile).users[String(USER_B)].points, 0);
     for (let i = 0; i < 4; i += 1) {
-      const next = awardTriviaAttemptXp(USER_A, "Alice", { correct: true, shopFile }, pointsFile);
+      const next = await awardTriviaAttemptXp(USER_A, "Alice", { correct: true, shopFile }, pointsFile);
       assert.strictEqual(next.awarded, true);
     }
     assert.strictEqual(loadPoints(pointsFile).users[String(USER_A)].points, 5);
-    const sixth = awardTriviaAttemptXp(USER_A, "Alice", { correct: true, shopFile }, pointsFile);
+    const sixth = await awardTriviaAttemptXp(USER_A, "Alice", { correct: true, shopFile }, pointsFile);
     assert.strictEqual(sixth.awarded, false);
     assert.strictEqual(loadPoints(pointsFile).users[String(USER_A)].points, 5);
     assert.strictEqual(TRIVIA_DAILY_ATTEMPT_CAP, 5);
   });
 
-  await runTest("34. wallet-linked works", () => {
+  await runTest("34. wallet-linked works", async () => {
     const { pointsFile, walletFile, shopFile } = files();
     registerManualWallet(
       USER_A,
@@ -439,7 +438,7 @@ async function main() {
       walletFile,
       1
     );
-    const result = awardTriviaAttemptXp(
+    const result = await awardTriviaAttemptXp(
       USER_A,
       "Alice",
       { correct: true, shopFile },
@@ -450,10 +449,10 @@ async function main() {
     assert.strictEqual(result.pointsToAdd, 1);
   });
 
-  await runTest("35-37. unlinked 0 XP, attempt consumed, no retroactive XP", () => {
+  await runTest("35-37. unlinked 0 XP, attempt consumed, no retroactive XP", async () => {
     setXpWalletAutoLinkForTests(false);
     const { pointsFile, walletFile, shopFile } = files();
-    const blocked = awardTriviaAttemptXp(
+    const blocked = await awardTriviaAttemptXp(
       USER_A,
       "Alice",
       { correct: true, shopFile },
@@ -469,7 +468,7 @@ async function main() {
       walletFile,
       1
     );
-    const later = awardTriviaAttemptXp(
+    const later = await awardTriviaAttemptXp(
       USER_A,
       "Alice",
       { correct: true, shopFile },
@@ -481,7 +480,7 @@ async function main() {
     assert.strictEqual(later.attemptsUsed, 2);
   });
 
-  await runTest("38. rank-up integration still works", () => {
+  await runTest("38. rank-up integration still works", async () => {
     const { pointsFile, shopFile } = files();
     mutatePoints((data) => {
       data.users[String(USER_A)] = {
@@ -491,7 +490,7 @@ async function main() {
         name: "Alice",
       };
     }, pointsFile);
-    const result = awardTriviaAttemptXp(
+    const result = await awardTriviaAttemptXp(
       USER_A,
       "Alice",
       { correct: true, shopFile },
@@ -502,11 +501,11 @@ async function main() {
     assert.strictEqual(result.rank.title, "Sprout");
   });
 
-  await runTest("39. daily XP totals unchanged outside Trivia", () => {
+  await runTest("39. daily XP totals unchanged outside Trivia", async () => {
     const { pointsFile, shopFile } = files();
-    awardTriviaAttemptXp(USER_A, "Alice", { correct: true, shopFile }, pointsFile);
+    await awardTriviaAttemptXp(USER_A, "Alice", { correct: true, shopFile }, pointsFile);
     const before = loadPoints(pointsFile).users[String(USER_A)].points;
-    awardDailyActivityPoint(USER_B, "Bob", pointsFile);
+    await awardDailyActivityPoint(USER_B, "Bob", pointsFile);
     assert.strictEqual(loadPoints(pointsFile).users[String(USER_A)].points, before);
     assert.strictEqual(getTriviaAttemptStatus(USER_B, pointsFile).attemptsUsed, 0);
     assert.ok(loadPoints(pointsFile).users[String(USER_B)].points >= 1);
@@ -520,27 +519,27 @@ async function main() {
     assert.ok(ctx.replies[0].includes("🎯 XP-eligible plays: 0 / 5"));
     const { service } = createService(store);
     const started = startHub(service);
-    const first = answerCorrect(service, started.session.id, USER_A, "Alice");
+    const first = await answerCorrect(service, started.session.id, USER_A, "Alice");
     assert.ok(first.rendered.text.includes("🎯 XP-eligible plays: 1 / 5"));
     for (let i = 0; i < 4; i += 1) {
       service.nextHubQuestion();
-      answerCorrect(service, service.getSnapshot().id, USER_A, "Alice");
+      await answerCorrect(service, service.getSnapshot().id, USER_A, "Alice");
     }
     service.nextHubQuestion();
-    const fun = answerCorrect(service, service.getSnapshot().id, USER_A, "Alice");
+    const fun = await answerCorrect(service, service.getSnapshot().id, USER_A, "Alice");
     assert.ok(fun.rendered.text.includes("Daily Trivia XP limit reached"));
     assert.ok(fun.ok);
     const more = service.nextHubQuestion();
     assert.strictEqual(more.ok, true);
   });
 
-  await runTest("44. Next Question keeps category", () => {
+  await runTest("44. Next Question keeps category", async () => {
     const store = files();
     const { pointsFile, shopFile } = store;
     const { service } = createService(store);
     const started = startHub(service, "science");
     assert.strictEqual(started.session.category, "science");
-    answerCorrect(service, started.session.id, USER_A, "Alice");
+    await answerCorrect(service, started.session.id, USER_A, "Alice");
     const next = service.nextHubQuestion();
     assert.strictEqual(next.session.category, "science");
     assert.strictEqual(next.session.questionCategory, "science");
@@ -577,12 +576,12 @@ async function main() {
     assert.strictEqual(service.isTriviaOpen(), false);
   });
 
-  await runTest("47. finished question has no live answer buttons", () => {
+  await runTest("47. finished question has no live answer buttons", async () => {
     const store = files();
     const { pointsFile, shopFile } = store;
     const { service } = createService(store);
     const started = startHub(service);
-    const result = answerCorrect(service, started.session.id, USER_A, "Alice");
+    const result = await answerCorrect(service, started.session.id, USER_A, "Alice");
     const buttons = resultButtons(result.rendered.extra);
     assert.ok(!buttons.some((b) => /^trivia:[a-f0-9]+:[0-3]$/i.test(b.callback_data)));
     assert.ok(
@@ -617,8 +616,7 @@ async function main() {
     assert.strictEqual(before.game.completed, false);
 
     const { service } = createService(null);
-    service.setAwardXpHandler((uid, name, payload) =>
-      awardTriviaAttemptXp(
+    service.setAwardXpHandler((uid, name, payload) => awardTriviaAttemptXp(
         uid,
         name,
         { ...payload, shopFile },
@@ -627,16 +625,16 @@ async function main() {
       )
     );
     const started = startHub(service);
-    answerCorrect(service, started.session.id, USER_A, "Alice");
+    await answerCorrect(service, started.session.id, USER_A, "Alice");
     const after = getDailyQuestSnapshot(USER_A, { shopFile });
     assertEligibleBotGameProgress(after, { trivia: true });
     service.nextHubQuestion();
-    answerCorrect(service, service.getSnapshot().id, USER_A, "Alice");
+    await answerCorrect(service, service.getSnapshot().id, USER_A, "Alice");
     const again = getDailyQuestSnapshot(USER_A, { shopFile });
     assertEligibleBotGameProgress(again, { trivia: true });
   });
 
-  await runTest("50. auto activity-engine Trivia uses Random", () => {
+  await runTest("50. auto activity-engine Trivia uses Random", async () => {
     const { service } = createService();
     const started = service.startTrivia({
       chatId: COMMUNITY_CHAT,
@@ -662,7 +660,7 @@ async function main() {
     assert.ok(String(ctx.replies[0]).includes("Games topic"));
   });
 
-  await runTest("52-53. cleanup and busy-state release preserved", () => {
+  await runTest("52-53. cleanup and busy-state release preserved", async () => {
     const { service } = createService();
     startHub(service);
     assert.strictEqual(service.isTriviaOpen(), true);
