@@ -53,6 +53,7 @@ const GAME_SOURCES = Object.freeze([
   "trivia",
   "tictactoe",
   "connect4",
+  "checkers",
   "chatfight",
   "mangobomb",
   "pvp",

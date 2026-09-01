@@ -1,6 +1,6 @@
 /**
  * Cross-game active-match reservation: one interactive PvP match per user.
- * Covers Tic-Tac-Toe, Connect Four, and Blackjack.
+ * Covers Tic-Tac-Toe, Connect Four, Checkers, and Blackjack.
  */
 
 const PLAYER_BUSY_TEXT = `🎮 You already have an active game.

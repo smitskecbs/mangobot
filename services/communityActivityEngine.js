@@ -165,6 +165,12 @@ const ACTION_REGISTRY = Object.freeze({
     category: "pvp",
     enabledForAuto: false,
   }),
+  checkers: Object.freeze({
+    id: "checkers",
+    mode: "pvp",
+    category: "pvp",
+    enabledForAuto: false,
+  }),
   // Alias kept for older tests that read ACTION_REGISTRY.trivia
   trivia: Object.freeze({
     id: "trivia",

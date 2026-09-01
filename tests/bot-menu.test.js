@@ -684,6 +684,8 @@ runTest("Games submenu Snake/Bounch safe deep-links", async () => {
   assert.strictEqual(bounch.url, `https://t.me/${BOT_USERNAME}?start=bounch`);
   assert.ok(buttons.some((b) => b.callback_data === GROUP_MENU_CALLBACK.TICTACTOE));
   assert.ok(buttons.some((b) => b.callback_data === GROUP_MENU_CALLBACK.CONNECT4));
+  assert.ok(buttons.some((b) => b.callback_data === GROUP_MENU_CALLBACK.CHECKERS));
+  assert.ok(buttons.some((b) => b.text === "Checkers"));
   assert.ok(buttons.some((b) => b.callback_data === GROUP_MENU_CALLBACK.TRIVIA));
   assert.ok(buttons.some((b) => b.callback_data === GROUP_MENU_CALLBACK.MANGOBOMB));
   assert.ok(buttons.some((b) => b.text === "ManGo Bomb"));
@@ -1018,6 +1020,38 @@ runTest("Connect Four menu lets members start (no admin required)", async () => 
     });
     assert.strictEqual(started, true);
     assert.ok(ctx.replies[0].text.includes("Connect Four"));
+  } finally {
+    if (prevChat === undefined) delete process.env.TELEGRAM_CHAT_ID;
+    else process.env.TELEGRAM_CHAT_ID = prevChat;
+  }
+});
+
+runTest("Checkers menu lets members start (no admin required)", async () => {
+  const prevChat = process.env.TELEGRAM_CHAT_ID;
+  process.env.TELEGRAM_CHAT_ID = String(-1003916996602);
+  delete process.env.TELEGRAM_GAMES_TOPIC_ID;
+  try {
+    const ctx = ownedCallback(
+      createMockCtx({
+        chatType: "supergroup",
+        callbackData: GROUP_MENU_CALLBACK.CHECKERS,
+      })
+    );
+    let started = false;
+    await handleGroupMenuCallback(ctx, {
+      isBusyFn: () => false,
+      startChallengeFn: () => {
+        started = true;
+        return {
+          ok: true,
+          text: "🏁 Checkers challenge open",
+          session: { id: "chk-1" },
+        };
+      },
+      setMessageIdFn: () => {},
+    });
+    assert.strictEqual(started, true);
+    assert.ok(ctx.replies[0].text.includes("Checkers"));
   } finally {
     if (prevChat === undefined) delete process.env.TELEGRAM_CHAT_ID;
     else process.env.TELEGRAM_CHAT_ID = prevChat;

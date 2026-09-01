@@ -187,6 +187,11 @@ async function main() {
       )
     );
     assert.ok(
+      buildFinalGameText(GAME_TYPE.CHECKERS, FINAL_STATE.CANCELLED).includes(
+        "Checkers cancelled"
+      )
+    );
+    assert.ok(
       buildFinalGameText(GAME_TYPE.TRIVIA, FINAL_STATE.CANCELLED).includes(
         "This round was cancelled."
       )
@@ -472,7 +477,7 @@ async function main() {
       displayName: "Alice",
       chatId: COMMUNITY_CHAT,
     });
-    const expired = c4.resolveTurnTimeout(started.session.id);
+    const expired = await c4.resolveTurnTimeout(started.session.id);
     assert.ok(expired.ok);
     assert.strictEqual(expired.session.status, "won");
     assert.deepStrictEqual(expired.rendered.extra.reply_markup.inline_keyboard, []);
@@ -598,6 +603,7 @@ async function main() {
     registerPvpCallbacks(bot, {
       runtime: ttt,
       connectFourRuntime: ttt,
+      checkersRuntime: ttt,
       awardPvpWinXpFn: () => ({ awarded: false, pointsToAdd: 0 }),
     });
     const started = ttt.startChallenge({
@@ -611,7 +617,7 @@ async function main() {
       displayName: "Alice",
       chatId: COMMUNITY_CHAT,
     });
-    const timed = ttt.resolveTurnTimeout(started.session.id);
+    const timed = await ttt.resolveTurnTimeout(started.session.id);
     assert.strictEqual(timed.session.status, "won");
     assert.ok(timed.rendered.text.includes("ran out of time"));
     await Promise.resolve();

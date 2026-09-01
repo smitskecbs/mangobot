@@ -386,8 +386,10 @@ await runTest("26b. PvP/ChatFight blocked XP feedback", async () => {
   assert.ok(reply.includes("🔒 0 XP — wallet not linked — /wallet"));
   const ttt = fs.readFileSync(path.join(__dirname, "../services/ticTacToe.js"), "utf8");
   const c4 = fs.readFileSync(path.join(__dirname, "../services/connectFour.js"), "utf8");
+  const chk = fs.readFileSync(path.join(__dirname, "../services/checkers.js"), "utf8");
   assert.ok(ttt.includes("PvP XP: 🔒 0 XP — wallet not linked — /wallet"));
   assert.ok(c4.includes("PvP XP: 🔒 0 XP — wallet not linked — /wallet"));
+  assert.ok(chk.includes("PvP XP: 🔒 0 XP — wallet not linked — /wallet"));
 });
 
 await runTest("29. no duplicate wallet reminder spam", async () => {

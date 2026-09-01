@@ -1,12 +1,17 @@
 /**
  * Human-vs-human PvP matches played (UTC day).
- * Separate from rewardedWins (TTT/C4 win XP cap). Blackjack XP is unchanged.
+ * Separate from rewardedWins (TTT/C4/Checkers win XP cap). Blackjack XP is unchanged.
  */
 
 const { recordHumanPvpMatch } = require("./points");
 const { error: logError } = require("../utils/logger");
 
-const PVP_MATCH_GAMES = Object.freeze(["tictactoe", "connect4", "blackjack"]);
+const PVP_MATCH_GAMES = Object.freeze([
+  "tictactoe",
+  "connect4",
+  "checkers",
+  "blackjack",
+]);
 const BOT_IDS = Object.freeze(["bot"]);
 
 function isTestProcess() {

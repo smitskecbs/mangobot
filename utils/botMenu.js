@@ -66,6 +66,7 @@ const GROUP_MENU_CALLBACK = Object.freeze({
   HELP: "gmenu:help",
   TICTACTOE: "gmenu:tictactoe",
   CONNECT4: "gmenu:connect4",
+  CHECKERS: "gmenu:checkers",
   TRIVIA: "gmenu:trivia",
   MANGOBOMB: "gmenu:mangobomb",
   BLACKJACK: "gmenu:blackjack",
@@ -411,11 +412,12 @@ function getGroupGamesMenuExtra(ctx) {
     Markup.button.callback("Connect Four", GROUP_MENU_CALLBACK.CONNECT4),
   ]);
   rows.push([
-    Markup.button.callback("🧠 Trivia", GROUP_MENU_CALLBACK.TRIVIA),
-    Markup.button.callback("ManGo Bomb", GROUP_MENU_CALLBACK.MANGOBOMB),
+    Markup.button.callback("Checkers", GROUP_MENU_CALLBACK.CHECKERS),
+    Markup.button.callback("🃏 Blackjack", GROUP_MENU_CALLBACK.BLACKJACK),
   ]);
   rows.push([
-    Markup.button.callback("🃏 Blackjack", GROUP_MENU_CALLBACK.BLACKJACK),
+    Markup.button.callback("🧠 Trivia", GROUP_MENU_CALLBACK.TRIVIA),
+    Markup.button.callback("ManGo Bomb", GROUP_MENU_CALLBACK.MANGOBOMB),
   ]);
   rows.push([Markup.button.callback("⬅️ Back", GROUP_MENU_CALLBACK.BACK)]);
 
@@ -518,6 +520,7 @@ function isGroupMenuCallback(data) {
     data === GROUP_MENU_CALLBACK.HELP ||
     data === GROUP_MENU_CALLBACK.TICTACTOE ||
     data === GROUP_MENU_CALLBACK.CONNECT4 ||
+    data === GROUP_MENU_CALLBACK.CHECKERS ||
     data === GROUP_MENU_CALLBACK.TRIVIA ||
     data === GROUP_MENU_CALLBACK.MANGOBOMB ||
     data === GROUP_MENU_CALLBACK.BLACKJACK ||

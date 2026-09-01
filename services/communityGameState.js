@@ -1,7 +1,7 @@
 /**
  * Shared community exclusive busy flag (ChatFight + community Trivia + ManGo Bomb).
  * Personal Trivia hub sessions do not occupy the group.
- * Parallel PvP (Tic-Tac-Toe, Connect Four, Blackjack) does not occupy the group.
+ * Parallel PvP (Tic-Tac-Toe, Connect Four, Checkers, Blackjack) does not occupy the group.
  * Lazy requires avoid circular init issues.
  */
 
@@ -32,6 +32,17 @@ function isConnectFourBusy() {
     const c4 = require("./connectFour");
     return typeof c4.isConnectFourOpen === "function"
       ? Boolean(c4.isConnectFourOpen())
+      : false;
+  } catch (_err) {
+    return false;
+  }
+}
+
+function isCheckersBusy() {
+  try {
+    const checkers = require("./checkers");
+    return typeof checkers.isCheckersOpen === "function"
+      ? Boolean(checkers.isCheckersOpen())
       : false;
   } catch (_err) {
     return false;
@@ -83,7 +94,11 @@ function isPvpBusy(options = {}) {
     typeof options.isConnectFourOpenFn === "function"
       ? options.isConnectFourOpenFn()
       : isConnectFourBusy();
-  return Boolean(tttOpen || c4Open);
+  const chkOpen =
+    typeof options.isCheckersOpenFn === "function"
+      ? options.isCheckersOpenFn()
+      : isCheckersBusy();
+  return Boolean(tttOpen || c4Open || chkOpen);
 }
 
 function isCommunityExclusiveBusy(options = {}) {
@@ -162,6 +177,7 @@ module.exports = {
   isChatFightBusy,
   isTicTacToeBusy,
   isConnectFourBusy,
+  isCheckersBusy,
   isTriviaBusy,
   isMangoBombBusy,
   isBlackjackBusy,

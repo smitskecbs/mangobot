@@ -1,5 +1,5 @@
 /**
- * Parallel TTT / Connect Four / Blackjack matches.
+ * Parallel TTT / Connect Four / Checkers / Blackjack matches.
  * Run: node tests/pvp-parallel-matches.test.js
  */
 
@@ -10,6 +10,7 @@ const {
   STATUS: TTT_STATUS,
 } = require("../services/ticTacToe");
 const { createConnectFourService } = require("../services/connectFour");
+const { createCheckersService } = require("../services/checkers");
 const { createBlackjackService, STATUS: BJ_STATUS } = require("../services/blackjack");
 const { createPvpSessionManager } = require("../services/pvpSessionManager");
 const {
@@ -93,6 +94,7 @@ function createBundle() {
   let bjSeq = 0;
   const ttt = createTicTacToeService(shared);
   const c4 = createConnectFourService(shared);
+  const chk = createCheckersService(shared);
   const bj = createBlackjackService({
     reservation,
     now: timers.now,
@@ -104,7 +106,7 @@ function createBundle() {
     decisionMs: 30_000,
     turnMs: 30_000,
   });
-  return { timers, reservation, ttt, c4, bj };
+  return { timers, reservation, ttt, c4, chk, bj };
 }
 
 async function runTest(name, fn) {
@@ -185,6 +187,43 @@ async function main() {
     });
     assert.strictEqual(ttt.getSession(t.session.id).status, TTT_STATUS.ACTIVE);
     assert.strictEqual(c4.getSession(c.session.id).status, "active");
+  });
+
+  await runTest("Checkers and Tic-Tac-Toe run in parallel", async () => {
+    const { ttt, chk } = createBundle();
+    const t = ttt.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: starter(USER_A, "Kevin"),
+    });
+    const k = chk.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: starter(USER_C, "Charlie"),
+    });
+    assert.strictEqual(t.ok, true);
+    assert.strictEqual(k.ok, true);
+    ttt.join({
+      sessionId: t.session.id,
+      userId: USER_B,
+      displayName: "Pippi",
+      chatId: COMMUNITY_CHAT,
+    });
+    chk.join({
+      sessionId: k.session.id,
+      userId: USER_D,
+      displayName: "Dave",
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(ttt.getSession(t.session.id).status, TTT_STATUS.ACTIVE);
+    assert.strictEqual(chk.getSession(k.session.id).status, "active");
+    await chk.move({
+      sessionId: k.session.id,
+      userId: USER_C,
+      from: 20,
+      to: 16,
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(chk.getSession(k.session.id).board[16], "b");
+    assert.strictEqual(ttt.getSession(t.session.id).board[0], null);
   });
 
   await runTest("Connect Four and Blackjack run in parallel", async () => {

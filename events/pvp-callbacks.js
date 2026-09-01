@@ -1,6 +1,6 @@
 /**
- * PvP inline callbacks — Tic-Tac-Toe and Connect Four join + move.
- * Callback data: pvp:ttt:... | pvp:c4:...  (opaque session ids, never uids)
+ * PvP inline callbacks — Tic-Tac-Toe, Connect Four, and Checkers.
+ * Callback data: pvp:ttt:... | pvp:c4:... | pvp:chk:...  (opaque session ids, never uids)
  */
 
 const { logError } = require("../utils/logger");
@@ -16,6 +16,10 @@ const {
   getConnectFourRuntime,
 } = require("../services/connectFour");
 const {
+  parsePvpCallbackData: parseChkCallbackData,
+  getCheckersRuntime,
+} = require("../services/checkers");
+const {
   GAME_OVER_TOAST,
   GAME_TYPE,
   stripStaleCallbackButtons,
@@ -24,7 +28,13 @@ const {
 
 function pvpCleanupGameType(runtime, session) {
   const id = (session && session.game) || (runtime && runtime.GAME_ID);
-  return id === "connect4" ? GAME_TYPE.CONNECT4 : GAME_TYPE.TICTACTOE;
+  if (id === "connect4") {
+    return GAME_TYPE.CONNECT4;
+  }
+  if (id === "checkers") {
+    return GAME_TYPE.CHECKERS;
+  }
+  return GAME_TYPE.TICTACTOE;
 }
 
 function isPvpTerminalStatus(status) {
@@ -48,9 +58,13 @@ function schedulePvpSessionCleanup(session, telegram, gameType) {
 }
 
 function pvpGameType(parsed) {
-  return parsed && parsed.game === "connect4"
-    ? GAME_TYPE.CONNECT4
-    : GAME_TYPE.TICTACTOE;
+  if (parsed && parsed.game === "connect4") {
+    return GAME_TYPE.CONNECT4;
+  }
+  if (parsed && parsed.game === "checkers") {
+    return GAME_TYPE.CHECKERS;
+  }
+  return GAME_TYPE.TICTACTOE;
 }
 
 function cbAnswer(ctx, text) {
@@ -284,12 +298,58 @@ async function handlePvpCallback(ctx, options = {}) {
     return;
   }
 
-  if (parsed.action === "move") {
+  if (parsed.action === "sel") {
+    if (typeof runtime.select !== "function") {
+      await cbAnswer(ctx, "Invalid move.");
+      return;
+    }
+    const result = runtime.select({
+      sessionId: parsed.sessionId,
+      userId,
+      square: parsed.square,
+      chatId,
+    });
+
+    if (!result.ok) {
+      if (result.reason === "not-your-turn") {
+        await cbAnswer(ctx, "Not your turn.");
+      } else if (result.reason === "outsider") {
+        await cbAnswer(ctx, "This game belongs to two other players.");
+      } else if (result.reason === "invalid-piece") {
+        await cbAnswer(ctx, "That's not your piece.");
+      } else if (result.reason === "no-moves") {
+        await cbAnswer(ctx, "That piece has no moves.");
+      } else if (result.reason === "must-continue") {
+        await cbAnswer(ctx, "You must continue with the same piece.");
+      } else if (
+        result.reason === "already-ended" ||
+        result.reason === "not-active" ||
+        result.reason === "invalid-session"
+      ) {
+        await rejectStalePvp(ctx, runtime, parsed);
+      } else if (result.reason === "wrong-chat") {
+        await cbAnswer(ctx, "Wrong chat.");
+      } else {
+        await cbAnswer(ctx, "Invalid move.");
+      }
+      return;
+    }
+
+    await cbAnswer(ctx);
+    if (result.rendered) {
+      await safeEdit(ctx, result.rendered.text, result.rendered.extra);
+    }
+    return;
+  }
+
+  if (parsed.action === "move" || parsed.action === "mv") {
     const result = await runtime.move({
       sessionId: parsed.sessionId,
       userId,
       cell: parsed.cell,
       column: parsed.column,
+      from: parsed.from,
+      to: parsed.to,
       chatId,
     });
 
@@ -302,6 +362,10 @@ async function handlePvpCallback(ctx, options = {}) {
         await cbAnswer(ctx, "That square is already taken.");
       } else if (result.reason === "full") {
         await cbAnswer(ctx, "That column is full.");
+      } else if (result.reason === "must-capture") {
+        await cbAnswer(ctx, "You must capture.");
+      } else if (result.reason === "must-continue") {
+        await cbAnswer(ctx, "You must continue with the same piece.");
       } else if (
         result.reason === "already-ended" ||
         result.reason === "not-active" ||
@@ -348,6 +412,11 @@ function registerPvpCallbacks(bot, options = {}) {
     (typeof options.getConnectFourRuntimeFn === "function"
       ? options.getConnectFourRuntimeFn()
       : getConnectFourRuntime());
+  const chkRuntime =
+    options.checkersRuntime ||
+    (typeof options.getCheckersRuntimeFn === "function"
+      ? options.getCheckersRuntimeFn()
+      : getCheckersRuntime());
 
   const awardXpFn =
     typeof options.awardPvpWinXpFn === "function"
@@ -358,6 +427,9 @@ function registerPvpCallbacks(bot, options = {}) {
     wireTimeoutMessageEdits(tttRuntime, bot.telegram, awardXpFn);
     if (c4Runtime && c4Runtime !== tttRuntime) {
       wireTimeoutMessageEdits(c4Runtime, bot.telegram, awardXpFn);
+    }
+    if (chkRuntime && chkRuntime !== tttRuntime && chkRuntime !== c4Runtime) {
+      wireTimeoutMessageEdits(chkRuntime, bot.telegram, awardXpFn);
     }
   }
 
@@ -373,6 +445,13 @@ function registerPvpCallbacks(bot, options = {}) {
       ...options,
       runtime: c4Runtime,
       parseCallbackData: parseC4CallbackData,
+    })
+  );
+  bot.action(/^pvp:chk:(join|sel|mv):/, (ctx) =>
+    handlePvpCallback(ctx, {
+      ...options,
+      runtime: chkRuntime,
+      parseCallbackData: parseChkCallbackData,
     })
   );
 }

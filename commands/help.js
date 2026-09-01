@@ -23,6 +23,7 @@ const HELP_MESSAGE = `🥭 Commands
 /chatfight
 /tictactoe — Start Tic-Tac-Toe
 /connect4 — Start Connect Four
+/checkers — Start Checkers
 /trivia — Open Trivia categories
 /mangobomb — Start a ManGo Bomb round
 /blackjack — Start a ManGo Blackjack round

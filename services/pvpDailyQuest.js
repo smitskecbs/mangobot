@@ -1,5 +1,5 @@
 /**
- * Daily Quest game progress for resolved TTT/C4 matches.
+ * Daily Quest game progress for resolved TTT/C4/Checkers matches.
  * Bot-game slot is independent of XP. Human PvP is a separate counter.
  */
 

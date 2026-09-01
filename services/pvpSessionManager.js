@@ -337,7 +337,7 @@ function sanitizePvpDisplayName(fromOrName, maxLen = 24) {
 let sharedPvpSessionManager = null;
 
 /**
- * Production singleton so Tic-Tac-Toe and Connect Four share pair cooldown.
+ * Production singleton so Tic-Tac-Toe, Connect Four, and Checkers share pair cooldown.
  * Parallel matches are allowed; per-user occupancy is handled by pvpMatchReservation.
  */
 function getSharedPvpSessionManager() {

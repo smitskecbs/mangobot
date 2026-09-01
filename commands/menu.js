@@ -13,6 +13,7 @@ const { handleWeeklyWinners } = require("./weeklywinners");
 const { handleHelp } = require("./help");
 const { handleTicTacToe } = require("./tictactoe");
 const { handleConnectFour } = require("./connect4");
+const { handleCheckers } = require("./checkers");
 const { handleTrivia } = require("./trivia");
 const { handleMangoBomb } = require("./mangobomb");
 const { handleBlackjack } = require("./blackjack");
@@ -76,6 +77,7 @@ const GROUP_MENU_ACTION_RE = new RegExp(
     GROUP_MENU_CALLBACK.HELP,
     GROUP_MENU_CALLBACK.TICTACTOE,
     GROUP_MENU_CALLBACK.CONNECT4,
+    GROUP_MENU_CALLBACK.CHECKERS,
     GROUP_MENU_CALLBACK.TRIVIA,
     GROUP_MENU_CALLBACK.MANGOBOMB,
     GROUP_MENU_CALLBACK.BLACKJACK,
@@ -316,6 +318,9 @@ async function handleGroupMenuCallback(ctx, options = {}) {
   }
   if (data === GROUP_MENU_CALLBACK.CONNECT4) {
     return handleConnectFour(ctx, options);
+  }
+  if (data === GROUP_MENU_CALLBACK.CHECKERS) {
+    return handleCheckers(ctx, options);
   }
   if (data === GROUP_MENU_CALLBACK.TRIVIA) {
     return handleTrivia(ctx, options);

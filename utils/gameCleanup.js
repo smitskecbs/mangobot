@@ -28,6 +28,7 @@ const GAME_TYPE = Object.freeze({
   TRIVIA: "trivia",
   TICTACTOE: "tictactoe",
   CONNECT4: "connect4",
+  CHECKERS: "checkers",
   CHATFIGHT: "chatfight",
   BLACKJACK: "blackjack",
 });
@@ -53,6 +54,9 @@ function titleFor(gameType) {
   }
   if (gameType === GAME_TYPE.CONNECT4) {
     return "🟡 Connect Four cancelled";
+  }
+  if (gameType === GAME_TYPE.CHECKERS) {
+    return "🏁 Checkers cancelled";
   }
   if (gameType === GAME_TYPE.CHATFIGHT) {
     return "⚔️ ChatFight ended";
