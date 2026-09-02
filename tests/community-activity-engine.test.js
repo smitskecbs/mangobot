@@ -171,7 +171,7 @@ async function main() {
     assert.strictEqual(id, ACTION_IDS.CHATFIGHT);
   });
 
-  await runTest("chatfight cooldown → fallback other action", async () => {
+  await runTest("chatfight cooldown → skip other auto actions", async () => {
     const service = createService();
     service.startFight({ chatId: CHAT, type: FIGHT_TYPES.TYPE_RUSH });
     const state = {
@@ -308,7 +308,7 @@ async function main() {
     sched.stop();
   });
 
-  await runTest("chatfight announce fail → prompt fallback", async () => {
+  await runTest("chatfight announce fail → skip (no prompt fallback)", async () => {
     const service = createService();
     const state = {
       sent: {},
@@ -345,10 +345,10 @@ async function main() {
       wasActiveWithinFn: () => false,
       nowMs: Date.now(),
     });
-    assert.notStrictEqual(result.action, ACTION_IDS.CHATFIGHT);
+    assert.strictEqual(result.action, ACTION_IDS.SKIP);
+    assert.strictEqual(result.sent, false);
     assert.ok(result.fallback && String(result.fallback).includes("chatfight"));
-    assert.strictEqual(result.sent, true);
-    assert.ok(sent.length >= 1 || result.action === ACTION_IDS.TRIVIA);
+    assert.strictEqual(sent.length, 0);
     assert.ok(state.sent["2026-08-12"].includes("act1830"));
     try {
       require("../services/trivia").getTriviaRuntime().reset();

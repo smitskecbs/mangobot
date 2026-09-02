@@ -455,6 +455,14 @@ function buildWeights(config, context) {
     weights[ACTION_IDS.GAME] = Math.round(weights[ACTION_IDS.GAME] * 1.2);
   }
 
+  // Production auto-scheduler: ChatFight only. Other actions stay in the
+  // registry for forceAction/tests and manual commands; they are not picked.
+  for (const id of Object.keys(weights)) {
+    if (id !== ACTION_IDS.CHATFIGHT && id !== ACTION_IDS.SKIP) {
+      weights[id] = 0;
+    }
+  }
+
   return weights;
 }
 
@@ -681,11 +689,13 @@ async function processCommunityActivitySlot({
     recentActivityTypes: state.recentActivityTypes,
   };
 
-  let action =
-    typeof forceAction === "string" && forceAction
-      ? forceAction
-      : chooseAction(config, context, random);
+  const forced = Boolean(typeof forceAction === "string" && forceAction);
+  let action = forced ? forceAction : chooseAction(config, context, random);
   let fallbackFrom = null;
+
+  if (!forced && action !== ACTION_IDS.CHATFIGHT && action !== ACTION_IDS.SKIP) {
+    action = ACTION_IDS.SKIP;
+  }
 
   // Always mark processed to prevent restart spam / catch-up.
   markSlotProcessed(state, dayKey, slot.id);
@@ -736,18 +746,6 @@ async function processCommunityActivitySlot({
       actionId,
     ];
     return { action: actionId, sent: true, reason: "sent" };
-  }
-
-  function pickPromptFallback() {
-    const promptIds = [
-      ACTION_IDS.SNAKE,
-      ACTION_IDS.BOUNCH,
-      ACTION_IDS.WEEKLY,
-      ACTION_IDS.LEADERBOARD,
-      ACTION_IDS.GAME,
-      ACTION_IDS.COMMUNITY,
-    ];
-    return promptIds[Math.floor(random() * promptIds.length)];
   }
 
   async function tryChatFight() {
@@ -923,16 +921,15 @@ async function processCommunityActivitySlot({
       return { action: ACTION_IDS.CHATFIGHT, sent: true, reason: "started" };
     }
     fallbackFrom = `chatfight-${fightResult.reason}`;
-    const weights = buildWeights(config, context);
-    weights[ACTION_IDS.CHATFIGHT] = 0;
-    action = pickWeightedAction(weights, random);
-    if (
-      action === ACTION_IDS.CHATFIGHT ||
-      action === ACTION_IDS.SKIP ||
-      !isActionEligible(action, context)
-    ) {
-      action = pickPromptFallback();
-    }
+    log(
+      `[activity-engine] skipped slot=${slot.label} reason=${fallbackFrom}`
+    );
+    return {
+      action: ACTION_IDS.SKIP,
+      sent: false,
+      reason: fightResult.reason,
+      fallback: fallbackFrom,
+    };
   }
 
   if (action === ACTION_IDS.TRIVIA) {
@@ -953,18 +950,15 @@ async function processCommunityActivitySlot({
       return { action: ACTION_IDS.TRIVIA, sent: true, reason: "started" };
     }
     fallbackFrom = fallbackFrom || `trivia-${triviaResult.reason}`;
-    const weights = buildWeights(config, context);
-    weights[ACTION_IDS.TRIVIA] = 0;
-    weights[ACTION_IDS.CHATFIGHT] = 0;
-    action = pickWeightedAction(weights, random);
-    if (
-      action === ACTION_IDS.TRIVIA ||
-      action === ACTION_IDS.CHATFIGHT ||
-      action === ACTION_IDS.SKIP ||
-      !isActionEligible(action, context)
-    ) {
-      action = pickPromptFallback();
-    }
+    log(
+      `[activity-engine] skipped slot=${slot.label} reason=${fallbackFrom}`
+    );
+    return {
+      action: ACTION_IDS.SKIP,
+      sent: false,
+      reason: triviaResult.reason,
+      fallback: fallbackFrom,
+    };
   }
 
   if (action === ACTION_IDS.QUESTION) {
@@ -985,20 +979,15 @@ async function processCommunityActivitySlot({
       return { action: ACTION_IDS.QUESTION, sent: true, reason: "sent" };
     }
     fallbackFrom = fallbackFrom || `question-${questionResult.reason}`;
-    const weights = buildWeights(config, context);
-    weights[ACTION_IDS.QUESTION] = 0;
-    weights[ACTION_IDS.CHATFIGHT] = 0;
-    weights[ACTION_IDS.TRIVIA] = 0;
-    action = pickWeightedAction(weights, random);
-    if (
-      action === ACTION_IDS.QUESTION ||
-      action === ACTION_IDS.TRIVIA ||
-      action === ACTION_IDS.CHATFIGHT ||
-      action === ACTION_IDS.SKIP ||
-      !isActionEligible(action, context)
-    ) {
-      action = pickPromptFallback();
-    }
+    log(
+      `[activity-engine] skipped slot=${slot.label} reason=${fallbackFrom}`
+    );
+    return {
+      action: ACTION_IDS.SKIP,
+      sent: false,
+      reason: questionResult.reason,
+      fallback: fallbackFrom,
+    };
   }
 
   const promptResult = await sendPrompt(action);
