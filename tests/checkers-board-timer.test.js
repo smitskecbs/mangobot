@@ -18,7 +18,7 @@ const {
   STATUS,
   emptyBoard,
 } = require("../services/checkers");
-const { BLACK, WHITE, sqToRowCol, rowColToSq, isDark, legalMoves, applyMove } = require("../services/checkersRules");
+const { BLACK, WHITE, BLACK_KING, WHITE_KING, sqToRowCol, rowColToSq, isDark, legalMoves, applyMove } = require("../services/checkersRules");
 const { handlePvpCallback } = require("../events/pvp-callbacks");
 
 const COMMUNITY_CHAT = -1001234567890;
@@ -169,6 +169,12 @@ async function main() {
     assert.ok(!rendered.text.includes(formatBoard(session.board)));
     assert.ok(rendered.text.includes("🏁 CHECKERS"));
     assert.ok(rendered.text.includes("Select your piece."));
+    assert.ok(labels.includes("🟠"));
+    assert.ok(labels.includes("🟢"));
+    assert.ok(!labels.includes("🟥"));
+    assert.ok(!labels.includes("🟦"));
+    assert.ok(!rendered.text.includes("🟥"));
+    assert.ok(!rendered.text.includes("🟦"));
   });
 
   await runTest("non-playable squares cannot trigger moves", async () => {
@@ -576,6 +582,27 @@ async function main() {
     for (const btn of rows.flat()) {
       assert.ok(Buffer.byteLength(btn.callback_data, "utf8") <= 64);
     }
+  });
+
+  await runTest("kings stay distinguishable from normal pieces", async () => {
+    const { service } = createService();
+    const started = startVsBot(service);
+    const raw = service.manager.getSession(started.session.id);
+    raw.board = emptyBoard();
+    raw.board[20] = BLACK;
+    raw.board[16] = BLACK_KING;
+    raw.board[8] = WHITE;
+    raw.board[4] = WHITE_KING;
+    const rendered = service.renderMessage(service.getSession(started.session.id));
+    const labels = rendered.extra.reply_markup.inline_keyboard.flat().map((b) => b.text);
+    assert.ok(labels.includes("🟠"));
+    assert.ok(labels.includes("🔶"));
+    assert.ok(labels.includes("🟢"));
+    assert.ok(labels.includes("💚"));
+    assert.notStrictEqual("🔶", "🟠");
+    assert.notStrictEqual("💚", "🟢");
+    assert.ok(!labels.includes("🟥"));
+    assert.ok(!labels.includes("🟦"));
   });
 
   restoreEnv();

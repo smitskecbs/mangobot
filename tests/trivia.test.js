@@ -64,6 +64,10 @@ const {
 const {
   clearAllGameMessageCleanups,
 } = require("../utils/gameCleanup");
+const {
+  getGroupMenuOwner,
+  resetGroupMenuOwnersForTests,
+} = require("../utils/menuOwnership");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-trivia-"));
 setMangoShopFileForTests(path.join(tempDir, "shop.json"));
@@ -1372,6 +1376,7 @@ async function main() {
 
     service.rememberChooserOwner(COMMUNITY_CHAT, 9001, USER_A, "Kevin");
     assert.ok(service.getChooserOwner(COMMUNITY_CHAT, 9001));
+    resetGroupMenuOwnersForTests();
     const ctx = createMockCtx({
       userId: USER_A,
       firstName: "Kevin",
@@ -1383,6 +1388,9 @@ async function main() {
       isBusyFn: () => false,
     });
     assert.strictEqual(service.getChooserOwner(COMMUNITY_CHAT, 9001), null);
+    const menuOwner = getGroupMenuOwner(COMMUNITY_CHAT, 9001);
+    assert.ok(menuOwner);
+    assert.strictEqual(menuOwner.ownerUserId, String(USER_A));
   });
 
   await runTest("callback ACK happens before Trivia XP persistence", async () => {

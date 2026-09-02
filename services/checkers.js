@@ -68,14 +68,13 @@ const STATUS = Object.freeze({
   EXPIRED: "expired",
 });
 
-// Same-family large squares so Telegram columns stay as even as inline
-// keyboards allow. Mixing ▫️ with ⬛/🟠 makes light cells much narrower.
-const MARK_B = "🟥";
-const MARK_W = "🟦";
-const MARK_BK = "🟧";
-const MARK_WK = "🟪";
-const MARK_SELECTED = "🟨";
-const MARK_DEST = "🟩";
+// Round pieces on a square board. Telegram still auto-sizes buttons;
+// circles read as draughts on a phone better than colored squares.
+const MARK_B = "🟠";
+const MARK_W = "🟢";
+const MARK_BK = "🔶";
+const MARK_WK = "💚";
+const MARK_DEST = "✨";
 const EMPTY_DARK = "⬛";
 const LIGHT_CELL = "⬜";
 const KEY_EMPTY = EMPTY_DARK;
@@ -91,7 +90,6 @@ function pieceEmoji(piece) {
 
 function formatBoard(board, options = {}) {
   const cells = Array.isArray(board) ? board : emptyBoard();
-  const selected = isPlayableSquare(options.selected) ? options.selected : null;
   const destSet = new Set(
     Array.isArray(options.destinations) ? options.destinations : []
   );
@@ -104,9 +102,7 @@ function formatBoard(board, options = {}) {
         continue;
       }
       const sq = rowColToSq(row, col);
-      if (sq === selected) {
-        line += MARK_SELECTED;
-      } else if (destSet.has(sq)) {
+      if (destSet.has(sq)) {
         line += MARK_DEST;
       } else {
         line += pieceEmoji(cells[sq]);
@@ -194,9 +190,6 @@ function buildJoinKeyboard(sessionId) {
 }
 
 function squareButtonLabel(session, sq, destSet) {
-  if (sq === session.selectedSquare) {
-    return MARK_SELECTED;
-  }
   if (destSet.has(sq)) {
     return MARK_DEST;
   }
@@ -1223,7 +1216,6 @@ module.exports = {
   MARK_W,
   MARK_BK,
   MARK_WK,
-  MARK_SELECTED,
   MARK_DEST,
   EMPTY_DARK,
   LIGHT_CELL,

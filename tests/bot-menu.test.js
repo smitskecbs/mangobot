@@ -59,10 +59,14 @@ const {
 } = require("../commands/menu");
 const {
   bindGroupMenuOwnerFromCtx,
+  rememberGroupMenuOwner,
   forgetGroupMenuOwner,
   resetGroupMenuOwnersForTests,
-  MENU_UNAUTHORIZED_GENERIC,
+  getGroupMenuOwner,
+  listGroupMenuKeysForTests,
+  MENU_EXPIRED_GENERIC,
 } = require("../utils/menuOwnership");
+const { handleTriviaHubCallback } = require("../commands/trivia");
 const {
   shouldSkipCommunityActivity,
 } = require("../events/points-trigger");
@@ -1283,7 +1287,7 @@ runTest("forgetting menu A does not affect menu B", async () => {
   await handleGroupMenuCallback(staleA);
   await handleGroupMenuCallback(liveB);
   assert.deepStrictEqual(staleA.edits, []);
-  assert.deepStrictEqual(staleA.answered, [MENU_UNAUTHORIZED_GENERIC]);
+  assert.deepStrictEqual(staleA.answered, [MENU_EXPIRED_GENERIC]);
   assert.strictEqual(liveB.edits[0].text, formatGroupProfileText("Piet"));
 });
 
@@ -1369,7 +1373,103 @@ runTest("stale callback without mapping fails closed", async () => {
   await handleGroupMenuCallback(ctx);
   assert.deepStrictEqual(ctx.edits, []);
   assert.deepStrictEqual(ctx.replies, []);
-  assert.deepStrictEqual(ctx.answered, [MENU_UNAUTHORIZED_GENERIC]);
+  assert.deepStrictEqual(ctx.answered, [MENU_EXPIRED_GENERIC]);
+});
+
+runTest("owner use refreshes LRU order", async () => {
+  resetGroupMenuOwnersForTests();
+  const chatId = -2100;
+  rememberGroupMenuOwner(chatId, 1, USER_A, "Kevin");
+  const before = getGroupMenuOwner(chatId, 1).rememberedAt;
+  const cb = createMockCtx({
+    chatType: "supergroup",
+    userId: USER_A,
+    firstName: "Kevin",
+    chatId,
+    messageId: 1,
+    callbackData: GROUP_MENU_CALLBACK.GAMES,
+  });
+  await handleGroupMenuCallback(cb);
+  assert.strictEqual(cb.edits.length, 1);
+  const after = getGroupMenuOwner(chatId, 1);
+  assert.ok(after);
+  assert.ok(after.rememberedAt >= before);
+  const keys = listGroupMenuKeysForTests();
+  assert.ok(keys.includes(`${chatId}:1`));
+});
+
+runTest("in-place showMenuView keeps ownership on the same message", async () => {
+  resetGroupMenuOwnersForTests();
+  const menu = createMockCtx({
+    chatType: "supergroup",
+    userId: USER_A,
+    firstName: "Kevin",
+    chatId: -2101,
+  });
+  await handleMenu(menu);
+  const messageId = menu.replies[0].message_id;
+  const cb = createMockCtx({
+    chatType: "supergroup",
+    userId: USER_A,
+    firstName: "Kevin",
+    chatId: -2101,
+    messageId,
+    callbackData: GROUP_MENU_CALLBACK.RANKINGS,
+  });
+  await handleGroupMenuCallback(cb);
+  const owner = getGroupMenuOwner(-2101, messageId);
+  assert.ok(owner);
+  assert.strictEqual(owner.ownerUserId, String(USER_A));
+  const back = createMockCtx({
+    chatType: "supergroup",
+    userId: USER_A,
+    firstName: "Kevin",
+    chatId: -2101,
+    messageId,
+    callbackData: GROUP_MENU_CALLBACK.BACK,
+  });
+  await handleGroupMenuCallback(back);
+  assert.strictEqual(back.edits.length, 1);
+  assert.strictEqual(getGroupMenuOwner(-2101, messageId).ownerUserId, String(USER_A));
+});
+
+runTest("Trivia Games view registers group menu ownership", async () => {
+  resetGroupMenuOwnersForTests();
+  const ctx = createMockCtx({
+    chatType: "supergroup",
+    userId: USER_A,
+    firstName: "Kevin",
+    chatId: -2102,
+    messageId: 88,
+    callbackData: "trivia:games",
+  });
+  await handleTriviaHubCallback(ctx, {
+    runtime: {
+      getChooserOwner() {
+        return null;
+      },
+      forgetChooserOwner() {},
+      getPersonalSession() {
+        return null;
+      },
+    },
+    isBusyFn: () => false,
+  });
+  assert.ok(ctx.edits.length >= 1);
+  assert.ok(String(ctx.edits[0].text).includes("Games"));
+  const owner = getGroupMenuOwner(-2102, 88);
+  assert.ok(owner);
+  assert.strictEqual(owner.ownerUserId, String(USER_A));
+  const gamesCb = createMockCtx({
+    chatType: "supergroup",
+    userId: USER_A,
+    firstName: "Kevin",
+    chatId: -2102,
+    messageId: 88,
+    callbackData: GROUP_MENU_CALLBACK.BACK,
+  });
+  await handleGroupMenuCallback(gamesCb);
+  assert.strictEqual(gamesCb.edits.length, 1);
 });
 
 runTest("/menu command skips daily activity", async () => {

@@ -54,9 +54,12 @@ const {
 const { sanitizePvpDisplayName } = require("../services/pvpSessionManager");
 const {
   rememberSentGroupMenu,
+  rememberCallbackGroupMenu,
+  rememberGroupMenuOwner,
   getGroupMenuOwner,
   callbackMenuMessageId,
   formatMenuUnauthorizedToast,
+  MENU_EXPIRED_GENERIC,
 } = require("../utils/menuOwnership");
 
 const GROUP_MENU_ACTION_RE = new RegExp(
@@ -117,7 +120,12 @@ function attachSentMenuOwnership(ctx, result) {
 async function showMenuView(ctx, text, extra) {
   if (typeof ctx.editMessageText === "function") {
     try {
-      return await ctx.editMessageText(text, extra);
+      const edited = await ctx.editMessageText(text, extra);
+      rememberCallbackGroupMenu(ctx);
+      if (edited && edited.message_id != null) {
+        rememberSentGroupMenu(ctx, edited);
+      }
+      return edited;
     } catch (_err) {
       // Message not editable (e.g. too old) — reply instead.
     }
@@ -137,9 +145,17 @@ async function assertGroupMenuOwner(ctx) {
     clickerId != null &&
     String(record.ownerUserId) === String(clickerId)
   ) {
-    return { ok: true, record };
+    const refreshed = rememberGroupMenuOwner(
+      chatId,
+      messageId,
+      clickerId,
+      ctx.from || record.displayName
+    );
+    return { ok: true, record: refreshed || record };
   }
-  const toast = formatMenuUnauthorizedToast(record && record.displayName);
+  const toast = record
+    ? formatMenuUnauthorizedToast(record.displayName)
+    : MENU_EXPIRED_GENERIC;
   if (ctx && typeof ctx.answerCbQuery === "function") {
     await ctx.answerCbQuery(toast).catch(() => {});
   }

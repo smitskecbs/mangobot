@@ -1,16 +1,20 @@
 /**
  * In-memory ownership for group /menu messages.
  * Keyed by chatId + messageId so parallel menus stay independent.
- * Callback_data stays short; stale/unknown menus fail closed.
+ * Callback_data stays short. Missing records are stale, not "another player".
  */
 
 const { sanitizePvpDisplayName } = require("../services/pvpSessionManager");
 
 const MENU_UNAUTHORIZED_GENERIC =
   "This menu belongs to another player. Open your own with /menu.";
+const MENU_EXPIRED_GENERIC =
+  "This menu has expired. Open a fresh one with /menu.";
 
 const MAX_MENUS = 2000;
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+let maxMenusCap = MAX_MENUS;
 
 /** @type {Map<string, { ownerUserId: string, displayName: string, rememberedAt: number }>} */
 const menus = new Map();
@@ -29,7 +33,7 @@ function pruneMenus(now = Date.now()) {
       menus.delete(key);
     }
   }
-  while (menus.size > MAX_MENUS) {
+  while (menus.size > maxMenusCap) {
     const oldest = menus.keys().next().value;
     if (oldest === undefined) {
       break;
@@ -43,14 +47,17 @@ function rememberGroupMenuOwner(chatId, messageId, userId, displayName) {
   if (!key || userId == null || userId === "") {
     return null;
   }
-  pruneMenus();
+  if (menus.has(key)) {
+    menus.delete(key);
+  }
   const record = {
     ownerUserId: String(userId),
     displayName: sanitizePvpDisplayName(displayName),
     rememberedAt: Date.now(),
   };
   menus.set(key, record);
-  return record;
+  pruneMenus();
+  return menus.get(key) || record;
 }
 
 function getGroupMenuOwner(chatId, messageId) {
@@ -69,8 +76,18 @@ function forgetGroupMenuOwner(chatId, messageId) {
   return menus.delete(key);
 }
 
+function setMaxGroupMenusForTests(limit) {
+  maxMenusCap =
+    Number.isInteger(limit) && limit > 0 ? limit : MAX_MENUS;
+}
+
+function listGroupMenuKeysForTests() {
+  return Array.from(menus.keys());
+}
+
 function resetGroupMenuOwnersForTests() {
   menus.clear();
+  maxMenusCap = MAX_MENUS;
 }
 
 function formatMenuUnauthorizedToast(displayName) {
@@ -115,6 +132,25 @@ function rememberSentGroupMenu(ctx, sent) {
 }
 
 /**
+ * Register/refresh ownership for the callback's own message (in-place edits).
+ */
+function rememberCallbackGroupMenu(ctx) {
+  if (!ctx || !ctx.from || !ctx.chat) {
+    return null;
+  }
+  const messageId = callbackMenuMessageId(ctx);
+  if (messageId == null) {
+    return null;
+  }
+  return rememberGroupMenuOwner(
+    ctx.chat.id,
+    messageId,
+    ctx.from.id,
+    ctx.from
+  );
+}
+
+/**
  * Test helper: mark this callback's message as owned by ctx.from.
  * Creates message_id 1 when the mock omitted callbackQuery.message.
  */
@@ -140,11 +176,17 @@ function bindGroupMenuOwnerFromCtx(ctx) {
 
 module.exports = {
   MENU_UNAUTHORIZED_GENERIC,
+  MENU_EXPIRED_GENERIC,
+  MAX_MENUS,
+  MAX_AGE_MS,
   formatMenuUnauthorizedToast,
   rememberGroupMenuOwner,
+  rememberCallbackGroupMenu,
   getGroupMenuOwner,
   forgetGroupMenuOwner,
   resetGroupMenuOwnersForTests,
+  setMaxGroupMenusForTests,
+  listGroupMenuKeysForTests,
   rememberSentGroupMenu,
   bindGroupMenuOwnerFromCtx,
   callbackMenuMessageId,

@@ -45,6 +45,10 @@ const {
   assertCanStartInteractiveGame,
   withCtxThreadExtra,
 } = require("../utils/gameTopic");
+const {
+  rememberCallbackGroupMenu,
+  rememberSentGroupMenu,
+} = require("../utils/menuOwnership");
 
 function busyOptions(options = {}) {
   return {
@@ -577,6 +581,11 @@ async function handleTriviaHubCallback(ctx, options = {}) {
       getGroupGamesMenuExtra(ctx)
     );
     forgetChooserOwner(runtime, ctx, sent);
+    if (sent && sent.message_id != null) {
+      rememberSentGroupMenu(ctx, sent);
+    } else {
+      rememberCallbackGroupMenu(ctx);
+    }
     return sent;
   }
 }
