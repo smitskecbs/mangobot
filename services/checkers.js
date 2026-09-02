@@ -54,7 +54,7 @@ const GAME_ID = "checkers";
 
 const JOIN_TIMEOUT_MS = 60 * 1000;
 const LOBBY_COUNTDOWN_MS = 5 * 1000;
-const TURN_TIMEOUT_MS = 60 * 1000;
+const TURN_TIMEOUT_MS = 120 * 1000;
 const BOT_THINK_MIN_MS = 700;
 const BOT_THINK_MAX_MS = 1000;
 const PAIR_COOLDOWN_MS = DEFAULT_PAIR_COOLDOWN_MS;
@@ -74,9 +74,10 @@ const MARK_BK = "🔶";
 const MARK_WK = "⬜";
 const MARK_SELECTED = "✳️";
 const MARK_DEST = "🟢";
-const EMPTY_DARK = "▪";
-const LIGHT_CELL = "·";
-const KEY_EMPTY = "·";
+const EMPTY_DARK = "⬛";
+const LIGHT_CELL = "▫️";
+const KEY_EMPTY = EMPTY_DARK;
+const NOOP_ACTION = "noop";
 
 function pieceEmoji(piece) {
   if (piece === BLACK) return MARK_B;
@@ -143,6 +144,10 @@ function buildMoveCallbackData(sessionId, from, to) {
   return `pvp:chk:mv:${sessionId}:${from}:${to}`;
 }
 
+function buildNoopCallbackData(sessionId) {
+  return `pvp:chk:${NOOP_ACTION}:${sessionId}`;
+}
+
 function parsePvpCallbackData(data) {
   if (typeof data !== "string" || !data.startsWith("pvp:chk:")) {
     return null;
@@ -159,6 +164,10 @@ function parsePvpCallbackData(data) {
   if (action === "join") {
     if (parts.length !== 4) return null;
     return { action: "join", sessionId, game: GAME_ID };
+  }
+  if (action === NOOP_ACTION) {
+    if (parts.length !== 4) return null;
+    return { action: NOOP_ACTION, sessionId, game: GAME_ID };
   }
   if (action === "sel") {
     if (parts.length !== 5) return null;
@@ -201,11 +210,16 @@ function buildBoardKeyboard(session) {
   const selected = isPlayableSquare(session.selectedSquare)
     ? session.selectedSquare
     : null;
+  const noopData = buildNoopCallbackData(session.id);
   const rows = [];
-  for (let row = 0; row < 8; row += 1) {
+  for (let row = 0; row < BOARD_SIZE; row += 1) {
     const buttons = [];
-    for (let i = 0; i < 4; i += 1) {
-      const sq = row * 4 + i;
+    for (let col = 0; col < BOARD_SIZE; col += 1) {
+      if (!isDark(row, col)) {
+        buttons.push(Markup.button.callback(LIGHT_CELL, noopData));
+        continue;
+      }
+      const sq = rowColToSq(row, col);
       let data;
       if (selected != null && destSet.has(sq)) {
         data = buildMoveCallbackData(session.id, selected, sq);
@@ -528,6 +542,7 @@ function createCheckersService(options = {}) {
         endReason: session.endReason || null,
         opponentType: session.opponentType || "human",
         botMoveGeneration: session.botMoveGeneration || 0,
+        turnGeneration: session.turnGeneration || 0,
       })
     );
   }
@@ -588,6 +603,7 @@ function createCheckersService(options = {}) {
       endReason: null,
       opponentType: "human",
       botMoveGeneration: 0,
+      turnGeneration: 0,
       timers: {
         joinTimeoutId: null,
         turnTimeoutId: null,
@@ -751,8 +767,13 @@ function createCheckersService(options = {}) {
   }
 
   function startTurnTimer(session) {
+    session.turnGeneration = (session.turnGeneration || 0) + 1;
+    const gen = session.turnGeneration;
+    const sessionId = session.id;
     manager.schedule(session, "turn", turnTimeoutMs, () => {
-      Promise.resolve(resolveTurnTimeout(session.id)).catch(() => {});
+      Promise.resolve()
+        .then(() => resolveTurnTimeout(sessionId, gen))
+        .catch(() => {});
     });
   }
 
@@ -803,11 +824,14 @@ function createCheckersService(options = {}) {
     };
   }
 
-  async function resolveTurnTimeout(sessionId) {
+  async function resolveTurnTimeout(sessionId, expectedGen) {
     const locked = manager.withSessionLock(sessionId, () => {
       const session = manager.getSession(sessionId);
       if (!session || session.status !== STATUS.ACTIVE) {
         return { ok: false, reason: "not-active" };
+      }
+      if (expectedGen != null && session.turnGeneration !== expectedGen) {
+        return { ok: false, reason: "stale-timer" };
       }
       if (session.winnerUserId != null) {
         return { ok: false, reason: "already-ended" };
@@ -985,7 +1009,7 @@ function createCheckersService(options = {}) {
         /* ignore */
       }
     }
-    await emitQuest(locked);
+    Promise.resolve(emitQuest(locked)).catch(() => {});
     return locked;
   }
 
@@ -1161,6 +1185,8 @@ module.exports = {
   MARK_WK,
   MARK_SELECTED,
   MARK_DEST,
+  EMPTY_DARK,
+  LIGHT_CELL,
   SQUARE_COUNT,
   emptyBoard,
   initialBoard,
@@ -1170,6 +1196,7 @@ module.exports = {
   buildJoinCallbackData,
   buildSelectCallbackData,
   buildMoveCallbackData,
+  buildNoopCallbackData,
   parsePvpCallbackData,
   sanitizePvpDisplayName,
   createCheckersService,

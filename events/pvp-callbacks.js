@@ -263,6 +263,11 @@ async function handlePvpCallback(ctx, options = {}) {
   const userId = ctx.from.id;
   const displayName = sanitizePvpDisplayName(ctx.from);
 
+  if (parsed.action === "noop") {
+    await cbAnswer(ctx);
+    return;
+  }
+
   if (parsed.action === "join") {
     const result = runtime.join({
       sessionId: parsed.sessionId,
@@ -382,16 +387,28 @@ async function handlePvpCallback(ctx, options = {}) {
 
     await cbAnswer(ctx);
 
-    let rendered = result.rendered;
-    if (result.needsXp) {
-      const fin = await finalizeWinXp(runtime, parsed.sessionId, awardXpFn);
-      if (fin.rendered) {
-        rendered = fin.rendered;
+    const isCheckers = parsed.game === "checkers";
+    if (isCheckers) {
+      if (result.rendered) {
+        await safeEdit(ctx, result.rendered.text, result.rendered.extra);
       }
-    }
-
-    if (rendered) {
-      await safeEdit(ctx, rendered.text, rendered.extra);
+      if (result.needsXp) {
+        const fin = await finalizeWinXp(runtime, parsed.sessionId, awardXpFn);
+        if (fin.rendered) {
+          await safeEdit(ctx, fin.rendered.text, fin.rendered.extra);
+        }
+      }
+    } else {
+      let rendered = result.rendered;
+      if (result.needsXp) {
+        const fin = await finalizeWinXp(runtime, parsed.sessionId, awardXpFn);
+        if (fin.rendered) {
+          rendered = fin.rendered;
+        }
+      }
+      if (rendered) {
+        await safeEdit(ctx, rendered.text, rendered.extra);
+      }
     }
     schedulePvpSessionCleanup(
       result.session,
@@ -447,7 +464,7 @@ function registerPvpCallbacks(bot, options = {}) {
       parseCallbackData: parseC4CallbackData,
     })
   );
-  bot.action(/^pvp:chk:(join|sel|mv):/, (ctx) =>
+  bot.action(/^pvp:chk:(join|sel|mv|noop):/, (ctx) =>
     handlePvpCallback(ctx, {
       ...options,
       runtime: chkRuntime,

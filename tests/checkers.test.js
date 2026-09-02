@@ -446,7 +446,7 @@ async function main() {
     assert.ok(rendered.text.includes("✳️") || rendered.text.includes("🟢"));
     const keyboard = rendered.extra.reply_markup.inline_keyboard;
     assert.strictEqual(keyboard.length, 8);
-    assert.strictEqual(keyboard[0].length, 4);
+    assert.strictEqual(keyboard[0].length, 8);
     const moved = await service.move({
       sessionId: started.session.id,
       userId: USER_A,
@@ -459,7 +459,7 @@ async function main() {
     assert.strictEqual(moved.session.board[16], BLACK);
   });
 
-  await runTest("board UX is one 8x8 caption plus 32 dark squares", async () => {
+  await runTest("board UX is one 8x8 caption plus 8x8 keyboard", async () => {
     const { service } = createService();
     const started = startOpen(service);
     joinBoth(service, started.session.id);
@@ -471,7 +471,9 @@ async function main() {
     assert.ok(rendered.text.includes("🟠"));
     assert.ok(rendered.text.includes("⚪"));
     const rows = rendered.extra.reply_markup.inline_keyboard;
-    assert.strictEqual(rows.flat().length, 32);
+    assert.strictEqual(rows.length, 8);
+    assert.ok(rows.every((row) => row.length === 8));
+    assert.strictEqual(rows.flat().length, 64);
   });
 
   await runTest("callback data has no user id", async () => {
