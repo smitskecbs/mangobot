@@ -6,6 +6,7 @@
  */
 
 const crypto = require("crypto");
+const { log } = require("../utils/logger");
 
 const DEFAULT_PAIR_COOLDOWN_MS = 30 * 60 * 1000;
 
@@ -272,6 +273,10 @@ function createPvpSessionManager(options = {}) {
   }
 
   function resetAll() {
+    const cleared = sessions.size;
+    if (cleared > 0) {
+      log(`[pvp] resetAll cleared=${cleared}`);
+    }
     for (const session of sessions.values()) {
       clearTimers(session);
     }

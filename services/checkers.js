@@ -388,6 +388,20 @@ function renderMessage(session, xpResult, nowMs = Date.now()) {
   return { text: "🏁 CHECKERS", extra: emptyInlineKeyboardExtra() };
 }
 
+function logCheckersLifecycle(event, session, extra = "") {
+  const id = session && session.id != null ? session.id : "-";
+  const status = session && session.status ? session.status : "-";
+  const gen =
+    session && session.turnGeneration != null ? session.turnGeneration : "-";
+  const current =
+    session && session.currentPlayer ? session.currentPlayer : "-";
+  const reason = session && session.endReason ? session.endReason : "-";
+  const suffix = extra ? ` ${extra}` : "";
+  log(
+    `[checkers] session=${id} event=${event} status=${status} generation=${gen} currentPlayer=${current} endReason=${reason}${suffix}`
+  );
+}
+
 function createCheckersService(options = {}) {
   const joinTimeoutMs =
     typeof options.joinTimeoutMs === "number"
@@ -618,6 +632,7 @@ function createCheckersService(options = {}) {
     });
     scheduleLobbyCountdown(session);
     log("[pvp] match started game=checkers mode=lobby");
+    logCheckersLifecycle("lobby-open", session);
 
     const rendered = renderMessage(session, null, manager.now());
     return {
@@ -707,12 +722,21 @@ function createCheckersService(options = {}) {
         opponentType === "bot" ? "bot" : "pvp"
       }`
     );
+    logCheckersLifecycle(
+      opponentType === "bot" ? "bot-start" : "pvp-start",
+      session
+    );
   }
 
   function expireJoin(sessionId) {
     const locked = manager.withSessionLock(sessionId, () => {
       const session = manager.getSession(sessionId);
-      if (!session || session.status !== STATUS.WAITING) {
+      if (!session) {
+        logCheckersLifecycle("join-timeout-skip", null, "reason=missing-session");
+        return { ok: false, reason: "not-waiting" };
+      }
+      if (session.status !== STATUS.WAITING) {
+        logCheckersLifecycle("join-timeout-skip", session, "reason=not-waiting");
         return { ok: false, reason: "not-waiting" };
       }
       const starter = session.players && session.players.b;
@@ -721,6 +745,7 @@ function createCheckersService(options = {}) {
         session.endReason = "join-timeout";
         finishOpen(session);
         logGameCleanup(GAME_TYPE.CHECKERS, FINAL_STATE.EMPTY);
+        logCheckersLifecycle("lobby-expired", session);
         return {
           ok: true,
           session: snapshot(session),
@@ -806,6 +831,7 @@ function createCheckersService(options = {}) {
     session.pendingFrom = null;
     finishOpen(session);
     maybeMarkPairCooldown(session);
+    logCheckersLifecycle("ended", session, `winnerSeat=${winnerSeat}`);
   }
 
   function applyEngineMove(session, from, to) {
@@ -866,6 +892,21 @@ function createCheckersService(options = {}) {
         rendered: renderMessage(session, null, manager.now()),
       };
     });
+    if (!locked.ok) {
+      logCheckersLifecycle(
+        "turn-timeout-skip",
+        manager.getSession(sessionId),
+        `reason=${locked.reason || "unknown"} expectedGen=${
+          expectedGen == null ? "-" : expectedGen
+        }`
+      );
+    } else {
+      logCheckersLifecycle(
+        "turn-timeout",
+        manager.getSession(sessionId),
+        `expectedGen=${expectedGen == null ? "-" : expectedGen}`
+      );
+    }
     if (locked.ok && onSessionEnded) {
       try {
         onSessionEnded(locked.session);
@@ -873,8 +914,8 @@ function createCheckersService(options = {}) {
         /* ignore */
       }
     }
-    await emitQuest(locked);
     notifyRender(locked);
+    Promise.resolve(emitQuest(locked)).catch(() => {});
     return locked;
   }
 
@@ -1150,6 +1191,7 @@ function createCheckersService(options = {}) {
   }
 
   function reset() {
+    log("[checkers] event=reset-all");
     manager.resetAll();
     reservation.reset();
   }

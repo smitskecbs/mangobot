@@ -3,7 +3,7 @@
  * Callback data: pvp:ttt:... | pvp:c4:... | pvp:chk:...  (opaque session ids, never uids)
  */
 
-const { logError } = require("../utils/logger");
+const { log, logError } = require("../utils/logger");
 const { awardPvpWinXp } = require("../services/points");
 const { PLAYER_BUSY_TEXT } = require("../services/pvpMatchReservation");
 const {
@@ -41,6 +41,27 @@ function isPvpTerminalStatus(status) {
   return status === "won" || status === "draw" || status === "expired";
 }
 
+function pvpSnapshotStillCurrent(runtime, sessionSnap) {
+  if (!sessionSnap || !runtime || typeof runtime.getSession !== "function") {
+    return true;
+  }
+  const live = runtime.getSession(sessionSnap.id);
+  if (!live) {
+    return false;
+  }
+  if (live.status !== sessionSnap.status) {
+    return false;
+  }
+  if (
+    sessionSnap.turnGeneration != null &&
+    live.turnGeneration != null &&
+    Number(live.turnGeneration) !== Number(sessionSnap.turnGeneration)
+  ) {
+    return false;
+  }
+  return true;
+}
+
 function schedulePvpSessionCleanup(session, telegram, gameType) {
   if (!session || !isPvpTerminalStatus(session.status)) {
     return;
@@ -48,6 +69,11 @@ function schedulePvpSessionCleanup(session, telegram, gameType) {
   if (session.messageId == null || session.chatId == null) {
     return;
   }
+  log(
+    `[pvp] schedule-message-cleanup game=${gameType || "-"} session=${
+      session.id || "-"
+    } status=${session.status || "-"} endReason=${session.endReason || "-"}`
+  );
   scheduleGameMessageCleanup({
     gameType,
     sessionId: session.id,
@@ -97,6 +123,13 @@ async function rejectStalePvp(ctx, runtime, parsed) {
     const rendered = runtime.renderMessage(session);
     text = rendered && rendered.text;
   }
+  log(
+    `[pvp] stale-callback game=${parsed.game || "-"} session=${
+      parsed.sessionId || "-"
+    } present=${Boolean(session)} status=${(session && session.status) || "-"} endReason=${
+      (session && session.endReason) || "-"
+    } endedCopy=${text ? "session-render" : "default-cancelled"}`
+  );
   await stripStaleCallbackButtons(ctx, {
     gameType: pvpGameType(parsed),
     text,
@@ -157,6 +190,9 @@ function wireTimeoutMessageEdits(runtime, telegram, awardXpFn) {
 
   const editSessionMessage = async (sessionSnap, rendered) => {
     if (!sessionSnap || sessionSnap.messageId == null || !rendered) return;
+    if (!pvpSnapshotStillCurrent(runtime, sessionSnap)) {
+      return;
+    }
     try {
       await telegram.editMessageText(
         sessionSnap.chatId,
@@ -170,6 +206,35 @@ function wireTimeoutMessageEdits(runtime, telegram, awardXpFn) {
         "[pvp] timeout edit failed:",
         err && err.message ? err.message : err
       );
+      return;
+    }
+    if (pvpSnapshotStillCurrent(runtime, sessionSnap)) {
+      return;
+    }
+    const live =
+      typeof runtime.getSession === "function"
+        ? runtime.getSession(sessionSnap.id)
+        : null;
+    if (!live || typeof runtime.renderMessage !== "function") {
+      return;
+    }
+    const fresh = runtime.renderMessage(live);
+    if (!fresh || !fresh.text) {
+      return;
+    }
+    try {
+      await telegram.editMessageText(
+        live.chatId,
+        live.messageId,
+        undefined,
+        fresh.text,
+        fresh.extra || undefined
+      );
+    } catch (err) {
+      logError(
+        "[pvp] timeout edit failed:",
+        err && err.message ? err.message : err
+      );
     }
   };
 
@@ -177,15 +242,18 @@ function wireTimeoutMessageEdits(runtime, telegram, awardXpFn) {
     if (!result || !result.ok || !result.session) {
       return;
     }
+    if (result.rendered) {
+      await editSessionMessage(result.session, result.rendered);
+    }
     let rendered = result.rendered;
     if (result.needsXp) {
       const fin = await finalizeWinXp(runtime, result.session.id, awardXpFn);
       if (fin.rendered) {
         rendered = fin.rendered;
       }
-    }
-    if (rendered) {
-      await editSessionMessage(result.session, rendered);
+      if (rendered) {
+        await editSessionMessage(result.session, rendered);
+      }
     }
     schedulePvpSessionCleanup(
       result.session,
