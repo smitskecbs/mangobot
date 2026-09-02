@@ -68,14 +68,16 @@ const STATUS = Object.freeze({
   EXPIRED: "expired",
 });
 
-const MARK_B = "🟠";
-const MARK_W = "⚪";
-const MARK_BK = "🔶";
-const MARK_WK = "⬜";
-const MARK_SELECTED = "✳️";
-const MARK_DEST = "🟢";
+// Same-family large squares so Telegram columns stay as even as inline
+// keyboards allow. Mixing ▫️ with ⬛/🟠 makes light cells much narrower.
+const MARK_B = "🟥";
+const MARK_W = "🟦";
+const MARK_BK = "🟧";
+const MARK_WK = "🟪";
+const MARK_SELECTED = "🟨";
+const MARK_DEST = "🟩";
 const EMPTY_DARK = "⬛";
-const LIGHT_CELL = "▫️";
+const LIGHT_CELL = "⬜";
 const KEY_EMPTY = EMPTY_DARK;
 const NOOP_ACTION = "noop";
 
@@ -261,27 +263,32 @@ function turnMark(side) {
   return side === WHITE ? MARK_W : MARK_B;
 }
 
+function playerLooksLikeBot(player) {
+  return Boolean(
+    player && (player.isBot || String(player.userId) === BOT_USER_ID)
+  );
+}
+
 function buildActiveText(session) {
   const black = session.players.b;
   const white = session.players.w;
-  const turnName =
-    session.currentPlayer === WHITE ? white.displayName : black.displayName;
-  const hint = isPlayableSquare(session.pendingFrom)
-    ? "Continue the capture with the same piece."
-    : isPlayableSquare(session.selectedSquare)
-      ? "Choose a destination."
-      : "Select your piece.";
+  const turnPlayer =
+    session.currentPlayer === WHITE ? white : black;
+  const turnName = turnPlayer && turnPlayer.displayName ? turnPlayer.displayName : "Player";
+  const botThinking = playerLooksLikeBot(turnPlayer);
+  const hint = botThinking
+    ? "ManGo Bot is thinking…"
+    : isPlayableSquare(session.pendingFrom)
+      ? "Continue the capture with the same piece."
+      : isPlayableSquare(session.selectedSquare)
+        ? "Choose a destination."
+        : "Select your piece.";
   return `🏁 CHECKERS
 
 ${MARK_B} ${black.displayName}
 ${MARK_W} ${white.displayName}
 
 Turn: ${turnMark(session.currentPlayer)} ${turnName}
-
-${formatBoard(session.board, {
-    selected: session.selectedSquare,
-    destinations: destSquares(session),
-  })}
 
 ${hint}`;
 }
@@ -701,10 +708,7 @@ function createCheckersService(options = {}) {
     manager.clearTimers(session);
     session.timers.joinTimeoutId = null;
     session.timers.countdownTimeoutId = null;
-    startTurnTimer(session);
-    if (isBotPlayer(session.players[session.currentPlayer])) {
-      scheduleBotMove(session);
-    }
+    beginPlayerTurn(session);
     log(
       `[pvp] match started game=checkers mode=${
         opponentType === "bot" ? "bot" : "pvp"
@@ -766,15 +770,37 @@ function createCheckersService(options = {}) {
     return null;
   }
 
-  function startTurnTimer(session) {
+  function bumpTurnGeneration(session) {
     session.turnGeneration = (session.turnGeneration || 0) + 1;
-    const gen = session.turnGeneration;
+    return session.turnGeneration;
+  }
+
+  function invalidateTurnTimer(session) {
+    bumpTurnGeneration(session);
+    if (typeof manager.clearScheduled === "function") {
+      manager.clearScheduled(session, "turn");
+    }
+  }
+
+  function startTurnTimer(session) {
+    const gen = bumpTurnGeneration(session);
     const sessionId = session.id;
     manager.schedule(session, "turn", turnTimeoutMs, () => {
       Promise.resolve()
         .then(() => resolveTurnTimeout(sessionId, gen))
         .catch(() => {});
     });
+  }
+
+  function beginPlayerTurn(session) {
+    const player = session.players[session.currentPlayer];
+    if (isBotPlayer(player)) {
+      // Human clock must not run during bot think delay or bot hops.
+      invalidateTurnTimer(session);
+      scheduleBotMove(session);
+      return;
+    }
+    startTurnTimer(session);
   }
 
   function finishWin(session, winnerSeat, endReason) {
@@ -812,10 +838,7 @@ function createCheckersService(options = {}) {
       };
     }
 
-    startTurnTimer(session);
-    if (isBotPlayer(session.players[session.currentPlayer])) {
-      scheduleBotMove(session);
-    }
+    beginPlayerTurn(session);
     return {
       ok: true,
       ended: false,
@@ -835,6 +858,9 @@ function createCheckersService(options = {}) {
       }
       if (session.winnerUserId != null) {
         return { ok: false, reason: "already-ended" };
+      }
+      if (isBotPlayer(session.players[session.currentPlayer])) {
+        return { ok: false, reason: "bot-turn" };
       }
       const loserSeat = session.currentPlayer;
       const winnerSeat = loserSeat === BLACK ? WHITE : BLACK;
@@ -1036,9 +1062,23 @@ function createCheckersService(options = {}) {
       if (!isBotPlayer(player)) {
         return { ok: false, reason: "not-bot-turn" };
       }
-      const choice = chooseCheckersBotMove(boardState(session), randomIntFn);
+      const state = boardState(session);
+      let choice = chooseCheckersBotMove(state, randomIntFn);
       if (!choice) {
-        return { ok: false, reason: "illegal-bot" };
+        const moves = legalMoves(state);
+        if (!moves.length) {
+          const winnerSeat = seat === BLACK ? WHITE : BLACK;
+          finishWin(session, winnerSeat, "win");
+          return {
+            ok: true,
+            ended: true,
+            needsXp: true,
+            questUsers: takeQuestUsers(session),
+            session: snapshot(session),
+            rendered: renderMessage(session, null, manager.now()),
+          };
+        }
+        choice = { from: moves[0].from, to: moves[0].to };
       }
       const applied = applyEngineMove(session, choice.from, choice.to);
       if (!applied.ok) {
@@ -1053,8 +1093,8 @@ function createCheckersService(options = {}) {
         /* ignore */
       }
     }
-    await emitQuest(locked);
     notifyRender(locked);
+    Promise.resolve(emitQuest(locked)).catch(() => {});
     return locked;
   }
 

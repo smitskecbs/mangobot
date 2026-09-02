@@ -160,15 +160,31 @@ function createPvpSessionManager(options = {}) {
     sessions.delete(session.id);
   }
 
+  function timerKey(kind) {
+    if (kind === "join") return "joinTimeoutId";
+    if (kind === "turn") return "turnTimeoutId";
+    if (kind === "countdown") return "countdownTimeoutId";
+    if (kind === "bot") return "botTimeoutId";
+    return null;
+  }
+
   function clearTimers(session) {
     if (!session || !session.timers) {
       return;
     }
-    for (const kind of ["joinTimeoutId", "turnTimeoutId", "countdownTimeoutId", "botTimeoutId"]) {
-      if (session.timers[kind] != null) {
-        clearTimeoutFn(session.timers[kind]);
-        session.timers[kind] = null;
-      }
+    for (const kind of ["join", "turn", "countdown", "bot"]) {
+      clearScheduled(session, kind);
+    }
+  }
+
+  function clearScheduled(session, kind) {
+    const key = timerKey(kind);
+    if (!session || !session.timers || !key) {
+      return;
+    }
+    if (session.timers[key] != null) {
+      clearTimeoutFn(session.timers[key]);
+      session.timers[key] = null;
     }
   }
 
@@ -181,22 +197,11 @@ function createPvpSessionManager(options = {}) {
         botTimeoutId: null,
       };
     }
-    const key =
-      kind === "join"
-        ? "joinTimeoutId"
-        : kind === "turn"
-          ? "turnTimeoutId"
-          : kind === "countdown"
-            ? "countdownTimeoutId"
-            : kind === "bot"
-              ? "botTimeoutId"
-              : null;
+    const key = timerKey(kind);
     if (!key) {
       return null;
     }
-    if (session.timers[key] != null) {
-      clearTimeoutFn(session.timers[key]);
-    }
+    clearScheduled(session, kind);
     session.timers[key] = setTimeoutFn(fn, delayMs);
     return session.timers[key];
   }
@@ -296,6 +301,7 @@ function createPvpSessionManager(options = {}) {
     removeSession,
     clearActiveIndex,
     clearTimers,
+    clearScheduled,
     schedule,
     makePairKey,
     isPairOnCooldown,

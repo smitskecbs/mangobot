@@ -18,7 +18,7 @@ const {
   STATUS,
   emptyBoard,
 } = require("../services/checkers");
-const { BLACK, WHITE, sqToRowCol, rowColToSq, isDark } = require("../services/checkersRules");
+const { BLACK, WHITE, sqToRowCol, rowColToSq, isDark, legalMoves, applyMove } = require("../services/checkersRules");
 const { handlePvpCallback } = require("../events/pvp-callbacks");
 
 const COMMUNITY_CHAT = -1001234567890;
@@ -91,6 +91,22 @@ function startVsBot(service) {
   return started;
 }
 
+function firstLegalMove(session) {
+  const moves = legalMoves({
+    board: session.board,
+    current: session.currentPlayer,
+    pendingFrom: session.pendingFrom,
+  });
+  assert.ok(moves.length > 0, "expected legal moves");
+  return moves[0];
+}
+
+async function flushMicrotasks() {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 function createMockCtx({ userId = USER_A, firstName = "Kevin", callbackData, messageId = 5001 }) {
   const order = [];
   const ctx = {
@@ -141,15 +157,18 @@ async function main() {
   await runTest("board visually has 8 columns × 8 rows", async () => {
     const { service } = createService();
     const started = startVsBot(service);
-    const rendered = service.renderMessage(service.getSession(started.session.id));
-    const lines = formatBoard(service.getSession(started.session.id).board).split("\n");
-    assert.strictEqual(lines.length, 8);
+    const session = service.getSession(started.session.id);
+    const rendered = service.renderMessage(session);
     const rows = rendered.extra.reply_markup.inline_keyboard;
     assert.strictEqual(rows.length, 8);
     assert.ok(rows.every((row) => row.length === 8));
     assert.strictEqual(rows.flat().length, 64);
-    assert.ok(lines[0].includes(LIGHT_CELL));
-    assert.ok(lines[0].includes("⚪") || lines[0].includes(EMPTY_DARK));
+    const labels = rows.flat().map((b) => b.text);
+    const codePoints = new Set(labels.map((t) => [...t].length));
+    assert.strictEqual(codePoints.size, 1);
+    assert.ok(!rendered.text.includes(formatBoard(session.board)));
+    assert.ok(rendered.text.includes("🏁 CHECKERS"));
+    assert.ok(rendered.text.includes("Select your piece."));
   });
 
   await runTest("non-playable squares cannot trigger moves", async () => {
@@ -394,6 +413,169 @@ async function main() {
     assert.strictEqual(moved.session.status, STATUS.WON);
     assert.strictEqual(moved.session.winnerSeat, BLACK);
     assert.strictEqual(moved.session.endReason, "win");
+  });
+
+  await runTest("consecutive human/bot turns stay active", async () => {
+    const { service, timers } = createService();
+    const started = startVsBot(service);
+    for (let i = 0; i < 5; i += 1) {
+      const live = service.getSession(started.session.id);
+      assert.strictEqual(live.status, STATUS.ACTIVE);
+      assert.strictEqual(live.currentPlayer, BLACK);
+      const spec = firstLegalMove(live);
+      const sel = service.select({
+        sessionId: started.session.id,
+        userId: USER_A,
+        square: spec.from,
+        chatId: COMMUNITY_CHAT,
+      });
+      assert.strictEqual(sel.ok, true);
+      const moved = await service.move({
+        sessionId: started.session.id,
+        userId: USER_A,
+        from: spec.from,
+        to: spec.to,
+        chatId: COMMUNITY_CHAT,
+      });
+      assert.strictEqual(moved.ok, true);
+      assert.strictEqual(moved.ended, false);
+      assert.strictEqual(moved.session.status, STATUS.ACTIVE);
+      assert.strictEqual(moved.session.currentPlayer, WHITE);
+      const raw = service.manager.getSession(started.session.id);
+      assert.strictEqual(raw.timers.turnTimeoutId, null);
+      timers.advance(0);
+      await flushMicrotasks();
+      const afterBot = service.getSession(started.session.id);
+      assert.strictEqual(afterBot.status, STATUS.ACTIVE);
+      assert.strictEqual(afterBot.currentPlayer, BLACK);
+      const again = service.select({
+        sessionId: started.session.id,
+        userId: USER_A,
+        square: firstLegalMove(afterBot).from,
+        chatId: COMMUNITY_CHAT,
+      });
+      assert.strictEqual(again.ok, true);
+    }
+  });
+
+  await runTest("bot plays a legal move when legal moves exist", async () => {
+    const { service } = createService();
+    const started = startVsBot(service);
+    await service.move({
+      sessionId: started.session.id,
+      userId: USER_A,
+      from: 20,
+      to: 16,
+      chatId: COMMUNITY_CHAT,
+    });
+    const before = service.getSession(started.session.id);
+    const state = {
+      board: before.board,
+      current: WHITE,
+      pendingFrom: before.pendingFrom,
+    };
+    const legal = legalMoves(state);
+    assert.ok(legal.length > 0);
+    const bot = await service.performBotMove(started.session.id);
+    assert.strictEqual(bot.ok, true);
+    assert.strictEqual(bot.session.status, STATUS.ACTIVE);
+    const played = legal.some((m) => {
+      const applied = applyMove(state, m.from, m.to);
+      return (
+        applied.ok &&
+        JSON.stringify(applied.state.board) === JSON.stringify(bot.session.board)
+      );
+    });
+    assert.ok(played, "bot must play one of the legal moves");
+  });
+
+  await runTest("bot no-legal-moves ends only when the bot truly cannot move", async () => {
+    const { service } = createService();
+    const started = startVsBot(service);
+    const trapped = service.manager.getSession(started.session.id);
+    trapped.board = emptyBoard();
+    trapped.board[28] = WHITE;
+    trapped.board[20] = BLACK;
+    trapped.currentPlayer = WHITE;
+    trapped.selectedSquare = null;
+    trapped.pendingFrom = null;
+    const ended = await service.performBotMove(started.session.id);
+    assert.strictEqual(ended.ok, true);
+    assert.strictEqual(ended.ended, true);
+    assert.strictEqual(ended.session.status, STATUS.WON);
+    assert.strictEqual(ended.session.winnerSeat, BLACK);
+    assert.strictEqual(ended.session.endReason, "win");
+
+    const { service: liveService } = createService();
+    const live = startVsBot(liveService);
+    const raw = liveService.manager.getSession(live.session.id);
+    raw.currentPlayer = WHITE;
+    const moved = await liveService.performBotMove(live.session.id);
+    assert.strictEqual(moved.ok, true);
+    assert.notStrictEqual(moved.session.status, STATUS.WON);
+    assert.strictEqual(moved.session.status, STATUS.ACTIVE);
+    assert.ok(legalMoves({
+      board: liveService.getSession(live.session.id).board,
+      current: BLACK,
+      pendingFrom: null,
+    }).length > 0);
+  });
+
+  await runTest("human timer cannot end the game during bot think delay", async () => {
+    const { service, timers } = createService({
+      turnTimeoutMs: 1000,
+      botThinkMinMs: 5000,
+      botThinkMaxMs: 5000,
+    });
+    const started = startVsBot(service);
+    const spec = firstLegalMove(service.getSession(started.session.id));
+    const ctx = createMockCtx({
+      callbackData: buildMoveCallbackData(started.session.id, spec.from, spec.to),
+    });
+    await handleChk(ctx, service);
+    assert.strictEqual(ctx.order[0], "ack");
+    assert.ok(ctx.order.indexOf("ack") < ctx.order.indexOf("edit"));
+    assert.ok(ctx.edits.some((e) => String(e.text).includes("ManGo Bot is thinking")));
+    const afterHuman = service.getSession(started.session.id);
+    assert.strictEqual(afterHuman.status, STATUS.ACTIVE);
+    assert.strictEqual(afterHuman.currentPlayer, WHITE);
+    const raw = service.manager.getSession(started.session.id);
+    assert.strictEqual(raw.timers.turnTimeoutId, null);
+    const genDuringBot = raw.turnGeneration;
+    timers.advance(1000);
+    await flushMicrotasks();
+    assert.strictEqual(service.getSession(started.session.id).status, STATUS.ACTIVE);
+    assert.strictEqual(service.getSession(started.session.id).currentPlayer, WHITE);
+    const timed = await service.resolveTurnTimeout(started.session.id, genDuringBot);
+    assert.strictEqual(timed.ok, false);
+    assert.strictEqual(timed.reason, "bot-turn");
+    timers.advance(4000);
+    await flushMicrotasks();
+    const afterBot = service.getSession(started.session.id);
+    assert.strictEqual(afterBot.status, STATUS.ACTIVE);
+    assert.strictEqual(afterBot.currentPlayer, BLACK);
+    const humanAgain = service.select({
+      sessionId: started.session.id,
+      userId: USER_A,
+      square: firstLegalMove(afterBot).from,
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(humanAgain.ok, true);
+  });
+
+  await runTest("callback_data stays within Telegram's 64-byte limit", async () => {
+    const { service } = createService();
+    const started = startVsBot(service);
+    const sel = service.select({
+      sessionId: started.session.id,
+      userId: USER_A,
+      square: 20,
+      chatId: COMMUNITY_CHAT,
+    });
+    const rows = sel.rendered.extra.reply_markup.inline_keyboard;
+    for (const btn of rows.flat()) {
+      assert.ok(Buffer.byteLength(btn.callback_data, "utf8") <= 64);
+    }
   });
 
   restoreEnv();

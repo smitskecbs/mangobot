@@ -443,10 +443,12 @@ async function main() {
     assert.strictEqual(sel.ok, true);
     assert.strictEqual(sel.session.selectedSquare, 20);
     const rendered = sel.rendered;
-    assert.ok(rendered.text.includes("✳️") || rendered.text.includes("🟢"));
     const keyboard = rendered.extra.reply_markup.inline_keyboard;
     assert.strictEqual(keyboard.length, 8);
     assert.strictEqual(keyboard[0].length, 8);
+    const labels = keyboard.flat().map((b) => b.text);
+    assert.ok(labels.includes("🟨"));
+    assert.ok(labels.includes("🟩"));
     const moved = await service.move({
       sessionId: started.session.id,
       userId: USER_A,
@@ -459,17 +461,18 @@ async function main() {
     assert.strictEqual(moved.session.board[16], BLACK);
   });
 
-  await runTest("board UX is one 8x8 caption plus 8x8 keyboard", async () => {
+  await runTest("active message is header plus one 8x8 keyboard", async () => {
     const { service } = createService();
     const started = startOpen(service);
     joinBoth(service, started.session.id);
     const session = service.getSession(started.session.id);
     const rendered = service.renderMessage(session);
     const board = formatBoard(session.board);
-    assert.ok(rendered.text.includes(board));
-    assert.strictEqual(board.split("\n").length, 8);
-    assert.ok(rendered.text.includes("🟠"));
-    assert.ok(rendered.text.includes("⚪"));
+    assert.ok(!rendered.text.includes(board));
+    assert.ok(rendered.text.includes("🏁 CHECKERS"));
+    assert.ok(rendered.text.includes("Select your piece."));
+    assert.ok(rendered.text.includes("🟥"));
+    assert.ok(rendered.text.includes("🟦"));
     const rows = rendered.extra.reply_markup.inline_keyboard;
     assert.strictEqual(rows.length, 8);
     assert.ok(rows.every((row) => row.length === 8));
