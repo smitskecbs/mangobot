@@ -13,6 +13,7 @@
  */
 
 const { noteRuntimeEvent } = require("./runtimeHealth");
+const { formatErrorForLog } = require("./logger");
 
 const TELEGRAM_ALLOWED_UPDATES = Object.freeze([
   "message",
@@ -29,10 +30,34 @@ const TELEGRAM_ALLOWED_UPDATES = Object.freeze([
   "shipping_query",
 ]);
 
+function attachUpdateErrorHandler(bot, logErrorFn) {
+  if (!bot || typeof bot.catch !== "function") {
+    return false;
+  }
+  bot.catch(async (err, ctx) => {
+    const formatted = formatErrorForLog(err);
+    logErrorFn(
+      `[update] handler failed name=${formatted.name} message=${formatted.message}`
+    );
+    if (formatted.stack) {
+      logErrorFn(`[update] handler stack ${formatted.stack}`);
+    }
+    if (ctx && ctx.callbackQuery && typeof ctx.answerCbQuery === "function") {
+      try {
+        await ctx.answerCbQuery("Something went wrong. Try again.");
+      } catch (_err) {
+        /* ignore */
+      }
+    }
+  });
+  return true;
+}
+
 function startBotRuntime({
   bot,
   startScheduler,
   logFn = console.log,
+  logErrorFn,
   onLaunchFailed,
   beforeScheduler,
 }) {
@@ -43,8 +68,12 @@ function startBotRuntime({
     throw new Error("startBotRuntime requires startScheduler");
   }
 
+  const errorFn = typeof logErrorFn === "function" ? logErrorFn : logFn;
+
   let communityScheduler = null;
   let schedulerStarted = false;
+
+  attachUpdateErrorHandler(bot, errorFn);
 
   async function onBotLaunched() {
     if (schedulerStarted) {
@@ -79,14 +108,17 @@ function startBotRuntime({
     onBotLaunched
   );
   Promise.resolve(launchResult).catch((err) => {
+    const formatted = formatErrorForLog(err);
     if (typeof onLaunchFailed === "function") {
       onLaunchFailed(err);
       return;
     }
     logFn(
-      "Failed to launch ManGo Bot:",
-      err && err.message ? err.message : err
+      `[startup] telegram launch failed name=${formatted.name} message=${formatted.message}`
     );
+    if (formatted.stack) {
+      logFn(`[startup] telegram launch stack ${formatted.stack}`);
+    }
     process.exitCode = 1;
   });
 
@@ -166,4 +198,5 @@ function startBotRuntime({
 module.exports = {
   startBotRuntime,
   TELEGRAM_ALLOWED_UPDATES,
+  attachUpdateErrorHandler,
 };

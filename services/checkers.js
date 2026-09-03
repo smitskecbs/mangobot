@@ -994,17 +994,22 @@ function createCheckersService(options = {}) {
         return { ok: false, reason: "not-your-turn" };
       }
 
-      if (
-        isPlayableSquare(session.pendingFrom) &&
-        square !== session.pendingFrom
-      ) {
-        return { ok: false, reason: "must-continue" };
+      // Defensive only: re-selecting the forced piece must ACK and stay ACTIVE.
+      // The production TypeError on this callback was not reproduced.
+      if (isPlayableSquare(session.pendingFrom)) {
+        if (square !== session.pendingFrom) {
+          return { ok: false, reason: "must-continue" };
+        }
+        session.selectedSquare = session.pendingFrom;
+        return {
+          ok: true,
+          continued: true,
+          session: snapshot(session),
+          rendered: renderMessage(session, null, manager.now()),
+        };
       }
 
-      if (
-        session.selectedSquare === square &&
-        !isPlayableSquare(session.pendingFrom)
-      ) {
+      if (session.selectedSquare === square) {
         session.selectedSquare = null;
         return {
           ok: true,

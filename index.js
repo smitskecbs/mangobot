@@ -4,7 +4,7 @@ loadAppEnv({ envPath: path.join(__dirname, ".env") });
 
 const fs = require("fs");
 const { Telegraf } = require("telegraf");
-const { log, error: logError } = require("./utils/logger");
+const { log, error: logError, formatErrorForLog } = require("./utils/logger");
 const {
   startCommunityScheduler,
 } = require("./services/communityScheduler");
@@ -51,9 +51,15 @@ const runtime = startBotRuntime({
   bot,
   startScheduler: startCommunityScheduler,
   logFn: log,
+  logErrorFn: logError,
   onLaunchFailed: (err) => {
-    const code = (err && err.code) || (err && err.name) || "Error";
-    logError(`[startup] telegram launch failed code=${code}`);
+    const formatted = formatErrorForLog(err);
+    logError(
+      `[startup] telegram launch failed name=${formatted.name} message=${formatted.message}`
+    );
+    if (formatted.stack) {
+      logError(`[startup] telegram launch stack ${formatted.stack}`);
+    }
     try {
       runtime.shutdown("launch-failed");
     } catch (_err) {

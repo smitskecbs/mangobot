@@ -3,7 +3,7 @@
  * Callback data: pvp:ttt:... | pvp:c4:... | pvp:chk:...  (opaque session ids, never uids)
  */
 
-const { log, logError } = require("../utils/logger");
+const { log, logError, formatErrorForLog } = require("../utils/logger");
 const { awardPvpWinXp } = require("../services/points");
 const { PLAYER_BUSY_TEXT } = require("../services/pvpMatchReservation");
 const {
@@ -94,8 +94,12 @@ function pvpGameType(parsed) {
 }
 
 function cbAnswer(ctx, text) {
-  if (ctx && typeof ctx.answerCbQuery === "function") {
-    return ctx.answerCbQuery(text || "").catch(() => {});
+  try {
+    if (ctx && typeof ctx.answerCbQuery === "function") {
+      return Promise.resolve(ctx.answerCbQuery(text || "")).catch(() => {});
+    }
+  } catch (_err) {
+    return Promise.resolve();
   }
   return Promise.resolve();
 }
@@ -297,6 +301,21 @@ function wireTimeoutMessageEdits(runtime, telegram, awardXpFn) {
  * @param {object} [options]
  */
 async function handlePvpCallback(ctx, options = {}) {
+  try {
+    await handlePvpCallbackBody(ctx, options);
+  } catch (err) {
+    const formatted = formatErrorForLog(err);
+    logError(
+      `[pvp] callback failed name=${formatted.name} message=${formatted.message}`
+    );
+    if (formatted.stack) {
+      logError(`[pvp] callback stack ${formatted.stack}`);
+    }
+    await cbAnswer(ctx, "Something went wrong. Try again.");
+  }
+}
+
+async function handlePvpCallbackBody(ctx, options = {}) {
   const runtime =
     options.runtime ||
     (typeof options.getRuntimeFn === "function"

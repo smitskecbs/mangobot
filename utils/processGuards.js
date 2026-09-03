@@ -3,7 +3,7 @@
  * systemd restarts the process. Node never restarts itself.
  */
 
-const { error: defaultLogError } = require("./logger");
+const { error: defaultLogError, formatErrorForLog } = require("./logger");
 const { noteRuntimeEvent } = require("./runtimeHealth");
 
 function safeErrorMeta(err) {
@@ -30,8 +30,14 @@ function installProcessGuards(options = {}) {
     }
     stopping = true;
     const meta = safeErrorMeta(err);
+    const formatted = formatErrorForLog(err);
     noteRuntimeEvent("crash", { code: meta.code });
-    logError(`[crash] ${name} ${kind} name=${meta.name} code=${meta.code}`);
+    logError(
+      `[crash] ${name} ${kind} name=${formatted.name} code=${meta.code} message=${formatted.message}`
+    );
+    if (formatted.stack) {
+      logError(`[crash] ${name} stack ${formatted.stack}`);
+    }
     try {
       shutdown(kind);
     } catch (shutdownErr) {
