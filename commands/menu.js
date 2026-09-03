@@ -45,12 +45,17 @@ const {
   getGroupProfileMenuExtra,
   isGroupMenuCallback,
   isGroupMenuNavCallback,
+  isGameMenuCallback,
   isPrivateHubCallback,
   formatGroupMenuText,
   formatGroupRankingsText,
   formatGroupGamesText,
   formatGroupProfileText,
 } = require("../utils/botMenu");
+const {
+  isAllowedGameTopic,
+  GAMES_TOPIC_REQUIRED_MESSAGE,
+} = require("../utils/gameTopic");
 const { sanitizePvpDisplayName } = require("../services/pvpSessionManager");
 const {
   rememberSentGroupMenu,
@@ -259,6 +264,25 @@ async function handleGroupMenuCallback(ctx, options = {}) {
     return;
   }
   const displayName = gate.record.displayName;
+
+  if (isGameMenuCallback(data)) {
+    const topicOk = await isAllowedGameTopic(ctx, {
+      ...options,
+      allowAdminTopicBypass: false,
+    });
+    if (!topicOk) {
+      try {
+        if (typeof ctx.answerCbQuery === "function") {
+          await ctx.answerCbQuery(GAMES_TOPIC_REQUIRED_MESSAGE, {
+            show_alert: true,
+          });
+        }
+      } catch (_err) {
+        /* best-effort */
+      }
+      return;
+    }
+  }
 
   try {
     if (typeof ctx.answerCbQuery === "function") {

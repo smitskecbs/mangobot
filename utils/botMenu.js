@@ -506,6 +506,17 @@ function isGroupMenuNavCallback(data) {
   );
 }
 
+function isGameMenuCallback(data) {
+  return (
+    data === GROUP_MENU_CALLBACK.TICTACTOE ||
+    data === GROUP_MENU_CALLBACK.CONNECT4 ||
+    data === GROUP_MENU_CALLBACK.CHECKERS ||
+    data === GROUP_MENU_CALLBACK.TRIVIA ||
+    data === GROUP_MENU_CALLBACK.MANGOBOMB ||
+    data === GROUP_MENU_CALLBACK.BLACKJACK
+  );
+}
+
 function isGroupMenuCallback(data) {
   return (
     isGroupMenuNavCallback(data) ||
@@ -518,12 +529,7 @@ function isGroupMenuCallback(data) {
     data === GROUP_MENU_CALLBACK.STREAK ||
     data === GROUP_MENU_CALLBACK.STREAK_RECORD ||
     data === GROUP_MENU_CALLBACK.HELP ||
-    data === GROUP_MENU_CALLBACK.TICTACTOE ||
-    data === GROUP_MENU_CALLBACK.CONNECT4 ||
-    data === GROUP_MENU_CALLBACK.CHECKERS ||
-    data === GROUP_MENU_CALLBACK.TRIVIA ||
-    data === GROUP_MENU_CALLBACK.MANGOBOMB ||
-    data === GROUP_MENU_CALLBACK.BLACKJACK ||
+    isGameMenuCallback(data) ||
     data === GROUP_MENU_CALLBACK.BUILDER ||
     data === GROUP_MENU_CALLBACK.SHOP ||
     data === GROUP_MENU_CALLBACK.DAILY_QUEST
@@ -571,5 +577,6 @@ module.exports = {
   getPrivateProfileMenuExtra,
   isPrivateHubCallback,
   isGroupMenuNavCallback,
+  isGameMenuCallback,
   isGroupMenuCallback,
 };

@@ -1,9 +1,9 @@
 /**
- * Optional Telegram Games topic gating for interactive community games.
+ * Telegram Games topic gating for interactive community games.
  *
- * TELEGRAM_GAMES_TOPIC_ID unset → games allowed anywhere in TELEGRAM_CHAT_ID.
- * Set → normal members must start in that forum topic; admins may bypass
- * unless the caller sets allowAdminTopicBypass: false (ManGo Bomb).
+ * TELEGRAM_GAMES_TOPIC_ID unset/invalid → group game starts are blocked.
+ * Set → members must start in that forum topic; admins may bypass unless the
+ * caller sets allowAdminTopicBypass: false (ManGo Bomb / Blackjack / menu).
  */
 
 const { canManageGroup } = require("./admin");
@@ -82,7 +82,7 @@ async function isAllowedGameTopic(ctx, options = {}) {
       : getConfiguredGamesTopicId();
 
   if (!configured) {
-    return true;
+    return false;
   }
 
   const threadId = getMessageThreadId(ctx);
