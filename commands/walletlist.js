@@ -30,8 +30,18 @@ function walletListKeyboard(page, lastPage) {
   return { reply_markup: { inline_keyboard: [row] } };
 }
 
-function renderWalletList(options = {}) {
-  const built = buildWalletListPage(options);
+function resolveGetChatMember(ctx, options = {}) {
+  if (typeof options.getChatMember === "function") {
+    return options.getChatMember;
+  }
+  if (ctx && ctx.telegram && typeof ctx.telegram.getChatMember === "function") {
+    return (chatId, userId) => ctx.telegram.getChatMember(chatId, userId);
+  }
+  return null;
+}
+
+async function renderWalletList(options = {}) {
+  const built = await buildWalletListPage(options);
   const extra = { parse_mode: "HTML" };
   const keyboard = walletListKeyboard(built.page, built.lastPage);
   if (keyboard) {
@@ -69,7 +79,7 @@ function callbackDataFromCtx(ctx) {
   return "";
 }
 
-function handleWalletList(ctx, options = {}) {
+async function handleWalletList(ctx, options = {}) {
   if (!ctx || !ctx.from) {
     return undefined;
   }
@@ -82,11 +92,14 @@ function handleWalletList(ctx, options = {}) {
   if (!isAdmin(ctx.from.id)) {
     return ctx.reply(ADMIN_ONLY);
   }
-  const rendered = renderWalletList({
+  const rendered = await renderWalletList({
     page: 0,
     pointsFile: options.pointsFile,
     walletFile: options.walletFile,
     pageSize: options.pageSize,
+    chatId: options.chatId,
+    getChatMember: resolveGetChatMember(ctx, options),
+    membershipByUserId: options.membershipByUserId,
   });
   return ctx.reply(rendered.text, rendered.extra);
 }
@@ -112,11 +125,14 @@ async function handleWalletListCallback(ctx, options = {}) {
     return ctx.reply(ADMIN_ONLY);
   }
   await safeAnswerCbQuery(ctx);
-  const rendered = renderWalletList({
+  const rendered = await renderWalletList({
     page: parsed.page,
     pointsFile: options.pointsFile,
     walletFile: options.walletFile,
     pageSize: options.pageSize,
+    chatId: options.chatId,
+    getChatMember: resolveGetChatMember(ctx, options),
+    membershipByUserId: options.membershipByUserId,
   });
   if (typeof ctx.editMessageText !== "function") {
     return ctx.reply(rendered.text, rendered.extra);

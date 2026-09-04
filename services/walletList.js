@@ -1,6 +1,7 @@
 /**
  * Admin wallet overview. Short wallets only. No uids in public callback data.
- * Pagination walks the full sorted member list (not a Not-linked-only filter).
+ * Current-member stats come from Telegram getChatMember, not store size.
+ * Wallet-link records are read-only here and are never deleted.
  */
 
 const { loadPoints } = require("./points");
@@ -10,6 +11,7 @@ const {
   getLinkedWalletFromStore,
 } = require("./walletLinks");
 const { shortenWallet } = require("../utils/solanaWallet");
+const { getConfiguredCommunityChatId } = require("./chatFight");
 
 const WALLET_LIST_PAGE_SIZE = 25;
 const WALLET_LIST_CALLBACK_PREFIX = "wlst:";
@@ -19,6 +21,13 @@ const STATUS_ICON = Object.freeze({
   registered: "🟡",
   verified: "🟢",
 });
+const CURRENT_GROUP_STATUSES = Object.freeze([
+  "member",
+  "administrator",
+  "creator",
+  "restricted",
+]);
+const CURRENT_GROUP_STATUS_SET = new Set(CURRENT_GROUP_STATUSES);
 
 function escapeHtml(value) {
   return String(value || "")
@@ -47,20 +56,131 @@ function statusFromLinked(linked) {
   return "registered";
 }
 
+function asTelegramUserId(raw) {
+  if (raw === undefined || raw === null) {
+    return "";
+  }
+  const uid = String(raw).trim();
+  return /^\d{1,20}$/.test(uid) ? uid : "";
+}
+
+function addTelegramUserId(ids, raw) {
+  const uid = asTelegramUserId(raw);
+  if (uid) {
+    ids.add(uid);
+  }
+}
+
 function collectWalletIds(points, walletStore) {
   const ids = new Set();
   for (const userId of Object.keys((points && points.users) || {})) {
-    ids.add(String(userId));
+    addTelegramUserId(ids, userId);
   }
   for (const userId of Object.keys((walletStore && walletStore.users) || {})) {
-    ids.add(String(userId));
+    addTelegramUserId(ids, userId);
   }
   for (const ownerId of Object.values((walletStore && walletStore.wallets) || {})) {
-    if (ownerId != null && String(ownerId).trim()) {
-      ids.add(String(ownerId));
-    }
+    addTelegramUserId(ids, ownerId);
   }
   return ids;
+}
+
+function resolveWalletListChatId(options = {}) {
+  if (Object.prototype.hasOwnProperty.call(options, "chatId")) {
+    const raw = options.chatId;
+    if (raw == null || String(raw).trim() === "") {
+      return null;
+    }
+    return String(raw).trim();
+  }
+  return getConfiguredCommunityChatId();
+}
+
+function isCurrentGroupStatus(status) {
+  return CURRENT_GROUP_STATUS_SET.has(status);
+}
+
+function membershipFromChatMember(member) {
+  if (!member || typeof member !== "object") {
+    return { status: "unknown", isBot: false, current: false };
+  }
+  const status = typeof member.status === "string" ? member.status : "unknown";
+  const isBot = Boolean(member.user && member.user.is_bot);
+  return {
+    status,
+    isBot,
+    current: isCurrentGroupStatus(status) && !isBot,
+  };
+}
+
+async function lookupMemberships(userIds, options = {}) {
+  const byUserId = new Map();
+  if (options.membershipByUserId instanceof Map) {
+    return {
+      chatConfigured: true,
+      lookedUp: options.membershipByUserId.size,
+      byUserId: options.membershipByUserId,
+    };
+  }
+  const chatId = resolveWalletListChatId(options);
+  const getChatMember =
+    typeof options.getChatMember === "function" ? options.getChatMember : null;
+  if (!chatId || !getChatMember) {
+    return { chatConfigured: Boolean(chatId), lookedUp: 0, byUserId };
+  }
+  let lookedUp = 0;
+  for (const rawId of userIds) {
+    const userId = asTelegramUserId(rawId);
+    if (!userId) {
+      continue;
+    }
+    lookedUp += 1;
+    try {
+      const member = await getChatMember(chatId, userId);
+      byUserId.set(userId, membershipFromChatMember(member));
+    } catch (_err) {
+      byUserId.set(userId, { status: "unknown", isBot: false, current: false });
+    }
+  }
+  return { chatConfigured: true, lookedUp, byUserId };
+}
+
+function partitionWalletRows(rows, membershipByUserId) {
+  const current = [];
+  const historicalWallets = [];
+  for (const row of rows) {
+    const uid = asTelegramUserId(row.userId);
+    const membership = membershipByUserId.get(uid) || {
+      status: "unknown",
+      isBot: false,
+      current: false,
+    };
+    if (membership.current) {
+      current.push(row);
+      continue;
+    }
+    if (row.status !== "none" && !membership.isBot) {
+      historicalWallets.push(row);
+    }
+  }
+  return { current, historicalWallets };
+}
+
+function summarizeCurrentMembers(currentRows) {
+  let withWallet = 0;
+  let withoutWallet = 0;
+  for (const row of currentRows) {
+    if (row.status === "none") {
+      withoutWallet += 1;
+    } else {
+      withWallet += 1;
+    }
+  }
+  return {
+    currentMembers: currentRows.length,
+    withWallet,
+    withoutWallet,
+  };
 }
 
 function collectWalletListRows(options = {}) {
@@ -141,16 +261,26 @@ function formatWalletListLine(row) {
   return `${icon} ${name} — ${escapeHtml(row.walletShort)}`;
 }
 
-function buildWalletListPage(options = {}) {
+async function buildWalletListPage(options = {}) {
   const pageSize = options.pageSize || WALLET_LIST_PAGE_SIZE;
-  const rows = collectWalletListRows(options);
-  const summary = summarizeWalletList(rows);
+  const allRows = collectWalletListRows(options);
+  const membership = await lookupMemberships(
+    allRows.map((row) => row.userId),
+    options
+  );
+  const partitioned = partitionWalletRows(allRows, membership.byUserId);
+  const rows = partitioned.current;
+  const summary = summarizeCurrentMembers(rows);
   const page = clampPage(options.page ?? 0, rows.length, pageSize);
   const start = page * pageSize;
   const slice = rows.slice(start, start + pageSize);
   const lines = ["<b>🥭 ManGo Wallet Overview</b>", ""];
+  if (!membership.chatConfigured) {
+    lines.push("Telegram group is not configured. Current members cannot be confirmed.");
+    lines.push("");
+  }
   if (!slice.length) {
-    lines.push("No known members yet.");
+    lines.push("No current group members among known wallet/activity records.");
   } else {
     for (const row of slice) {
       lines.push(formatWalletListLine(row));
@@ -158,12 +288,15 @@ function buildWalletListPage(options = {}) {
   }
   lines.push(
     "",
-    "Summary:",
-    `🟢 Verified: ${summary.verified}`,
-    `🟡 Registered: ${summary.registered}`,
-    `⬜ Not linked: ${summary.none}`,
-    `Total known members: ${summary.total}`
+    `👥 Current members checked: ${summary.currentMembers}`,
+    `🔗 Current members with wallet: ${summary.withWallet}`,
+    `⬜ Current members without wallet: ${summary.withoutWallet}`
   );
+  if (partitioned.historicalWallets.length > 0) {
+    lines.push(
+      `📦 Historical wallets (not in group): ${partitioned.historicalWallets.length}`
+    );
+  }
   const last = pageCount(rows.length, pageSize) - 1;
   if (last > 0) {
     lines.push("", `Page ${page + 1}/${last + 1}`);
@@ -175,7 +308,10 @@ function buildWalletListPage(options = {}) {
     summary,
     rows: slice,
     allRows: rows,
+    knownRecords: allRows.length,
+    historicalWallets: partitioned.historicalWallets.length,
     total: rows.length,
+    chatConfigured: membership.chatConfigured,
   };
 }
 
@@ -211,8 +347,12 @@ function walletListNavButtons(page, lastPage) {
 module.exports = {
   WALLET_LIST_PAGE_SIZE,
   WALLET_LIST_CALLBACK_PREFIX,
+  CURRENT_GROUP_STATUSES,
   collectWalletListRows,
   summarizeWalletList,
+  summarizeCurrentMembers,
+  lookupMemberships,
+  partitionWalletRows,
   buildWalletListPage,
   parseWalletListCallback,
   walletListCallbackData,
@@ -221,4 +361,5 @@ module.exports = {
   pageCount,
   escapeHtml,
   toPageIndex,
+  asTelegramUserId,
 };
