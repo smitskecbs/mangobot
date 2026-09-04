@@ -86,12 +86,9 @@ function collectWalletIds(points, walletStore) {
 }
 
 function resolveWalletListChatId(options = {}) {
-  if (Object.prototype.hasOwnProperty.call(options, "chatId")) {
-    const raw = options.chatId;
-    if (raw == null || String(raw).trim() === "") {
-      return null;
-    }
-    return String(raw).trim();
+  const override = options.chatId;
+  if (override != null && String(override).trim() !== "") {
+    return String(override).trim();
   }
   return getConfiguredCommunityChatId();
 }
@@ -353,6 +350,7 @@ module.exports = {
   summarizeCurrentMembers,
   lookupMemberships,
   partitionWalletRows,
+  resolveWalletListChatId,
   buildWalletListPage,
   parseWalletListCallback,
   walletListCallbackData,

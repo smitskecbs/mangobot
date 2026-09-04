@@ -30,6 +30,7 @@ const {
   parseWalletListCallback,
   walletListCallbackData,
   WALLET_LIST_CALLBACK_PREFIX,
+  resolveWalletListChatId,
 } = require("../services/walletList");
 const {
   handleWalletList,
@@ -541,23 +542,93 @@ pending.push(
   })
 );
 
-pending.push(
-  runTest("missing Telegram lookup does not treat store size as current", async () => {
-    const { pointsFile, walletFile } = files();
-    seedPoints(pointsFile, { 1: "Kevin", 2: "Alice" });
-    registerManualWallet(1, generateSolanaWallet().address, walletFile, 1);
-    const page = await buildWalletListPage({ pointsFile, walletFile, chatId: "" });
-    assert.strictEqual(page.summary.currentMembers, 0);
-    assert.strictEqual(page.historicalWallets, 1);
-    assert.ok(page.text.includes("Telegram group is not configured"));
-    assert.ok(page.text.includes("👥 Current members checked: 0"));
-    assert.ok(!page.text.includes("Kevin"));
-  })
-);
+async function withTelegramChatId(value, fn) {
+  const prev = process.env.TELEGRAM_CHAT_ID;
+  if (value === undefined) {
+    delete process.env.TELEGRAM_CHAT_ID;
+  } else {
+    process.env.TELEGRAM_CHAT_ID = value;
+  }
+  try {
+    return await fn();
+  } finally {
+    if (prev === undefined) {
+      delete process.env.TELEGRAM_CHAT_ID;
+    } else {
+      process.env.TELEGRAM_CHAT_ID = prev;
+    }
+  }
+}
 
-Promise.all(pending.filter(Boolean)).then(() => {
-  setWalletFileForTests(null);
-  if (originalAdmin === undefined) delete process.env.ADMIN_USER_ID;
-  else process.env.ADMIN_USER_ID = originalAdmin;
-  console.log("walletlist tests passed");
-});
+Promise.all(pending.filter(Boolean))
+  .then(async () => {
+    await runTest("private /walletlist uses TELEGRAM_CHAT_ID not ctx.chat.id", async () => {
+      const { pointsFile, walletFile } = files();
+      seedPoints(pointsFile, { 11: "Kevin" });
+      registerManualWallet(11, generateSolanaWallet().address, walletFile, 1);
+      const beforeWallet = fs.readFileSync(walletFile, "utf8");
+      const calls = [];
+      const ctx = createMockCtx({ chatType: "private", userId: 9001 });
+      ctx.telegram = {
+        getChatMember: async (chatId, userId) => {
+          calls.push({ chatId: String(chatId), userId: String(userId) });
+          return { status: "member", user: { id: Number(userId), is_bot: false } };
+        },
+      };
+      await withTelegramChatId(LIST_CHAT_ID, async () => {
+        await handleWalletList(ctx, { pointsFile, walletFile, chatId: undefined });
+      });
+      assert.ok(ctx.replies[0].text.includes("ManGo Wallet Overview"));
+      assert.ok(ctx.replies[0].text.includes("👥 Current members checked: 1"));
+      assert.ok(ctx.replies[0].text.includes("🔗 Current members with wallet: 1"));
+      assert.strictEqual(calls.length, 1);
+      assert.strictEqual(calls[0].chatId, LIST_CHAT_ID);
+      assert.strictEqual(calls[0].userId, "11");
+      assert.ok(calls[0].chatId !== String(ctx.chat.id));
+      assert.strictEqual(String(ctx.chat.id), "9001");
+      assert.strictEqual(fs.readFileSync(walletFile, "utf8"), beforeWallet);
+    });
+
+    await runTest("undefined chatId override still reads TELEGRAM_CHAT_ID", async () => {
+      await withTelegramChatId(LIST_CHAT_ID, async () => {
+        assert.strictEqual(resolveWalletListChatId({ chatId: undefined }), LIST_CHAT_ID);
+        assert.strictEqual(resolveWalletListChatId({}), LIST_CHAT_ID);
+      });
+    });
+
+    await runTest("missing/invalid TELEGRAM_CHAT_ID fails safely", async () => {
+      const { pointsFile, walletFile } = files();
+      seedPoints(pointsFile, { 1: "Kevin", 2: "Alice" });
+      registerManualWallet(1, generateSolanaWallet().address, walletFile, 1);
+      const beforeWallet = fs.readFileSync(walletFile, "utf8");
+      await withTelegramChatId(undefined, async () => {
+        const page = await buildWalletListPage({
+          pointsFile,
+          walletFile,
+          chatId: undefined,
+          getChatMember: async () => {
+            throw new Error("should not lookup without a group id");
+          },
+        });
+        assert.strictEqual(page.summary.currentMembers, 0);
+        assert.strictEqual(page.historicalWallets, 1);
+        assert.ok(page.text.includes("Telegram group is not configured"));
+        assert.ok(page.text.includes("👥 Current members checked: 0"));
+        assert.ok(!page.text.includes("Kevin"));
+        assert.strictEqual(resolveWalletListChatId({ chatId: undefined }), null);
+      });
+      await withTelegramChatId("   ", async () => {
+        assert.strictEqual(resolveWalletListChatId({}), null);
+        const page = await buildWalletListPage({ pointsFile, walletFile });
+        assert.strictEqual(page.summary.currentMembers, 0);
+        assert.ok(page.text.includes("Telegram group is not configured"));
+      });
+      assert.strictEqual(fs.readFileSync(walletFile, "utf8"), beforeWallet);
+    });
+  })
+  .then(() => {
+    setWalletFileForTests(null);
+    if (originalAdmin === undefined) delete process.env.ADMIN_USER_ID;
+    else process.env.ADMIN_USER_ID = originalAdmin;
+    console.log("walletlist tests passed");
+  });
