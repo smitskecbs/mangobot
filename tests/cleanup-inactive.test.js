@@ -157,6 +157,9 @@ runTest("uncertain Telegram lookup -> keep", async () => {
   });
   assert.strictEqual(result.inactiveCandidates.length, 0);
   assert.strictEqual(result.removed, false);
+  assert.strictEqual(result.telegramLookupsAttempted, 1);
+  assert.strictEqual(result.confirmedCurrentMembers, 0);
+  assert.strictEqual(result.keptByLocalData, 0);
 });
 
 runTest("left/kicked member -> keep", async () => {
@@ -184,11 +187,21 @@ runTest("confirmed inactive normal member -> candidate", async () => {
       memberResult("24", { first_name: "Silent", username: "silentmango" }),
   });
   assert.strictEqual(result.knownUsersChecked, 1);
-  assert.strictEqual(result.currentMembersChecked, 1);
+  assert.strictEqual(result.keptByLocalData, 0);
+  assert.strictEqual(result.telegramLookupsAttempted, 1);
+  assert.strictEqual(result.confirmedCurrentMembers, 1);
+  assert.strictEqual(result.telegramGroupConfigured, true);
   assert.strictEqual(result.inactiveCandidates.length, 1);
   assert.strictEqual(result.inactiveCandidates[0].userId, "24");
   const messages = formatCleanupMessages(result);
+  assert.ok(messages[0].includes("Known bot users: 1"));
+  assert.ok(messages[0].includes("Kept by local activity/data: 0"));
+  assert.ok(messages[0].includes("Telegram lookups attempted: 1"));
+  assert.ok(messages[0].includes("Confirmed current members: 1"));
   assert.ok(messages[0].includes("Inactive candidates: 1"));
+  assert.ok(messages[0].includes("Telegram group configured: yes"));
+  assert.ok(!messages[0].includes("Current members checked"));
+  assert.ok(!messages[0].includes("[debug]"));
   assert.ok(messages[0].includes("No members removed."));
   assert.ok(messages[0].includes("24 — Silent (@silentmango)"));
 });
@@ -228,7 +241,37 @@ runTest("command performs NO removal", async () => {
   });
   assert.ok(replies[0].includes("No members removed."));
   assert.ok(replies[0].includes("Inactive candidates: 1"));
+  assert.ok(replies[0].includes("Known bot users: 1"));
+  assert.ok(!replies[0].includes("Current members checked"));
   assert.ok(!replies[0].toLowerCase().includes("removed 1"));
+});
+
+runTest("local KEEP skips Telegram lookup", async () => {
+  let lookups = 0;
+  const stores = baseStores({
+    pointsUsers: { 25: { points: 4, activityDate: null } },
+    walletUsers: {
+      26: { wallet: "So11111111111111111111111111111111111111112" },
+    },
+  });
+  const result = await scanInactiveCandidates({
+    stores,
+    chatId: "-1001",
+    isAdminFn: () => false,
+    getChatMember: async () => {
+      lookups += 1;
+      return memberResult("25");
+    },
+  });
+  assert.strictEqual(result.knownUsersChecked, 2);
+  assert.strictEqual(result.keptByLocalData, 2);
+  assert.strictEqual(result.telegramLookupsAttempted, 0);
+  assert.strictEqual(result.confirmedCurrentMembers, 0);
+  assert.strictEqual(result.inactiveCandidates.length, 0);
+  assert.strictEqual(lookups, 0);
+  const messages = formatCleanupMessages(result);
+  assert.ok(messages[0].includes("Kept by local activity/data: 2"));
+  assert.ok(messages[0].includes("Telegram lookups attempted: 0"));
 });
 
 runTest("non-admin is rejected and scan is not used", async () => {

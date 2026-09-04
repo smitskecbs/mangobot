@@ -287,9 +287,13 @@ function formatCandidateLine(candidate) {
 function formatCleanupMessages(result) {
   const header = [
     "🧹 Community cleanup",
-    `Known users checked: ${result.knownUsersChecked}`,
-    `Current members checked: ${result.currentMembersChecked}`,
+    `Known bot users: ${result.knownUsersChecked}`,
+    `Kept by local activity/data: ${result.keptByLocalData}`,
+    `Telegram lookups attempted: ${result.telegramLookupsAttempted}`,
+    `Confirmed current members: ${result.confirmedCurrentMembers}`,
     `Inactive candidates: ${result.inactiveCandidates.length}`,
+    "",
+    `Telegram group configured: ${result.telegramGroupConfigured ? "yes" : "no"}`,
     "",
     "No members removed.",
   ].join("\n");
@@ -449,14 +453,18 @@ async function scanInactiveCandidates(options = {}) {
   }
 
   const inactiveCandidates = [];
-  let currentMembersChecked = 0;
+  let confirmedCurrentMembers = 0;
   const telegramLookups = [];
+  const telegramGroupConfigured = Boolean(chatId);
 
   if (!chatId || !getChatMember) {
     return {
       knownUsersChecked: knownIds.length,
-      currentMembersChecked: 0,
+      keptByLocalData: localKeep.length,
+      telegramLookupsAttempted: 0,
+      confirmedCurrentMembers: 0,
       telegramNeeded: telegramNeeded.length,
+      telegramGroupConfigured,
       inactiveCandidates,
       localKeep,
       telegramLookups,
@@ -474,7 +482,7 @@ async function scanInactiveCandidates(options = {}) {
     const status = member.status;
     const user = member.user || {};
     if (CURRENT_IN_CHAT.has(status)) {
-      currentMembersChecked += 1;
+      confirmedCurrentMembers += 1;
     }
     if (status === "creator" || status === "administrator") {
       continue;
@@ -494,8 +502,11 @@ async function scanInactiveCandidates(options = {}) {
 
   return {
     knownUsersChecked: knownIds.length,
-    currentMembersChecked,
+    keptByLocalData: localKeep.length,
+    telegramLookupsAttempted: telegramLookups.length,
+    confirmedCurrentMembers,
     telegramNeeded: telegramNeeded.length,
+    telegramGroupConfigured,
     inactiveCandidates,
     localKeep,
     telegramLookups,
