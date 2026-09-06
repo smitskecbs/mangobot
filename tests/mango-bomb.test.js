@@ -18,11 +18,14 @@ const {
   parseMangoBombCallbackData,
   joinCallbackData,
   passCallbackData,
+  waitCallbackData,
   STATUS,
   BOMB_MIN_MS,
   BOMB_MAX_MS,
   LOBBY_COUNTDOWN_MS,
   STALE_CALLBACK,
+  BETWEEN_ROUNDS_TOAST,
+  ROUND_LIVE_TOAST,
   INTERNAL_CANCEL_TEXT,
   getMangoBombRuntime,
 } = require("../services/mangoBomb");
@@ -1002,10 +1005,13 @@ async function main() {
   await runTest("41-43. security: no client holder, no spoof, stale safe", async () => {
     assert.strictEqual(parseMangoBombCallbackData("mb:join:aabbccdd").action, "join");
     assert.strictEqual(parseMangoBombCallbackData("mb:pass:aabbccdd").gameId, "aabbccdd");
+    assert.strictEqual(parseMangoBombCallbackData("mb:wait:aabbccdd").action, "wait");
     assert.strictEqual(parseMangoBombCallbackData("mb:join:aabbccdd:111"), null);
     assert.strictEqual(parseMangoBombCallbackData("mb:pass:111"), null);
+    assert.strictEqual(parseMangoBombCallbackData("mb:wait:aabbccdd:111"), null);
     assert.ok(!joinCallbackData("aabbccdd").includes(String(USER_A)));
     assert.ok(!passCallbackData("aabbccdd").includes(String(USER_A)));
+    assert.ok(!waitCallbackData("aabbccdd").includes(String(USER_A)));
     const { service } = createService();
     const stale = await handleMangoBombCallback(
       createMockCtx({ callbackData: "mb:join:deadbeef" }),
@@ -1547,6 +1553,150 @@ async function main() {
     assert.strictEqual(service.hasActivePauseTimer(gameId), true);
     assert.strictEqual(service.getStatus(COMMUNITY_CHAT), STATUS.BETWEEN_ROUNDS);
     service.resolveHungRenders();
+  });
+
+  await runTest("between-rounds. boom text shows waiting; pause timer has a deterministic exit", async () => {
+    const { service, timers, edits } = createService({
+      betweenRoundsMs: 80,
+      watchdogMs: 10_000,
+    });
+    const gameId = await startWithPlayers(service, ["Kevin", "Lojay", "Ada"]);
+    await service.forceLobbyEnd(gameId);
+    await service.forceExplode(gameId);
+    await service.whenIdle(COMMUNITY_CHAT);
+    assert.strictEqual(service.getStatus(COMMUNITY_CHAT), STATUS.BETWEEN_ROUNDS);
+    assert.strictEqual(service.hasActivePauseTimer(gameId), true);
+    const boom = edits.filter((row) => row.text.includes("BOOM")).pop();
+    assert.ok(boom);
+    assert.ok(boom.text.includes("Next round starting"));
+    const waitBtn = boom.extra.reply_markup.inline_keyboard[0][0];
+    assert.strictEqual(waitBtn.callback_data, waitCallbackData(gameId));
+    timers.advance(80);
+    await service.whenIdle(COMMUNITY_CHAT);
+    assert.strictEqual(service.getStatus(COMMUNITY_CHAT), STATUS.RUNNING);
+    assert.ok(service.getGame(gameId).currentHolder);
+  });
+
+  await runTest("between-rounds. leftover PASS does not claim the game is over", async () => {
+    const { service, edits } = createService({
+      betweenRoundsMs: 250,
+      watchdogMs: 10_000,
+    });
+    const gameId = await startWithPlayers(service, ["Kevin", "Lojay", "Ada"]);
+    await service.forceLobbyEnd(gameId);
+    const boom = await service.forceExplode(gameId);
+    await service.whenIdle(COMMUNITY_CHAT);
+    assert.strictEqual(boom.status, STATUS.BETWEEN_ROUNDS);
+    const beforeEliminated = service.getGame(gameId).eliminatedCount;
+    const holderBefore = service.getGame(gameId).currentHolder;
+    const passed = pass(service, gameId, USER_A);
+    assert.strictEqual(passed.ok, false);
+    assert.strictEqual(passed.reason, "between-rounds");
+    assert.strictEqual(passed.toast, BETWEEN_ROUNDS_TOAST);
+    assert.notStrictEqual(passed.toast, STALE_CALLBACK);
+    assert.ok(passed.text.includes("Next round starting"));
+    const queued = await service.enqueuePass({
+      gameId,
+      userId: USER_A,
+      chatId: COMMUNITY_CHAT,
+      threadId: 123,
+    });
+    await service.whenIdle(COMMUNITY_CHAT);
+    assert.strictEqual(queued.ok, false);
+    assert.strictEqual(queued.toast, BETWEEN_ROUNDS_TOAST);
+    assert.strictEqual(service.getStatus(COMMUNITY_CHAT), STATUS.BETWEEN_ROUNDS);
+    assert.strictEqual(service.getGame(gameId).eliminatedCount, beforeEliminated);
+    assert.strictEqual(service.getGame(gameId).currentHolder, holderBefore);
+    assert.ok(edits.some((row) => row.text.includes("Next round starting")));
+  });
+
+  await runTest("between-rounds. wait callback refreshes UI and never passes", async () => {
+    const { service, timers } = createService({
+      betweenRoundsMs: 60,
+      watchdogMs: 10_000,
+    });
+    const gameId = await startWithPlayers(service, ["Kevin", "Lojay", "Ada"]);
+    await service.forceLobbyEnd(gameId);
+    await service.forceExplode(gameId);
+    const waitCtx = createMockCtx({
+      callbackData: waitCallbackData(gameId),
+      userId: USER_A,
+      firstName: "Kevin",
+      messageThreadId: 123,
+    });
+    await handleMangoBombCallback(waitCtx, { runtime: service });
+    assert.strictEqual(waitCtx.cbAnswers[0], BETWEEN_ROUNDS_TOAST);
+    assert.strictEqual(service.getStatus(COMMUNITY_CHAT), STATUS.BETWEEN_ROUNDS);
+    timers.advance(60);
+    await service.whenIdle(COMMUNITY_CHAT);
+    assert.strictEqual(service.getStatus(COMMUNITY_CHAT), STATUS.RUNNING);
+    const liveWait = createMockCtx({
+      callbackData: waitCallbackData(gameId),
+      userId: USER_A,
+      firstName: "Kevin",
+      messageThreadId: 123,
+    });
+    const holder = service.getGame(gameId).currentHolder;
+    await handleMangoBombCallback(liveWait, { runtime: service });
+    assert.strictEqual(liveWait.cbAnswers[0], ROUND_LIVE_TOAST);
+    assert.strictEqual(service.getStatus(COMMUNITY_CHAT), STATUS.RUNNING);
+    assert.strictEqual(service.getGame(gameId).currentHolder, holder);
+  });
+
+  await runTest("between-rounds. duplicate callbacks cannot create a second winner", async () => {
+    const { service, timers, edits } = createService({
+      betweenRoundsMs: 40,
+      watchdogMs: 10_000,
+    });
+    const gameId = await startWithPlayers(service, ["Kevin", "Lojay"]);
+    await service.forceLobbyEnd(gameId);
+    const first = await service.forceExplode(gameId);
+    await service.whenIdle(COMMUNITY_CHAT);
+    assert.strictEqual(first.status, STATUS.FINISHED);
+    const againPass = await service.enqueuePass({
+      gameId,
+      userId: USER_A,
+      chatId: COMMUNITY_CHAT,
+      threadId: 123,
+    });
+    const againWait = await service.enqueueWait({
+      gameId,
+      userId: USER_A,
+      chatId: COMMUNITY_CHAT,
+      threadId: 123,
+    });
+    const againBoom = await service.forceExplode(gameId);
+    assert.strictEqual(againPass.ok, false);
+    assert.strictEqual(againWait.ok, false);
+    assert.strictEqual(againBoom.ok, false);
+    assert.strictEqual(edits.filter((row) => row.text.includes("WINNER")).length, 1);
+    timers.advance(40);
+    await service.whenIdle(COMMUNITY_CHAT);
+    assert.strictEqual(service.getStatus(COMMUNITY_CHAT), STATUS.IDLE);
+  });
+
+  await runTest("between-rounds. wait-queue error does not permanently lock the chat", async () => {
+    const { service, timers } = createService({
+      betweenRoundsMs: 50,
+      watchdogMs: 10_000,
+    });
+    const gameId = await startWithPlayers(service, ["Kevin", "Lojay", "Ada"]);
+    await service.forceLobbyEnd(gameId);
+    await service.forceExplode(gameId);
+    assert.strictEqual(service.getStatus(COMMUNITY_CHAT), STATUS.BETWEEN_ROUNDS);
+    service.injectQueueThrow("wait");
+    const failed = await service.enqueueWait({
+      gameId,
+      userId: USER_A,
+      chatId: COMMUNITY_CHAT,
+      threadId: 123,
+    });
+    assert.strictEqual(failed.ok, false);
+    assert.strictEqual(service.getStatus(COMMUNITY_CHAT), STATUS.BETWEEN_ROUNDS);
+    assert.strictEqual(service.hasActivePauseTimer(gameId), true);
+    timers.advance(50);
+    await service.whenIdle(COMMUNITY_CHAT);
+    assert.strictEqual(service.getStatus(COMMUNITY_CHAT), STATUS.RUNNING);
   });
 
   await runTest("timers. stale timer field cannot masquerade as active", async () => {

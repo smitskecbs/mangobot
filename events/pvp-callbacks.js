@@ -419,10 +419,14 @@ async function handlePvpCallbackBody(ctx, options = {}) {
         result.reason === "invalid-session"
       ) {
         await rejectStalePvp(ctx, runtime, parsed);
+        return;
       } else if (result.reason === "wrong-chat") {
         await cbAnswer(ctx, "Wrong chat.");
       } else {
         await cbAnswer(ctx, "Invalid move.");
+      }
+      if (result.rendered) {
+        await safeEdit(ctx, result.rendered.text, result.rendered.extra);
       }
       return;
     }

@@ -1,6 +1,6 @@
 /**
  * ManGo Bomb — join-only group hot-potato. In-memory; restart cancels.
- * Callbacks: mb:join:<id> / mb:pass:<id>. Server uses ctx.from.id.
+ * Callbacks: mb:join:<id> / mb:pass:<id> / mb:wait:<id>. Server uses ctx.from.id.
  * Telegram rendering is output-only and never owns game progression.
  */
 
@@ -50,6 +50,8 @@ const XP_SURVIVE = 1;
 const XP_WIN = 5;
 const DAILY_ROUND_CAP = 1;
 const STALE_CALLBACK = GAME_OVER_TOAST;
+const BETWEEN_ROUNDS_TOAST = "Next round is starting…";
+const ROUND_LIVE_TOAST = "Round on — pass the bomb!";
 const RENDER_TIMEOUT_MS = 5_000;
 const QUEUE_TIMEOUT_MS = 5_000;
 const WATCHDOG_MS = 5_000;
@@ -77,7 +79,7 @@ function parseMangoBombCallbackData(data) {
   if (parts.length !== 3 || parts[0] !== "mb") {
     return null;
   }
-  if (parts[1] !== "join" && parts[1] !== "pass") {
+  if (parts[1] !== "join" && parts[1] !== "pass" && parts[1] !== "wait") {
     return null;
   }
   const gameId = parts[2];
@@ -95,6 +97,10 @@ function passCallbackData(gameId) {
   return `mb:pass:${gameId}`;
 }
 
+function waitCallbackData(gameId) {
+  return `mb:wait:${gameId}`;
+}
+
 function joinKeyboard(gameId) {
   return Markup.inlineKeyboard([
     [Markup.button.callback("💣 JOIN BOMB", joinCallbackData(gameId))],
@@ -104,6 +110,12 @@ function joinKeyboard(gameId) {
 function passKeyboard(gameId) {
   return Markup.inlineKeyboard([
     [Markup.button.callback("💣 PASS", passCallbackData(gameId))],
+  ]);
+}
+
+function waitKeyboard(gameId) {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("⏳ Next round starting…", waitCallbackData(gameId))],
   ]);
 }
 
@@ -150,7 +162,25 @@ function buildBoomText(name, remaining) {
     `${name} got MANGO'D. 😂🥭`,
     "",
     `${remaining} player${remaining === 1 ? "" : "s"} remain.`,
+    "",
+    "⏳ Next round starting…",
   ].join("\n");
+}
+
+function lastEliminatedName(game) {
+  if (!game || !Array.isArray(game.eliminated) || !game.eliminated.length) {
+    return "Player";
+  }
+  const victimId = game.eliminated[game.eliminated.length - 1];
+  const player = victimId ? game.players.get(victimId) : null;
+  return (player && player.displayName) || "Player";
+}
+
+function betweenRoundsView(game) {
+  return {
+    text: buildBoomText(lastEliminatedName(game), game.alive.size),
+    extra: waitKeyboard(game.id),
+  };
 }
 
 function buildWinnerText(name, xpLine) {
@@ -1162,8 +1192,6 @@ function createMangoBombService(options = {}) {
       return { ok: false, reason: "stale-timer" };
     }
     const victimId = game.currentHolder;
-    const victim = victimId ? game.players.get(victimId) : null;
-    const name = (victim && victim.displayName) || "Player";
     game.alive.delete(victimId);
     game.eliminated.push(victimId);
     game.currentHolder = null;
@@ -1214,10 +1242,11 @@ function createMangoBombService(options = {}) {
       );
     });
     bumpRevision(game);
+    const pauseView = betweenRoundsView(game);
     queueRender(
       game,
-      buildBoomText(name, survivors.length),
-      emptyInlineKeyboardExtra(),
+      pauseView.text,
+      pauseView.extra,
       "explode"
     );
     return { ok: true, status: STATUS.BETWEEN_ROUNDS, eliminated: victimId };
@@ -1503,6 +1532,56 @@ function createMangoBombService(options = {}) {
     };
   }
 
+  function betweenRoundsFeedback(game, reason, toast) {
+    bumpRevision(game);
+    const view = betweenRoundsView(game);
+    return {
+      ok: false,
+      reason,
+      toast,
+      text: view.text,
+      extra: view.extra,
+      snapshot: snapshot(game, true),
+      renderRevision: game.renderRevision,
+    };
+  }
+
+  function liveRoundFeedback(game, reason, toast) {
+    bumpRevision(game);
+    return {
+      ok: false,
+      reason,
+      toast,
+      text: buildBombText(game),
+      extra: passKeyboard(game.id),
+      snapshot: snapshot(game, true),
+      renderRevision: game.renderRevision,
+    };
+  }
+
+  function tryWait({ gameId, chatId, threadId } = {}) {
+    const game = gamesById.get(gameId);
+    if (!game || game.status === STATUS.FINISHED || game.status === STATUS.CANCELLED) {
+      return { ok: false, reason: "stale", toast: STALE_CALLBACK };
+    }
+    if (chatId != null && String(chatId) !== String(game.chatId)) {
+      return { ok: false, reason: "wrong-chat", toast: STALE_CALLBACK };
+    }
+    if (
+      game.threadId != null &&
+      (threadId == null || String(threadId) !== String(game.threadId))
+    ) {
+      return { ok: false, reason: "wrong-topic", toast: STALE_CALLBACK };
+    }
+    if (game.status === STATUS.BETWEEN_ROUNDS) {
+      return betweenRoundsFeedback(game, "between-rounds", BETWEEN_ROUNDS_TOAST);
+    }
+    if (game.status === STATUS.RUNNING) {
+      return liveRoundFeedback(game, "round-live", ROUND_LIVE_TOAST);
+    }
+    return { ok: false, reason: "not-waiting", toast: STALE_CALLBACK };
+  }
+
   function tryPass({ gameId, userId, isBot, chatId, threadId } = {}) {
     const game = gamesById.get(gameId);
     if (!game || game.status === STATUS.FINISHED || game.status === STATUS.CANCELLED) {
@@ -1519,6 +1598,9 @@ function createMangoBombService(options = {}) {
     }
     if (isBot) {
       return { ok: false, reason: "bot", toast: "Bots cannot play." };
+    }
+    if (game.status === STATUS.BETWEEN_ROUNDS) {
+      return betweenRoundsFeedback(game, "between-rounds", BETWEEN_ROUNDS_TOAST);
     }
     if (game.status !== STATUS.RUNNING) {
       return { ok: false, reason: "not-running", toast: STALE_CALLBACK };
@@ -1766,6 +1848,7 @@ function createMangoBombService(options = {}) {
     startLobby,
     tryJoin,
     tryPass,
+    tryWait,
     setMessageId,
     forceLobbyEnd,
     forceExplode,
@@ -1847,7 +1930,7 @@ function createMangoBombService(options = {}) {
           return { ok: false, reason: "queue-timeout", toast: STALE_CALLBACK };
         }
         const result = tryPass(input);
-        if (result.ok) {
+        if (result.text && result.extra) {
           const live = gamesById.get(input.gameId);
           if (live) {
             queueRender(live, result.text, result.extra, "pass");
@@ -1855,6 +1938,25 @@ function createMangoBombService(options = {}) {
         }
         return result;
       }, "pass");
+    },
+    enqueueWait(input) {
+      const game = gamesById.get(input && input.gameId);
+      if (!game) {
+        return Promise.resolve({ ok: false, reason: "stale", toast: STALE_CALLBACK });
+      }
+      return enqueue(game.chatId, (token) => {
+        if (!isLiveTask(token)) {
+          return { ok: false, reason: "queue-timeout", toast: STALE_CALLBACK };
+        }
+        const result = tryWait(input);
+        if (result.text && result.extra) {
+          const live = gamesById.get(input.gameId);
+          if (live) {
+            queueRender(live, result.text, result.extra, "wait");
+          }
+        }
+        return result;
+      }, "wait");
     },
     injectQueueThrow(stage) {
       injectedQueueStage = stage;
@@ -1939,6 +2041,8 @@ module.exports = {
   XP_WIN,
   DAILY_ROUND_CAP,
   STALE_CALLBACK,
+  BETWEEN_ROUNDS_TOAST,
+  ROUND_LIVE_TOAST,
   RENDER_TIMEOUT_MS,
   QUEUE_TIMEOUT_MS,
   WATCHDOG_MS,
@@ -1947,8 +2051,10 @@ module.exports = {
   parseMangoBombCallbackData,
   joinCallbackData,
   passCallbackData,
+  waitCallbackData,
   joinKeyboard,
   passKeyboard,
+  waitKeyboard,
   buildLobbyText,
   buildCancelledText,
   buildEmptyLobbyText,

@@ -990,15 +990,26 @@ function createCheckersService(options = {}) {
       if (!seat) {
         return { ok: false, reason: "outsider" };
       }
+      // Failed taps still return the live board so a stale vs-bot keyboard
+      // (bot-move edit skipped/delayed) can resync instead of looking like
+      // the human's own piece was rejected.
+      function rejectSelect(reason) {
+        return {
+          ok: false,
+          reason,
+          session: snapshot(session),
+          rendered: renderMessage(session, null, manager.now()),
+        };
+      }
       if (seat !== session.currentPlayer) {
-        return { ok: false, reason: "not-your-turn" };
+        return rejectSelect("not-your-turn");
       }
 
       // Defensive only: re-selecting the forced piece must ACK and stay ACTIVE.
       // The production TypeError on this callback was not reproduced.
       if (isPlayableSquare(session.pendingFrom)) {
         if (square !== session.pendingFrom) {
-          return { ok: false, reason: "must-continue" };
+          return rejectSelect("must-continue");
         }
         session.selectedSquare = session.pendingFrom;
         return {
@@ -1020,12 +1031,12 @@ function createCheckersService(options = {}) {
       }
 
       if (sideOf(session.board[square]) !== seat) {
-        return { ok: false, reason: "invalid-piece" };
+        return rejectSelect("invalid-piece");
       }
 
       const dests = destinations(boardState(session), square);
       if (!dests.length) {
-        return { ok: false, reason: "no-moves" };
+        return rejectSelect("no-moves");
       }
 
       session.selectedSquare = square;

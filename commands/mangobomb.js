@@ -1,6 +1,6 @@
 /**
  * /mangobomb — join-only community hot-potato in the Games topic.
- * Callbacks: mb:join:<id> / mb:pass:<id>. Server uses ctx.from.id.
+ * Callbacks: mb:join:<id> / mb:pass:<id> / mb:wait:<id>. Server uses ctx.from.id.
  */
 
 const { Markup } = require("telegraf");
@@ -16,9 +16,9 @@ const {
 const {
   startLobby,
   getMangoBombRuntime,
-  parseMangoBombCallbackData,
-  STALE_CALLBACK,
-  STATUS,
+    parseMangoBombCallbackData,
+    STALE_CALLBACK,
+    STATUS,
 } = require("../services/mangoBomb");
 const { reminderForBlockedXp } = require("../services/xpWalletGate");
 const { logError } = require("../utils/logger");
@@ -260,7 +260,9 @@ async function handleMangoBombCallback(ctx, options = {}) {
   const result =
     parsed.action === "join"
       ? await runtime.enqueueJoin(input)
-      : await runtime.enqueuePass(input);
+      : parsed.action === "wait"
+        ? await runtime.enqueueWait(input)
+        : await runtime.enqueuePass(input);
 
   if (!result || !result.ok) {
     await answer((result && result.toast) || STALE_CALLBACK);
@@ -346,7 +348,7 @@ module.exports = (bot) => {
       );
     })
   );
-  bot.action(/^mb:(join|pass):[a-f0-9]{8,16}$/i, (ctx) =>
+  bot.action(/^mb:(join|pass|wait):[a-f0-9]{8,16}$/i, (ctx) =>
     Promise.resolve(handleMangoBombCallback(ctx)).catch((err) => {
       logError(
         "[mango-bomb] internal error stage=callback",
