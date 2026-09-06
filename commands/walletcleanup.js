@@ -14,6 +14,7 @@ const {
   walletCleanupNavButtons,
   WALLET_CLEANUP_CALLBACK_PREFIX,
 } = require("../services/walletCleanup");
+const { formatWalletGraceSummary } = require("../services/walletGrace");
 
 const ADMIN_ONLY = "This command is admin only.";
 const PRIVATE_ONLY = "Open a private chat with the bot to run wallet cleanup.";
@@ -57,6 +58,21 @@ function resolveBanUnban(ctx, options = {}) {
         ? (chatId, userId, extra) => ctx.telegram.unbanChatMember(chatId, userId, extra)
         : null;
   return { banChatMember, unbanChatMember };
+}
+
+function appendGraceSummary(text, options = {}) {
+  try {
+    const summary = formatWalletGraceSummary({
+      membersFile: options.membersFile,
+      now: options.now,
+    });
+    if (summary) {
+      return `${text}\n\n${summary}`;
+    }
+  } catch (_err) {
+    /* preview-only; cleanup text still sends */
+  }
+  return text;
 }
 
 function scanOptions(ctx, options = {}) {
@@ -110,7 +126,7 @@ async function handleWalletCleanup(ctx, options = {}) {
     pageSize: options.pageSize,
   });
   const extra = cleanupKeyboard(built.page, built.lastPage) || {};
-  return ctx.reply(built.text, extra);
+  return ctx.reply(appendGraceSummary(built.text, options), extra);
 }
 
 async function handleWalletCleanupCallback(ctx, options = {}) {
@@ -140,16 +156,17 @@ async function handleWalletCleanupCallback(ctx, options = {}) {
     pageSize: options.pageSize,
   });
   const extra = cleanupKeyboard(built.page, built.lastPage) || {};
+  const previewText = appendGraceSummary(built.text, options);
   if (typeof ctx.editMessageText !== "function") {
-    return ctx.reply(built.text, extra);
+    return ctx.reply(previewText, extra);
   }
   try {
-    return await ctx.editMessageText(built.text, extra);
+    return await ctx.editMessageText(previewText, extra);
   } catch (err) {
     if (isMessageNotModified(err)) {
       return undefined;
     }
-    return ctx.reply(built.text, extra);
+    return ctx.reply(previewText, extra);
   }
 }
 

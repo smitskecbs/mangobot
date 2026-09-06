@@ -3,13 +3,40 @@
  * Also opens a First Welcome Builder window and stores message ids for targeting.
  */
 
+const { error: logError } = require("../utils/logger");
 const {
   registerWelcomeOpportunity,
   noteBotWelcomeMessage,
   safeDisplayName,
 } = require("../services/communityBuilder");
+const {
+  NOTICE_STATE,
+  getWalletGraceNoticeState,
+  tryClaimWalletGraceNotice,
+  releaseWalletGraceNoticeClaim,
+  markWalletGraceNoticeSent,
+} = require("../services/knownMembers");
+
+const WALLET_REQUIREMENT_LINES = [
+  "To stay in the community, connect your Solana wallet within 48 hours.",
+  "Use /menu → Wallet to link your wallet.",
+  "No wallet connected after 48 hours = automatic removal.",
+  "You can always rejoin later and connect one.",
+];
 
 const WELCOME_TEXT = (name) => `🥭 Welcome ${name}!
+
+Welcome to the ManGo community.
+
+${WALLET_REQUIREMENT_LINES.join("\n")}
+
+📌 Please read the pinned message
+🌐 Use /links for official links
+🚀 Use /launch for project status
+
+Enjoy the build!`;
+
+const WELCOME_TEXT_NO_WALLET_WARNING = (name) => `🥭 Welcome ${name}!
 
 Welcome to the ManGo community.
 
@@ -18,6 +45,53 @@ Welcome to the ManGo community.
 🚀 Use /launch for project status
 
 Enjoy the build!`;
+
+async function sendWalletAwareWelcome(input = {}) {
+  const userId = input.userId;
+  const name = input.name || "friend";
+  const reply = input.reply;
+  if (typeof reply !== "function") {
+    return undefined;
+  }
+  const membersFile = input.membersFile;
+  const now = input.now;
+  let includeWarning = false;
+  try {
+    const state = getWalletGraceNoticeState(userId, membersFile);
+    if (state === NOTICE_STATE.PENDING) {
+      const claim = tryClaimWalletGraceNotice(userId, { membersFile, now });
+      includeWarning = Boolean(claim && claim.ok);
+    }
+  } catch (err) {
+    logError(
+      "[welcome] wallet grace notice claim failed:",
+      err && err.message ? err.message : err
+    );
+  }
+  const text = includeWarning
+    ? WELCOME_TEXT(name)
+    : WELCOME_TEXT_NO_WALLET_WARNING(name);
+  try {
+    const sent = await reply(text);
+    if (includeWarning) {
+      if (sent && sent.message_id) {
+        markWalletGraceNoticeSent(userId, { membersFile, now });
+      } else {
+        releaseWalletGraceNoticeClaim(userId, { membersFile });
+      }
+    }
+    return sent;
+  } catch (err) {
+    if (includeWarning) {
+      try {
+        releaseWalletGraceNoticeClaim(userId, { membersFile });
+      } catch (_releaseErr) {
+        /* leave sending until stale retry */
+      }
+    }
+    throw err;
+  }
+}
 
 module.exports = (bot) => {
   bot.on("new_chat_members", async (ctx, next) => {
@@ -48,7 +122,11 @@ module.exports = (bot) => {
         /* fail closed; public welcome still sends */
       }
       try {
-        const sent = await ctx.reply(WELCOME_TEXT(name));
+        const sent = await sendWalletAwareWelcome({
+          userId: member.id,
+          name,
+          reply: (text) => ctx.reply(text),
+        });
         if (sent && sent.message_id) {
           noteBotWelcomeMessage(member.id, sent.message_id, { chatId });
         }
@@ -61,3 +139,5 @@ module.exports = (bot) => {
 };
 
 module.exports.WELCOME_TEXT = WELCOME_TEXT;
+module.exports.WELCOME_TEXT_NO_WALLET_WARNING = WELCOME_TEXT_NO_WALLET_WARNING;
+module.exports.sendWalletAwareWelcome = sendWalletAwareWelcome;

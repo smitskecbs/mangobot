@@ -18,6 +18,8 @@ const {
   isExplicitlyProtected,
   collectKnownTelegramIds,
   loadKnownMembersStore,
+  mutateKnownMembersStore,
+  WALLET_GRACE_MS,
   SOURCE,
 } = require("../services/knownMembers");
 const { mutatePoints } = require("../services/points");
@@ -72,8 +74,67 @@ async function main() {
     assert.strictEqual(row.joinedAt, 1_700_000_000_000);
     assert.strictEqual(row.leftAt, 0);
     assert.ok(row.sources.includes(SOURCE.NEW_CHAT_MEMBERS));
+    assert.strictEqual(row.walletGraceDeadline, 1_700_000_000_000 + WALLET_GRACE_MS);
+    assert.strictEqual(row.reminderState, "pending");
+    assert.strictEqual(row.walletGraceNoticeState, "pending");
+    assert.strictEqual(result.graceStarted, true);
+  });
+
+  await runTest("historical in-group member does not receive a retroactive grace deadline", () => {
+    const { membersFile } = files();
+    mutateKnownMembersStore((store) => {
+      store.members["66"] = {
+        telegramUserId: "66",
+        username: "oldie",
+        displayName: "Oldie",
+        firstSeenAt: 1000,
+        lastSeenAt: 1000,
+        joinedAt: 1000,
+        leftAt: 0,
+        sources: [SOURCE.POINTS],
+        walletGraceDeadline: null,
+        reminderState: null,
+      };
+    }, membersFile);
+    const result = recordObservedJoin(
+      {
+        chatId: "-100111",
+        userId: 66,
+        username: "oldie",
+        displayName: "Oldie",
+      },
+      { membersFile, now: 5_000 }
+    );
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.graceStarted, false);
+    const row = loadKnownMembersStore(membersFile).members["66"];
     assert.strictEqual(row.walletGraceDeadline, null);
     assert.strictEqual(row.reminderState, null);
+    assert.strictEqual(row.walletGraceNoticeState, null);
+    assert.strictEqual(row.joinedAt, 1000);
+  });
+
+  await runTest("rejoin after leave starts a fresh 48h grace period", () => {
+    const { membersFile } = files();
+    recordObservedJoin(
+      { chatId: "-100111", userId: 70, displayName: "Back" },
+      { membersFile, now: 10_000 }
+    );
+    recordObservedLeave(
+      { chatId: "-100111", userId: 70, displayName: "Back" },
+      { membersFile, now: 20_000 }
+    );
+    const again = recordObservedJoin(
+      { chatId: "-100111", userId: 70, displayName: "Back" },
+      { membersFile, now: 30_000 }
+    );
+    assert.strictEqual(again.graceStarted, true);
+    const row = loadKnownMembersStore(membersFile).members["70"];
+    assert.strictEqual(row.joinedAt, 30_000);
+    assert.strictEqual(row.leftAt, 0);
+    assert.strictEqual(row.walletGraceDeadline, 30_000 + WALLET_GRACE_MS);
+    assert.strictEqual(row.reminderState, "pending");
+    assert.strictEqual(row.walletGraceNoticeState, "pending");
   });
 
   await runTest("event listener records new_chat_members and left_chat_member", () => {

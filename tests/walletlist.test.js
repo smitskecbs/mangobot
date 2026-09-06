@@ -73,10 +73,13 @@ function listOpts(files, extra = {}) {
 
 function files() {
   n += 1;
-  return {
+  const pack = {
     pointsFile: path.join(tempDir, `p-${n}.json`),
     walletFile: path.join(tempDir, `w-${n}.json`),
+    membersFile: path.join(tempDir, `m-${n}.json`),
   };
+  setKnownMembersFileForTests(pack.membersFile);
+  return pack;
 }
 
 function generateSolanaWallet() {
@@ -655,6 +658,7 @@ Promise.all(pending.filter(Boolean))
   })
   .then(() => {
     setWalletFileForTests(null);
+    setKnownMembersFileForTests(null);
     if (originalAdmin === undefined) delete process.env.ADMIN_USER_ID;
     else process.env.ADMIN_USER_ID = originalAdmin;
     console.log("walletlist tests passed");

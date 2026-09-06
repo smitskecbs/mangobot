@@ -793,7 +793,34 @@ function createCommunityScheduler(options = {}) {
     }
   }
 
+  async function runWalletGraceTickSafe() {
+    try {
+      const { processWalletGraceTick } = require("./walletGrace");
+      return await processWalletGraceTick({
+        now: getNow().getTime(),
+        chatId,
+        getChatMember: options.getChatMember,
+        banChatMember: options.banChatMember,
+        unbanChatMember: options.unbanChatMember,
+        sendMessage:
+          typeof options.sendWalletGraceMessage === "function"
+            ? options.sendWalletGraceMessage
+            : sendMessage,
+        membersFile: options.membersFile,
+        walletFile: options.walletFile,
+        force: options.forceWalletGraceTick === true,
+      });
+    } catch (err) {
+      logError(
+        "[wallet-grace] tick failed:",
+        err && err.message ? err.message : err
+      );
+      return { skipped: "error" };
+    }
+  }
+
   async function runTick(wanted) {
+    await runWalletGraceTickSafe();
     const remindersWanted = enabled && !activityConfig.enabled;
 
     // Weekly Top 3 announce uses the same sendMessage channel as community
@@ -1158,6 +1185,32 @@ function startCommunityScheduler(telegram, options = {}) {
   const scheduler = createCommunityScheduler({
     ...options,
     chatFight: fight,
+    getChatMember:
+      typeof options.getChatMember === "function"
+        ? options.getChatMember
+        : telegram && typeof telegram.getChatMember === "function"
+          ? (targetChatId, userId) => telegram.getChatMember(targetChatId, userId)
+          : null,
+    banChatMember:
+      typeof options.banChatMember === "function"
+        ? options.banChatMember
+        : telegram && typeof telegram.banChatMember === "function"
+          ? (targetChatId, userId) => telegram.banChatMember(targetChatId, userId)
+          : null,
+    unbanChatMember:
+      typeof options.unbanChatMember === "function"
+        ? options.unbanChatMember
+        : telegram && typeof telegram.unbanChatMember === "function"
+          ? (targetChatId, userId, extra) =>
+              telegram.unbanChatMember(targetChatId, userId, extra)
+          : null,
+    sendWalletGraceMessage:
+      typeof options.sendWalletGraceMessage === "function"
+        ? options.sendWalletGraceMessage
+        : telegram && typeof telegram.sendMessage === "function"
+          ? (targetChatId, text, extra) =>
+              telegram.sendMessage(targetChatId, text, extra)
+          : null,
     sendMessage: async (chatId, text) => {
       await telegram.sendMessage(chatId, text, {
         disable_web_page_preview: true,
@@ -1189,6 +1242,20 @@ function startCommunityScheduler(telegram, options = {}) {
     },
   });
   liveCommunityScheduler = scheduler;
+
+  let graceOnlyTimer = null;
+  const clearGraceOnlyTimer = () => {
+    if (graceOnlyTimer != null) {
+      clearInterval(graceOnlyTimer);
+      graceOnlyTimer = null;
+    }
+  };
+  const originalStop = scheduler.stop;
+  scheduler.stop = function stopWithWalletGrace(reason) {
+    clearGraceOnlyTimer();
+    return originalStop.call(this, reason);
+  };
+
   try {
     scheduler.start();
   } catch (err) {
@@ -1197,6 +1264,59 @@ function startCommunityScheduler(telegram, options = {}) {
       err && err.message ? err.message : err
     );
   }
+
+  const graceChatId = scheduler.chatId;
+  const canRunGrace =
+    Boolean(graceChatId) &&
+    telegram &&
+    typeof telegram.getChatMember === "function";
+  if (canRunGrace && !scheduler.isTimerRunning()) {
+    const tickGrace = () => {
+      Promise.resolve(
+        (async () => {
+          const { processWalletGraceTick } = require("./walletGrace");
+          return processWalletGraceTick({
+            chatId: graceChatId,
+            getChatMember: (targetChatId, userId) =>
+              telegram.getChatMember(targetChatId, userId),
+            banChatMember:
+              typeof telegram.banChatMember === "function"
+                ? (targetChatId, userId) => telegram.banChatMember(targetChatId, userId)
+                : null,
+            unbanChatMember:
+              typeof telegram.unbanChatMember === "function"
+                ? (targetChatId, userId, extra) =>
+                    telegram.unbanChatMember(targetChatId, userId, extra)
+                : null,
+            sendMessage:
+              typeof telegram.sendMessage === "function"
+                ? (targetChatId, text, extra) =>
+                    telegram.sendMessage(targetChatId, text, extra)
+                : null,
+            membersFile: options.membersFile,
+            walletFile: options.walletFile,
+          });
+        })()
+      ).catch((err) => {
+        logError(
+          "[wallet-grace] standalone tick failed:",
+          err && err.message ? err.message : err
+        );
+      });
+    };
+    let intervalMs = 15 * 60 * 1000;
+    try {
+      intervalMs = require("./walletGrace").SCAN_INTERVAL_MS;
+    } catch (_err) {
+      /* keep 15m default */
+    }
+    graceOnlyTimer = setInterval(tickGrace, intervalMs);
+    tickGrace();
+    log(
+      "[wallet-grace] standalone interval started (community scheduler timer off)"
+    );
+  }
+
   return scheduler;
 }
 

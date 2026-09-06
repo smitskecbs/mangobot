@@ -352,6 +352,7 @@ async function main() {
     assert.strictEqual(viewText(ctx), COMMANDS_TEXT);
     assert.ok(COMMANDS_TEXT.includes("/clearpendinggifts"));
     assert.ok(COMMANDS_TEXT.includes("/retrymysteryannounce"));
+    assert.ok(COMMANDS_TEXT.includes("/walletgrace"));
     const menu = mockCtx({ userId: Number(MEMBER_ID) });
     handleMenu(menu);
     assert.strictEqual(menu.replies[0].text, PRIVATE_MENU_HINT);

@@ -10,8 +10,12 @@ const path = require("path");
 const lockfile = require("proper-lockfile");
 const { writeJsonFileAtomic } = require("../utils/json");
 const { error: logError } = require("../utils/logger");
-const { loadPoints } = require("./points");
-const { resolveWalletFile, readWalletSnapshot } = require("./walletLinks");
+const { loadPoints, isAdmin } = require("./points");
+const {
+  resolveWalletFile,
+  readWalletSnapshot,
+  getLinkedWalletFromStore,
+} = require("./walletLinks");
 const { loadBuilderStore } = require("./communityBuilderStore");
 const { getConfiguredCommunityChatId } = require("./chatFight");
 
@@ -52,6 +56,33 @@ const SOURCE = Object.freeze({
 
 const JOIN_STATUSES = new Set(["member", "restricted", "administrator", "creator"]);
 const LEFT_STATUSES = new Set(["left", "kicked"]);
+
+const WALLET_GRACE_MS = 48 * 60 * 60 * 1000;
+
+const REMINDER_STATE = Object.freeze({
+  PENDING: "pending",
+  SENT: "sent",
+  SATISFIED: "satisfied",
+  ENFORCED: "enforced",
+});
+
+const NOTICE_STATE = Object.freeze({
+  PENDING: "pending",
+  SENDING: "sending",
+  SENT: "sent",
+  NOT_REQUIRED: "not-required",
+});
+
+const NOTICE_STATES = new Set(Object.values(NOTICE_STATE));
+const NOTICE_CLAIM_STALE_MS = 2 * 60 * 1000;
+
+function normalizeNoticeState(value) {
+  if (value == null || value === "") {
+    return null;
+  }
+  const state = String(value);
+  return NOTICE_STATES.has(state) ? state : null;
+}
 
 let membersFileOverride = null;
 let autoTestMembersFile = null;
@@ -117,6 +148,7 @@ function emptyStore() {
     version: STORE_VERSION,
     members: {},
     protectedUserIds: {},
+    lastWalletGraceScanAt: 0,
   };
 }
 
@@ -174,6 +206,19 @@ function normalizeMemberRecord(userId, raw) {
     sources,
     walletGraceDeadline: src.walletGraceDeadline == null ? null : Number(src.walletGraceDeadline) || null,
     reminderState: src.reminderState == null ? null : String(src.reminderState),
+    walletRequirementSatisfiedAt:
+      src.walletRequirementSatisfiedAt == null
+        ? null
+        : Number(src.walletRequirementSatisfiedAt) || null,
+    lastWalletEnforcementCheckAt:
+      src.lastWalletEnforcementCheckAt == null
+        ? null
+        : Number(src.lastWalletEnforcementCheckAt) || null,
+    walletGraceNoticeState: normalizeNoticeState(src.walletGraceNoticeState),
+    walletGraceNoticeClaimedAt:
+      src.walletGraceNoticeClaimedAt == null
+        ? null
+        : Number(src.walletGraceNoticeClaimedAt) || null,
   };
 }
 
@@ -207,6 +252,7 @@ function normalizeStore(raw) {
     }
   }
   store.protectedUserIds = normalizeProtected(raw.protectedUserIds);
+  store.lastWalletGraceScanAt = Number(raw.lastWalletGraceScanAt) || 0;
   return store;
 }
 
@@ -355,8 +401,120 @@ function upsertMember(store, input, now) {
   if (existing.reminderState === undefined) {
     existing.reminderState = null;
   }
+  if (existing.walletRequirementSatisfiedAt === undefined) {
+    existing.walletRequirementSatisfiedAt = null;
+  }
+  if (existing.lastWalletEnforcementCheckAt === undefined) {
+    existing.lastWalletEnforcementCheckAt = null;
+  }
+  if (existing.walletGraceNoticeState === undefined) {
+    existing.walletGraceNoticeState = null;
+  }
+  if (existing.walletGraceNoticeClaimedAt === undefined) {
+    existing.walletGraceNoticeClaimedAt = null;
+  }
   store.members[uid] = existing;
   return { ok: true, record: existing };
+}
+
+function shouldStartWalletGrace(existing) {
+  if (!existing) {
+    return true;
+  }
+  if (Number(existing.leftAt) > 0) {
+    return true;
+  }
+  if (!Number(existing.joinedAt)) {
+    return true;
+  }
+  return false;
+}
+
+function userHasLinkedWallet(userId, walletFile) {
+  try {
+    const store = readWalletSnapshot(resolveWalletFile(walletFile));
+    const linked = getLinkedWalletFromStore(store, userId);
+    return Boolean(linked && linked.wallet);
+  } catch (_err) {
+    return false;
+  }
+}
+
+function isExemptFromWalletGraceNotice(userId, store, newStatus, options = {}) {
+  const isAdminFn =
+    typeof options.isAdminFn === "function" ? options.isAdminFn : isAdmin;
+  try {
+    if (isAdminFn(userId)) {
+      return true;
+    }
+  } catch (_err) {
+    /* fail open to a pending notice rather than skip enforcement text */
+  }
+  if (isExplicitlyProtected(userId, store)) {
+    return true;
+  }
+  const status = typeof newStatus === "string" ? newStatus : "";
+  return status === "administrator" || status === "creator";
+}
+
+function applyWalletGraceOnJoin(record, now, options = {}) {
+  const graceMs =
+    Number.isFinite(options.graceMs) && options.graceMs > 0
+      ? options.graceMs
+      : WALLET_GRACE_MS;
+  record.joinedAt = now;
+  record.leftAt = 0;
+  record.walletGraceDeadline = now + graceMs;
+  record.reminderState = REMINDER_STATE.PENDING;
+  record.walletRequirementSatisfiedAt = null;
+  record.lastWalletEnforcementCheckAt = null;
+  record.walletGraceNoticeState = NOTICE_STATE.PENDING;
+  record.walletGraceNoticeClaimedAt = null;
+  const linked =
+    options.alreadyLinked === true ||
+    userHasLinkedWallet(record.telegramUserId, options.walletFile);
+  if (linked) {
+    record.reminderState = REMINDER_STATE.SATISFIED;
+    record.walletRequirementSatisfiedAt = now;
+    record.walletGraceNoticeState = NOTICE_STATE.NOT_REQUIRED;
+  } else if (options.exemptFromKick === true) {
+    record.walletGraceNoticeState = NOTICE_STATE.NOT_REQUIRED;
+  }
+  return record;
+}
+
+function isPendingWalletGrace(record) {
+  if (!record || record.walletGraceDeadline == null) {
+    return false;
+  }
+  if (record.walletRequirementSatisfiedAt) {
+    return false;
+  }
+  const state = record.reminderState;
+  if (state === REMINDER_STATE.SATISFIED || state === REMINDER_STATE.ENFORCED) {
+    return false;
+  }
+  return true;
+}
+
+function listPendingGraceMembers(storeOrFile) {
+  const store =
+    storeOrFile && typeof storeOrFile === "object" && storeOrFile.members
+      ? storeOrFile
+      : loadKnownMembersStore(storeOrFile);
+  return Object.values(store.members || {}).filter(isPendingWalletGrace);
+}
+
+function getKnownMemberRecord(userId, storeOrFile) {
+  const uid = asTelegramUserId(userId);
+  if (!uid) {
+    return null;
+  }
+  const store =
+    storeOrFile && typeof storeOrFile === "object" && storeOrFile.members
+      ? storeOrFile
+      : loadKnownMembersStore(storeOrFile);
+  return (store.members && store.members[uid]) || null;
 }
 
 function recordObservedJoin(input = {}, options = {}) {
@@ -372,9 +530,12 @@ function recordObservedJoin(input = {}, options = {}) {
   }
   const now = Number.isFinite(options.now) ? options.now : Date.now();
   const source = input.source || SOURCE.NEW_CHAT_MEMBERS;
+  const alreadyLinked = userHasLinkedWallet(uid, options.walletFile);
   try {
     return mutateKnownMembersStore((store) => {
-      return upsertMember(
+      const existingBefore = store.members[uid] || null;
+      const startGrace = shouldStartWalletGrace(existingBefore);
+      const result = upsertMember(
         store,
         {
           userId: uid,
@@ -385,6 +546,21 @@ function recordObservedJoin(input = {}, options = {}) {
         },
         now
       );
+      if (!result.ok) {
+        return result;
+      }
+      if (startGrace) {
+        const newStatus =
+          typeof input.newStatus === "string" ? input.newStatus : "";
+        applyWalletGraceOnJoin(result.record, now, {
+          ...options,
+          alreadyLinked,
+          exemptFromKick:
+            options.exemptFromKick === true ||
+            isExemptFromWalletGraceNotice(uid, store, newStatus, options),
+        });
+      }
+      return { ...result, graceStarted: startGrace };
     }, options.membersFile);
   } catch (err) {
     logError("[known-members] record join failed:", err && err.message ? err.message : err);
@@ -439,6 +615,215 @@ function recordChatMemberTransition(input = {}, options = {}) {
     );
   }
   return { ok: false, reason: "not-join-or-leave" };
+}
+
+function markWalletRequirementSatisfied(userId, options = {}) {
+  const uid = asTelegramUserId(userId);
+  if (!uid) {
+    return { ok: false, reason: "invalid-user" };
+  }
+  const now = Number.isFinite(options.now) ? options.now : Date.now();
+  try {
+    return mutateKnownMembersStore((store) => {
+      const existing = store.members[uid];
+      if (!existing) {
+        upsertMember(
+          store,
+          {
+            userId: uid,
+            source: SOURCE.WALLET,
+          },
+          now
+        );
+      }
+      const record = store.members[uid];
+      if (!record) {
+        return { ok: false, reason: "missing-record" };
+      }
+      record.reminderState = REMINDER_STATE.SATISFIED;
+      record.walletRequirementSatisfiedAt = now;
+      record.lastWalletEnforcementCheckAt = now;
+      record.walletGraceNoticeState = NOTICE_STATE.NOT_REQUIRED;
+      record.walletGraceNoticeClaimedAt = null;
+      return { ok: true, record };
+    }, options.membersFile);
+  } catch (err) {
+    logError(
+      "[known-members] mark wallet requirement satisfied failed:",
+      err && err.message ? err.message : err
+    );
+    return { ok: false, reason: "store-error" };
+  }
+}
+
+function getWalletGraceNoticeState(userId, storeOrFile) {
+  const record = getKnownMemberRecord(userId, storeOrFile);
+  return record ? record.walletGraceNoticeState : null;
+}
+
+function tryClaimWalletGraceNotice(userId, options = {}) {
+  const uid = asTelegramUserId(userId);
+  if (!uid) {
+    return { ok: false, reason: "invalid-user" };
+  }
+  const now = Number.isFinite(options.now) ? options.now : Date.now();
+  const staleMs =
+    Number.isFinite(options.staleMs) && options.staleMs >= 0
+      ? options.staleMs
+      : NOTICE_CLAIM_STALE_MS;
+  try {
+    return mutateKnownMembersStore((store) => {
+      const record = store.members[uid];
+      if (!record) {
+        return { ok: false, reason: "missing-record" };
+      }
+      const state = record.walletGraceNoticeState;
+      if (state === NOTICE_STATE.PENDING) {
+        record.walletGraceNoticeState = NOTICE_STATE.SENDING;
+        record.walletGraceNoticeClaimedAt = now;
+        return { ok: true, record };
+      }
+      if (state === NOTICE_STATE.SENDING) {
+        const claimedAt = Number(record.walletGraceNoticeClaimedAt) || 0;
+        const stale = !claimedAt || now - claimedAt >= staleMs;
+        if (!stale) {
+          return { ok: false, reason: "already-claimed", record };
+        }
+        record.walletGraceNoticeClaimedAt = now;
+        return { ok: true, record, reclaimed: true };
+      }
+      return {
+        ok: false,
+        reason: state ? `not-pending:${state}` : "not-pending",
+        record,
+      };
+    }, options.membersFile);
+  } catch (err) {
+    logError(
+      "[known-members] claim wallet grace notice failed:",
+      err && err.message ? err.message : err
+    );
+    return { ok: false, reason: "store-error" };
+  }
+}
+
+function releaseWalletGraceNoticeClaim(userId, options = {}) {
+  const uid = asTelegramUserId(userId);
+  if (!uid) {
+    return { ok: false, reason: "invalid-user" };
+  }
+  try {
+    return mutateKnownMembersStore((store) => {
+      const record = store.members[uid];
+      if (!record) {
+        return { ok: false, reason: "missing-record" };
+      }
+      if (record.walletGraceNoticeState !== NOTICE_STATE.SENDING) {
+        return { ok: false, reason: "not-sending", record };
+      }
+      record.walletGraceNoticeState = NOTICE_STATE.PENDING;
+      record.walletGraceNoticeClaimedAt = null;
+      return { ok: true, record };
+    }, options.membersFile);
+  } catch (err) {
+    logError(
+      "[known-members] release wallet grace notice claim failed:",
+      err && err.message ? err.message : err
+    );
+    return { ok: false, reason: "store-error" };
+  }
+}
+
+function markWalletGraceNoticeSent(userId, options = {}) {
+  const uid = asTelegramUserId(userId);
+  if (!uid) {
+    return { ok: false, reason: "invalid-user" };
+  }
+  const now = Number.isFinite(options.now) ? options.now : Date.now();
+  try {
+    return mutateKnownMembersStore((store) => {
+      const record = store.members[uid];
+      if (!record) {
+        return { ok: false, reason: "missing-record" };
+      }
+      record.walletGraceNoticeState = NOTICE_STATE.SENT;
+      record.walletGraceNoticeClaimedAt =
+        Number(record.walletGraceNoticeClaimedAt) || now;
+      return { ok: true, record };
+    }, options.membersFile);
+  } catch (err) {
+    logError(
+      "[known-members] mark wallet grace notice sent failed:",
+      err && err.message ? err.message : err
+    );
+    return { ok: false, reason: "store-error" };
+  }
+}
+
+function markWalletGraceReminderSent(userId, options = {}) {
+  const uid = asTelegramUserId(userId);
+  if (!uid) {
+    return { ok: false, reason: "invalid-user" };
+  }
+  const now = Number.isFinite(options.now) ? options.now : Date.now();
+  return mutateKnownMembersStore((store) => {
+    const record = store.members[uid];
+    if (!record) {
+      return { ok: false, reason: "missing-record" };
+    }
+    if (
+      record.reminderState === REMINDER_STATE.SENT ||
+      record.reminderState === REMINDER_STATE.SATISFIED ||
+      record.reminderState === REMINDER_STATE.ENFORCED
+    ) {
+      return { ok: false, reason: "already-marked", record };
+    }
+    record.reminderState = REMINDER_STATE.SENT;
+    record.lastWalletEnforcementCheckAt = now;
+    return { ok: true, record };
+  }, options.membersFile);
+}
+
+function markWalletGraceEnforced(userId, options = {}) {
+  const uid = asTelegramUserId(userId);
+  if (!uid) {
+    return { ok: false, reason: "invalid-user" };
+  }
+  const now = Number.isFinite(options.now) ? options.now : Date.now();
+  return mutateKnownMembersStore((store) => {
+    const record = store.members[uid];
+    if (!record) {
+      return { ok: false, reason: "missing-record" };
+    }
+    record.reminderState = REMINDER_STATE.ENFORCED;
+    record.leftAt = now;
+    record.lastWalletEnforcementCheckAt = now;
+    return { ok: true, record };
+  }, options.membersFile);
+}
+
+function markWalletGraceScanAt(now, options = {}) {
+  const ts = Number.isFinite(now) ? now : Date.now();
+  return mutateKnownMembersStore((store) => {
+    store.lastWalletGraceScanAt = ts;
+    return { ok: true, lastWalletGraceScanAt: ts };
+  }, options.membersFile);
+}
+
+function touchWalletEnforcementCheck(userId, now, options = {}) {
+  const uid = asTelegramUserId(userId);
+  if (!uid) {
+    return { ok: false, reason: "invalid-user" };
+  }
+  const ts = Number.isFinite(now) ? now : Date.now();
+  return mutateKnownMembersStore((store) => {
+    const record = store.members[uid];
+    if (!record) {
+      return { ok: false, reason: "missing-record" };
+    }
+    record.lastWalletEnforcementCheckAt = ts;
+    return { ok: true, record };
+  }, options.membersFile);
 }
 
 function addProtectedUser(userId, options = {}) {
@@ -599,6 +984,10 @@ function sourcesForUser(userId, options = {}) {
 module.exports = {
   SOURCE,
   DEFAULT_MEMBERS_FILE,
+  WALLET_GRACE_MS,
+  REMINDER_STATE,
+  NOTICE_STATE,
+  NOTICE_CLAIM_STALE_MS,
   setKnownMembersFileForTests,
   resolveMembersFile,
   loadKnownMembersStore,
@@ -606,6 +995,19 @@ module.exports = {
   recordObservedJoin,
   recordObservedLeave,
   recordChatMemberTransition,
+  shouldStartWalletGrace,
+  isPendingWalletGrace,
+  listPendingGraceMembers,
+  getKnownMemberRecord,
+  markWalletRequirementSatisfied,
+  getWalletGraceNoticeState,
+  tryClaimWalletGraceNotice,
+  releaseWalletGraceNoticeClaim,
+  markWalletGraceNoticeSent,
+  markWalletGraceReminderSent,
+  markWalletGraceEnforced,
+  markWalletGraceScanAt,
+  touchWalletEnforcementCheck,
   addProtectedUser,
   removeProtectedUser,
   isExplicitlyProtected,

@@ -475,6 +475,16 @@ function verifyWalletSignature(body, options = {}) {
     } catch (_err) {
       /* Referral wallet milestone must never break verification. */
     }
+    try {
+      Promise.resolve(
+        require("./walletGrace").onWalletLinked(result.persistedUserId, {
+          now,
+          walletFile: options.walletFile,
+        })
+      ).catch(() => {});
+    } catch (_err) {
+      /* Wallet grace satisfaction must never break verification. */
+    }
     return {
       ok: true,
       status: 200,

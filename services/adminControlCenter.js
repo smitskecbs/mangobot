@@ -76,6 +76,7 @@ Buttons first. Commands remain as fallback.
 /walletcleanup_confirm
 /walletprotect
 /walletunprotect
+/walletgrace
 /builderaward
 /lootaward
 /membercheck

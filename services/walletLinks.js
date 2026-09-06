@@ -564,6 +564,13 @@ function registerManualWallet(userId, wallet, walletFile, now = Date.now()) {
     } catch (_err) {
       /* Referral wallet milestone must never break wallet linking. */
     }
+    try {
+      Promise.resolve(
+        require("./walletGrace").onWalletLinked(uid, { now: ts, walletFile })
+      ).catch(() => {});
+    } catch (_err) {
+      /* Wallet grace satisfaction must never break wallet linking. */
+    }
   }
   return result;
 }

@@ -1,6 +1,6 @@
 /**
  * Record community joins/leaves into the known-member registry.
- * Does not kick, remind, or enforce a wallet grace period.
+ * Does not kick or remind. Grace start lives in recordObservedJoin.
  * chat_member join/leave is recorded from community-builder (this file must call next()).
  */
 

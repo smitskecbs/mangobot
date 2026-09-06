@@ -48,11 +48,13 @@ const {
   OPEN_BOARD_OPENED_TEXT,
 } = require("../commands/communitybuilder");
 const { registerManualWallet, setWalletFileForTests } = require("../services/walletLinks");
+const { setKnownMembersFileForTests } = require("../services/knownMembers");
 const { mutatePoints, loadPoints, awardMangoBombXp, canEarnXp } = require("../services/points");
 
 require("../services/xpWalletGate").setXpWalletAutoLinkForTests(false);
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-builder-periods-"));
+const membersTempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-builder-periods-members-"));
 const COMMUNITY_CHAT = "-1003916996602";
 const INVITER = "1001";
 const REFERRED = "2002";
@@ -94,10 +96,13 @@ function harness(now) {
     botId: 55,
   });
   setWalletFileForTests(walletFile);
+  const membersFile = path.join(membersTempDir, `members-${n}.json`);
+  setKnownMembersFileForTests(membersFile);
   return {
     storeFile,
     pointsFile,
     walletFile,
+    membersFile,
     opts: {
       storeFile,
       pointsFile,
@@ -1097,6 +1102,8 @@ async function main() {
   if (originalAdmin === undefined) delete process.env.ADMIN_USER_ID;
   else process.env.ADMIN_USER_ID = originalAdmin;
 
+  setWalletFileForTests(null);
+  setKnownMembersFileForTests(null);
   console.log("builder-leaderboard-periods tests passed");
 }
 

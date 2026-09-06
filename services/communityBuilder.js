@@ -14,7 +14,10 @@ const { getLinkedWalletForUser } = require("./walletLinks");
 const { loadPoints, getWeekId, isAdmin, isCommandText } = require("./points");
 const { notifyCommunityBuilder } = require("./communityBuilderNotify");
 const { fetchWithTimeout, TELEGRAM_TIMEOUT_MS } = require("../utils/safeFetch");
-const { recordChatMemberTransition } = require("./knownMembers");
+const {
+  recordChatMemberTransition,
+  isJoinTransition: isKnownMemberJoinTransition,
+} = require("./knownMembers");
 
 let runtimeConfig = {};
 
@@ -1738,8 +1741,9 @@ async function handleChatMemberUpdate(update, options = {}) {
       err && err.message ? err.message : err
     );
   }
+  let recordedJoin = false;
   try {
-    recordChatMemberTransition(
+    const recorded = recordChatMemberTransition(
       {
         chatId,
         userId: user.id,
@@ -1749,13 +1753,40 @@ async function handleChatMemberUpdate(update, options = {}) {
         username: user.username,
         displayName: safeDisplayName(user),
       },
-      { membersFile: options.membersFile, now: options.now }
+      {
+        membersFile: options.membersFile,
+        walletFile: options.walletFile,
+        now: options.now,
+      }
+    );
+    recordedJoin = Boolean(
+      recorded &&
+        recorded.ok &&
+        isKnownMemberJoinTransition(oldMember.status, newMember.status)
     );
   } catch (err) {
     logError(
       "[known-members] chat_member record failed:",
       err && err.message ? err.message : err
     );
+  }
+  if (recordedJoin) {
+    try {
+      const { maybeSendWalletGraceNotice } = require("./walletGrace");
+      await maybeSendWalletGraceNotice({
+        userId: user.id,
+        chatId,
+        sendMessage: options.sendMessage,
+        telegram: options.telegram,
+        membersFile: options.membersFile,
+        now: options.now,
+      });
+    } catch (err) {
+      logError(
+        "[wallet-grace] chat_member notice failed:",
+        err && err.message ? err.message : err
+      );
+    }
   }
   return attribution;
 }

@@ -74,10 +74,12 @@ const {
 } = require("../services/points");
 const { isCommunityCompetitionExcluded } = require("../utils/competition");
 const { getLifetimeTop: getLbTop, formatLifetimeLines } = require("../services/leaderboard");
+const { setKnownMembersFileForTests } = require("../services/knownMembers");
 
 require("../services/xpWalletGate").setXpWalletAutoLinkForTests(false);
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-community-builder-"));
+const membersTempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-builder-known-members-"));
 const COMMUNITY_CHAT = "-1003916996602";
 const OTHER_CHAT = "-1001111111111";
 const INVITER = "1001";
@@ -132,10 +134,13 @@ function harness() {
     botId: 55,
   });
   setWalletFileForTests(walletFile);
+  const membersFile = path.join(membersTempDir, `members-${n}.json`);
+  setKnownMembersFileForTests(membersFile);
   return {
     storeFile,
     pointsFile,
     walletFile,
+    membersFile,
     notifications,
     createCalls: () => createCalls,
     opts: { storeFile, pointsFile, walletFile, chatId: COMMUNITY_CHAT },
@@ -945,12 +950,18 @@ main()
     configureCommunityBuilderForTests({});
     setCommunityBuilderFileForTests(null);
     setWalletFileForTests(null);
+    setKnownMembersFileForTests(null);
     if (originalChat === undefined) delete process.env.TELEGRAM_CHAT_ID;
     else process.env.TELEGRAM_CHAT_ID = originalChat;
     if (originalAdmin === undefined) delete process.env.ADMIN_USER_ID;
     else process.env.ADMIN_USER_ID = originalAdmin;
     await new Promise((resolve) => setTimeout(resolve, 50));
     fs.rmSync(tempDir, { recursive: true, force: true });
+    try {
+      fs.rmSync(membersTempDir, { recursive: true, force: true });
+    } catch (_err) {
+      /* ignore */
+    }
     console.log("\nAll community-builder tests passed.");
   })
   .catch((err) => {
