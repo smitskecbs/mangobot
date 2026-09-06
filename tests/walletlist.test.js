@@ -39,6 +39,7 @@ const {
   ADMIN_ONLY,
   renderWalletList,
 } = require("../commands/walletlist");
+const { recordObservedJoin, setKnownMembersFileForTests } = require("../services/knownMembers");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-walletlist-"));
 let n = 0;
@@ -233,9 +234,14 @@ pending.push(
     assert.strictEqual(rows[2].name, "Kevin");
     assert.strictEqual(rows[2].status, "verified");
     const page = await buildWalletListPage(listOpts({ pointsFile, walletFile }));
-    assert.ok(page.text.includes("⬜ Bob — Not linked"));
-    assert.ok(page.text.includes(`🟡 Alice — ${shortenWallet(registeredWallet.address)}`));
-    assert.ok(page.text.includes(`🟢 Kevin — ${shortenWallet(verifiedWallet.address)}`));
+    assert.ok(page.text.includes("⬜ Bob — 3 — NO WALLET — member"));
+    assert.ok(
+      page.text.includes(`🟡 Alice — 2 — Registered — ${shortenWallet(registeredWallet.address)} — member`)
+    );
+    assert.ok(
+      page.text.includes(`✅ Kevin — 1 — Verified — ${shortenWallet(verifiedWallet.address)} — member`)
+    );
+    assert.ok(page.text.includes("Known members only — Telegram does not provide a complete historical group roster."));
     assert.ok(!page.text.includes(verifiedWallet.address));
     assert.ok(!page.text.includes(registeredWallet.address));
     const summary = summarizeWalletList(rows);
@@ -559,6 +565,27 @@ async function withTelegramChatId(value, fn) {
     }
   }
 }
+
+pending.push(
+  runTest("known-member registry IDs appear as NO WALLET current members", async () => {
+    const { pointsFile, walletFile } = files();
+    const membersFile = path.join(tempDir, `m-known-${n}.json`);
+    setKnownMembersFileForTests(membersFile);
+    recordObservedJoin(
+      { chatId: LIST_CHAT_ID, userId: 888, displayName: "SilentJoin", skipChatCheck: true },
+      { membersFile, now: 1, skipChatCheck: true }
+    );
+    seedPoints(pointsFile, { 11: "Kevin" });
+    const page = await buildWalletListPage(
+      listOpts({ pointsFile, walletFile, membersFile })
+    );
+    assert.ok(page.text.includes("SilentJoin"));
+    assert.ok(page.text.includes("888"));
+    assert.ok(page.text.includes("NO WALLET"));
+    assert.ok(page.text.includes("Kevin"));
+    setKnownMembersFileForTests(null);
+  })
+);
 
 Promise.all(pending.filter(Boolean))
   .then(async () => {

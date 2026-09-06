@@ -53,6 +53,7 @@ const prodRoots = [
   path.join(__dirname, "..", "data", "community-builders.json"),
   path.join(__dirname, "..", "data", "member-rewards.json"),
   path.join(__dirname, "..", "data", "mango-shop.json"),
+  path.join(__dirname, "..", "data", "known-members.json"),
 ];
 const prodMtimes = {};
 for (const file of prodRoots) {

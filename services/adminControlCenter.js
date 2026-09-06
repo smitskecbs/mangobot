@@ -72,6 +72,10 @@ Buttons first. Commands remain as fallback.
 
 /reward
 /walletlist
+/walletcleanup
+/walletcleanup_confirm
+/walletprotect
+/walletunprotect
 /builderaward
 /lootaward
 /membercheck

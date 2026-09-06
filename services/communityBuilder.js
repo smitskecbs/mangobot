@@ -14,6 +14,7 @@ const { getLinkedWalletForUser } = require("./walletLinks");
 const { loadPoints, getWeekId, isAdmin, isCommandText } = require("./points");
 const { notifyCommunityBuilder } = require("./communityBuilderNotify");
 const { fetchWithTimeout, TELEGRAM_TIMEOUT_MS } = require("../utils/safeFetch");
+const { recordChatMemberTransition } = require("./knownMembers");
 
 let runtimeConfig = {};
 
@@ -1734,6 +1735,25 @@ async function handleChatMemberUpdate(update, options = {}) {
   } catch (err) {
     logError(
       "[community-builder] welcome opportunity failed:",
+      err && err.message ? err.message : err
+    );
+  }
+  try {
+    recordChatMemberTransition(
+      {
+        chatId,
+        userId: user.id,
+        isBot: Boolean(user.is_bot),
+        oldStatus: oldMember.status,
+        newStatus: newMember.status,
+        username: user.username,
+        displayName: safeDisplayName(user),
+      },
+      { membersFile: options.membersFile, now: options.now }
+    );
+  } catch (err) {
+    logError(
+      "[known-members] chat_member record failed:",
       err && err.message ? err.message : err
     );
   }

@@ -12,6 +12,13 @@ const {
 } = require("./walletLinks");
 const { shortenWallet } = require("../utils/solanaWallet");
 const { getConfiguredCommunityChatId } = require("./chatFight");
+const {
+  collectKnownTelegramIds,
+  loadKnownMembersStore,
+  displayNameFromRecord,
+  sourcesForUser,
+} = require("./knownMembers");
+const { loadBuilderStore } = require("./communityBuilderStore");
 
 const WALLET_LIST_PAGE_SIZE = 25;
 const WALLET_LIST_CALLBACK_PREFIX = "wlst:";
@@ -19,8 +26,15 @@ const STATUS_ORDER = Object.freeze({ none: 0, registered: 1, verified: 2 });
 const STATUS_ICON = Object.freeze({
   none: "⬜",
   registered: "🟡",
-  verified: "🟢",
+  verified: "✅",
 });
+const STATUS_LABEL = Object.freeze({
+  none: "NO WALLET",
+  registered: "Registered",
+  verified: "Verified",
+});
+const ROSTER_DISCLAIMER =
+  "Known members only — Telegram does not provide a complete historical group roster.";
 const CURRENT_GROUP_STATUSES = Object.freeze([
   "member",
   "administrator",
@@ -37,11 +51,15 @@ function escapeHtml(value) {
     .replace(/"/g, "&quot;");
 }
 
-function displayNameFor(userId, pointsUser) {
+function displayNameFor(userId, pointsUser, memberRecord) {
   const fromPoints =
     pointsUser && typeof pointsUser.name === "string" ? pointsUser.name.trim() : "";
   if (fromPoints) {
     return fromPoints;
+  }
+  const fromRecord = displayNameFromRecord(memberRecord, "");
+  if (fromRecord) {
+    return fromRecord;
   }
   return "Member";
 }
@@ -64,25 +82,19 @@ function asTelegramUserId(raw) {
   return /^\d{1,20}$/.test(uid) ? uid : "";
 }
 
-function addTelegramUserId(ids, raw) {
-  const uid = asTelegramUserId(raw);
-  if (uid) {
-    ids.add(uid);
-  }
-}
-
-function collectWalletIds(points, walletStore) {
-  const ids = new Set();
-  for (const userId of Object.keys((points && points.users) || {})) {
-    addTelegramUserId(ids, userId);
-  }
-  for (const userId of Object.keys((walletStore && walletStore.users) || {})) {
-    addTelegramUserId(ids, userId);
-  }
-  for (const ownerId of Object.values((walletStore && walletStore.wallets) || {})) {
-    addTelegramUserId(ids, ownerId);
-  }
-  return ids;
+function collectWalletIds(points, walletStore, extra = {}) {
+  return new Set(
+    collectKnownTelegramIds({
+      points,
+      pointsFile: extra.pointsFile,
+      walletStore,
+      walletFile: extra.walletFile,
+      membersFile: extra.membersFile,
+      membersStore: extra.membersStore,
+      builderFile: extra.builderFile,
+      builderStore: extra.builderStore,
+    })
+  );
 }
 
 function resolveWalletListChatId(options = {}) {
@@ -183,17 +195,36 @@ function summarizeCurrentMembers(currentRows) {
 function collectWalletListRows(options = {}) {
   const points = loadPoints(options.pointsFile);
   const walletStore = readWalletSnapshot(resolveWalletFile(options.walletFile));
-  const ids = collectWalletIds(points, walletStore);
+  const membersStore = options.membersStore || loadKnownMembersStore(options.membersFile);
+  const builderStore = options.builderStore || loadBuilderStore(options.builderFile);
+  const ids = collectWalletIds(points, walletStore, {
+    ...options,
+    membersStore,
+    builderStore,
+  });
   const rows = [];
   for (const userId of ids) {
     const linked = getLinkedWalletFromStore(walletStore, userId);
     const status = statusFromLinked(linked);
-    const name = displayNameFor(userId, points.users && points.users[userId]);
+    const memberRecord = membersStore.members && membersStore.members[userId];
+    const name = displayNameFor(
+      userId,
+      points.users && points.users[userId],
+      memberRecord
+    );
+    const sources = sourcesForUser(userId, {
+      membersStore,
+      points,
+      walletStore,
+      builderStore,
+    });
     rows.push({
       userId,
       name,
       status,
       walletShort: linked && linked.wallet ? shortenWallet(linked.wallet) : "",
+      sources,
+      knownSince: memberRecord && memberRecord.firstSeenAt ? memberRecord.firstSeenAt : 0,
     });
   }
   rows.sort((a, b) => {
@@ -251,11 +282,14 @@ function clampPage(page, total, pageSize = WALLET_LIST_PAGE_SIZE) {
 
 function formatWalletListLine(row) {
   const icon = STATUS_ICON[row.status] || STATUS_ICON.none;
+  const label = STATUS_LABEL[row.status] || STATUS_LABEL.none;
   const name = escapeHtml(row.name);
+  const uid = escapeHtml(row.userId);
+  const memberStatus = row.memberStatus ? ` — ${escapeHtml(row.memberStatus)}` : "";
   if (row.status === "none") {
-    return `${icon} ${name} — Not linked`;
+    return `${icon} ${name} — ${uid} — ${label}${memberStatus}`;
   }
-  return `${icon} ${name} — ${escapeHtml(row.walletShort)}`;
+  return `${icon} ${name} — ${uid} — ${label} — ${escapeHtml(row.walletShort)}${memberStatus}`;
 }
 
 async function buildWalletListPage(options = {}) {
@@ -266,12 +300,18 @@ async function buildWalletListPage(options = {}) {
     options
   );
   const partitioned = partitionWalletRows(allRows, membership.byUserId);
-  const rows = partitioned.current;
+  const rows = partitioned.current.map((row) => {
+    const membershipRow = membership.byUserId.get(asTelegramUserId(row.userId));
+    return {
+      ...row,
+      memberStatus: membershipRow && membershipRow.status ? membershipRow.status : "",
+    };
+  });
   const summary = summarizeCurrentMembers(rows);
   const page = clampPage(options.page ?? 0, rows.length, pageSize);
   const start = page * pageSize;
   const slice = rows.slice(start, start + pageSize);
-  const lines = ["<b>🥭 ManGo Wallet Overview</b>", ""];
+  const lines = ["<b>🥭 ManGo Wallet Overview</b>", "", ROSTER_DISCLAIMER, ""];
   if (!membership.chatConfigured) {
     lines.push("Telegram group is not configured. Current members cannot be confirmed.");
     lines.push("");
@@ -360,4 +400,7 @@ module.exports = {
   escapeHtml,
   toPageIndex,
   asTelegramUserId,
+  ROSTER_DISCLAIMER,
+  STATUS_ICON,
+  STATUS_LABEL,
 };
