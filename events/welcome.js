@@ -18,33 +18,34 @@ const {
 } = require("../services/knownMembers");
 
 const WALLET_REQUIREMENT_LINES = [
-  "To stay in the community, connect your Solana wallet within 48 hours.",
-  "Use /menu → Wallet to link your wallet.",
+  "🔗 To stay in the community, connect your Solana wallet within 48 hours.",
+  "Use /menu → Wallet to register your wallet.",
+  "",
   "No wallet connected after 48 hours = automatic removal.",
   "You can always rejoin later and connect one.",
 ];
 
 const WELCOME_TEXT = (name) => `🥭 Welcome ${name}!
 
-Welcome to the ManGo community.
+Welcome to the ManGo community!
 
 ${WALLET_REQUIREMENT_LINES.join("\n")}
 
-📌 Please read the pinned message
-🌐 Use /links for official links
-🚀 Use /launch for project status
+📌 Please read the Start Here topic first — it explains how ManGo, XP, games and the community work.
 
-Enjoy the build!`;
+🌐 Use /links for official ManGo links.
+
+Have fun, get involved and enjoy ManGo! 🥭`;
 
 const WELCOME_TEXT_NO_WALLET_WARNING = (name) => `🥭 Welcome ${name}!
 
-Welcome to the ManGo community.
+Welcome to the ManGo community!
 
-📌 Please read the pinned message
-🌐 Use /links for official links
-🚀 Use /launch for project status
+📌 Please read the Start Here topic first — it explains how ManGo, XP, games and the community work.
 
-Enjoy the build!`;
+🌐 Use /links for official ManGo links.
+
+Have fun, get involved and enjoy ManGo! 🥭`;
 
 async function sendWalletAwareWelcome(input = {}) {
   const userId = input.userId;

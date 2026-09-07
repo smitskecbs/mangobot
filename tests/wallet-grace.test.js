@@ -725,17 +725,22 @@ async function main() {
     assert.ok(text.includes("/menu → Wallet"));
     assert.ok(text.includes("automatic removal"));
     assert.ok(text.includes("rejoin later"));
-    assert.ok(text.includes("📌 Please read the pinned message"));
-    assert.ok(text.includes("🌐 Use /links for official links"));
-    assert.ok(text.includes("🚀 Use /launch for project status"));
+    assert.ok(text.includes("Use /menu → Wallet to register your wallet."));
+    assert.ok(text.includes("📌 Please read the Start Here topic first"));
+    assert.ok(text.includes("🌐 Use /links for official ManGo links."));
+    assert.ok(!text.includes("/launch"));
     assert.ok(!/buy|profit|token sale/i.test(text));
     const friendly = WELCOME_TEXT_NO_WALLET_WARNING("Ada");
     assert.ok(friendly.includes("🥭 Welcome Ada!"));
-    assert.ok(friendly.includes("📌 Please read the pinned message"));
+    assert.ok(friendly.includes("📌 Please read the Start Here topic first"));
     assert.ok(!friendly.includes("automatic removal"));
     assert.ok(!friendly.includes("48 hours"));
+    assert.ok(!friendly.includes("/launch"));
     assert.ok(CONCISE_WALLET_GRACE_NOTICE.includes("connect your Solana wallet within 48 hours"));
-    assert.ok(!CONCISE_WALLET_GRACE_NOTICE.includes("📌 Please read the pinned message"));
+    assert.ok(CONCISE_WALLET_GRACE_NOTICE.includes("Use /menu → Wallet to register your wallet."));
+    assert.ok(CONCISE_WALLET_GRACE_NOTICE.includes("automatic removal"));
+    assert.ok(!CONCISE_WALLET_GRACE_NOTICE.includes("Start Here"));
+    assert.ok(!CONCISE_WALLET_GRACE_NOTICE.includes("/launch"));
   });
 
   await runTest("duplicate join while already in group does not reset grace", () => {
@@ -881,7 +886,7 @@ async function main() {
     assert.strictEqual(row.walletGraceNoticeState, NOTICE_STATE.SENT);
     assert.strictEqual(replies.length, 1);
     assert.ok(replies[0].text.includes("automatic removal"));
-    assert.ok(replies[0].text.includes("📌 Please read the pinned message"));
+    assert.ok(replies[0].text.includes("📌 Please read the Start Here topic first"));
   });
 
   await runTest("N2. chat_member-only join → grace + one concise notice", async () => {
@@ -901,7 +906,8 @@ async function main() {
     assert.strictEqual(row.walletGraceNoticeState, NOTICE_STATE.SENT);
     assert.strictEqual(sent.length, 1);
     assert.strictEqual(sent[0], CONCISE_WALLET_GRACE_NOTICE);
-    assert.ok(!sent[0].includes("📌 Please read the pinned message"));
+    assert.ok(!sent[0].includes("Start Here"));
+    assert.ok(!sent[0].includes("/launch"));
   });
 
   await runTest("N3. both join updates → only one wallet-requirement notice", async () => {
@@ -953,7 +959,7 @@ async function main() {
     assert.strictEqual(conciseB.length, 1);
     assert.strictEqual(conciseB[0], CONCISE_WALLET_GRACE_NOTICE);
     assert.strictEqual(welcomeB.length, 1);
-    assert.ok(welcomeB[0].text.includes("📌 Please read the pinned message"));
+    assert.ok(welcomeB[0].text.includes("📌 Please read the Start Here topic first"));
     assert.ok(!welcomeB[0].text.includes("automatic removal"));
     assert.strictEqual(getWalletGraceNoticeState(204, packB.membersFile), NOTICE_STATE.SENT);
   });

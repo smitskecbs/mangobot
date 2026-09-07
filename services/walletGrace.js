@@ -48,7 +48,7 @@ const CONCISE_WALLET_GRACE_NOTICE = [
   "",
   "To stay in the community, connect your Solana wallet within 48 hours.",
   "",
-  "Use /menu → Wallet to link your wallet.",
+  "Use /menu → Wallet to register your wallet.",
   "",
   "No wallet connected after 48 hours = automatic removal.",
   "",
