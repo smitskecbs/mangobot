@@ -198,7 +198,7 @@ function buildActiveText(session) {
 ${MARK_X} ${x.displayName}
 ${MARK_O} ${o.displayName}
 
-Turn: ${turnMark} ${turnName}
+👉 Turn: ${turnMark} ${turnName}
 
 ${formatBoard(session.board)}
 
@@ -416,6 +416,7 @@ function createTicTacToeService(options = {}) {
         status: session.status,
         players: session.players,
         currentPlayer: session.currentPlayer,
+        turnGeneration: session.turnGeneration || 0,
         board: session.board,
         createdAt: session.createdAt,
         lobbyEndsAt: session.lobbyEndsAt,
@@ -471,6 +472,7 @@ function createTicTacToeService(options = {}) {
         O: null,
       },
       currentPlayer: "X",
+      turnGeneration: 0,
       board: emptyBoard(),
       createdAt: now,
       lobbyEndsAt: now + joinTimeoutMs,
@@ -576,6 +578,7 @@ function createTicTacToeService(options = {}) {
     session.startedAt = manager.now();
     session.lastMoveAt = session.startedAt;
     session.currentPlayer = "X";
+    session.turnGeneration = (session.turnGeneration || 0) + 1;
     manager.clearTimers(session);
     session.timers.joinTimeoutId = null;
     session.timers.countdownTimeoutId = null;
@@ -766,6 +769,14 @@ function createTicTacToeService(options = {}) {
       if (chatId != null && String(chatId) !== String(session.chatId)) {
         return { ok: false, reason: "wrong-chat" };
       }
+      function rejectLive(reason) {
+        return {
+          ok: false,
+          reason,
+          session: snapshot(session),
+          rendered: renderMessage(session, null, manager.now()),
+        };
+      }
       if (session.status === STATUS.WON || session.status === STATUS.DRAW) {
         return { ok: false, reason: "already-ended" };
       }
@@ -773,18 +784,21 @@ function createTicTacToeService(options = {}) {
         return { ok: false, reason: "not-active" };
       }
       if (!Number.isInteger(cell) || cell < 0 || cell > 8) {
-        return { ok: false, reason: "bad-cell" };
+        return rejectLive("bad-cell");
       }
 
       const seat = seatForUser(session, userId);
       if (!seat) {
-        return { ok: false, reason: "outsider" };
+        return rejectLive("outsider");
       }
+      // Stale inline keyboards still fire after the live turn has changed.
+      // Return the live board so the callback can resync Telegram instead of
+      // leaving the player staring at an outdated "your turn" keyboard.
       if (seat !== session.currentPlayer) {
-        return { ok: false, reason: "not-your-turn" };
+        return rejectLive("not-your-turn");
       }
       if (session.board[cell] != null) {
-        return { ok: false, reason: "occupied" };
+        return rejectLive("occupied");
       }
 
       session.board[cell] = seat;
@@ -824,6 +838,7 @@ function createTicTacToeService(options = {}) {
       }
 
       session.currentPlayer = seat === "X" ? "O" : "X";
+      session.turnGeneration = (session.turnGeneration || 0) + 1;
       startTurnTimer(session);
       if (isBotPlayer(session.players[session.currentPlayer])) {
         scheduleBotMove(session);
@@ -903,6 +918,7 @@ function createTicTacToeService(options = {}) {
       }
 
       session.currentPlayer = seat === "X" ? "O" : "X";
+      session.turnGeneration = (session.turnGeneration || 0) + 1;
       startTurnTimer(session);
       if (isBotPlayer(session.players[session.currentPlayer])) {
         scheduleBotMove(session);

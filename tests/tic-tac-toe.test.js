@@ -20,6 +20,8 @@ const {
   STATUS,
   BOT_USER_ID,
   formatBoard,
+  MARK_X,
+  MARK_O,
 } = require("../services/ticTacToe");
 const {
   sanitizePvpDisplayName,
@@ -247,6 +249,7 @@ function createMockCtx({
   memberStatus = "member",
   callbackData,
   messageThreadId,
+  editFailTimes = 0,
 } = {}) {
   const replies = [];
   const replyExtras = [];
@@ -297,10 +300,15 @@ function createMockCtx({
       return Promise.resolve();
     },
     editMessageText(text, extra) {
+      ctx.editAttempts = (ctx.editAttempts || 0) + 1;
+      if (ctx.editAttempts <= editFailTimes) {
+        return Promise.reject(new Error("telegram edit failed"));
+      }
       edited.push({ text, extra });
       return Promise.resolve();
     },
   };
+  ctx.editAttempts = 0;
   return ctx;
 }
 
@@ -349,6 +357,201 @@ async function main() {
     assert.ok(r.text.includes("Tic-Tac-Toe"));
     assert.ok(r.text.includes("looking for an opponent"));
     assert.ok(r.keyboard);
+  });
+
+  await runTest("A-D. current player accepted; other seat rejected; turns swap", async () => {
+    const { service } = createService();
+    const started = startOpen(service);
+    joinBoth(service, started.session.id);
+    const id = started.session.id;
+    const xMove = await service.move({
+      sessionId: id,
+      userId: USER_A,
+      cell: 0,
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(xMove.ok, true);
+    assert.strictEqual(xMove.session.currentPlayer, "O");
+    assert.strictEqual(xMove.session.board[0], "X");
+    const xStale = await service.move({
+      sessionId: id,
+      userId: USER_A,
+      cell: 3,
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(xStale.ok, false);
+    assert.strictEqual(xStale.reason, "not-your-turn");
+    assert.ok(xStale.rendered);
+    assert.ok(xStale.rendered.text.includes("Turn:"));
+    assert.strictEqual(service.getSession(id).board[3], null);
+    assert.strictEqual(service.getSession(id).currentPlayer, "O");
+    const oMove = await service.move({
+      sessionId: id,
+      userId: USER_B,
+      cell: 1,
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(oMove.ok, true);
+    assert.strictEqual(oMove.session.currentPlayer, "X");
+    const againX = await service.move({
+      sessionId: id,
+      userId: USER_A,
+      cell: 2,
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(againX.ok, true);
+    assert.strictEqual(againX.session.currentPlayer, "O");
+  });
+
+  await runTest("E-F. stale keyboard after another move refreshes live board", async () => {
+    const { service } = createService();
+    const started = startOpen(service);
+    joinBoth(service, started.session.id);
+    const id = started.session.id;
+    const first = await service.move({
+      sessionId: id,
+      userId: USER_A,
+      cell: 0,
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(first.ok, true);
+    const boardBefore = service.getSession(id).board.slice();
+    const ctx = createMockCtx({
+      userId: USER_A,
+      callbackData: buildMoveCallbackData(id, 4),
+    });
+    await handlePvpCallback(ctx, {
+      runtime: service,
+      awardPvpWinXpFn: () => ({ awarded: false, pointsToAdd: 0 }),
+    });
+    assert.ok(ctx.cbAnswers.some((a) => a.includes("Not your turn")));
+    assert.deepStrictEqual(service.getSession(id).board, boardBefore);
+    assert.strictEqual(service.getSession(id).currentPlayer, "O");
+    assert.ok(ctx.edited.length >= 1);
+    assert.ok(ctx.edited[0].text.includes(`Turn: ${MARK_O} Alice`));
+    assert.ok(ctx.edited[0].text.includes(MARK_X));
+  });
+
+  await runTest("G. duplicate callback for the same cell does not advance twice", async () => {
+    const { service } = createService();
+    const started = startOpen(service);
+    joinBoth(service, started.session.id);
+    const id = started.session.id;
+    const first = await service.move({
+      sessionId: id,
+      userId: USER_A,
+      cell: 4,
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(first.ok, true);
+    const dup = await service.move({
+      sessionId: id,
+      userId: USER_A,
+      cell: 4,
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(dup.ok, false);
+    assert.ok(["not-your-turn", "occupied"].includes(dup.reason));
+    assert.strictEqual(service.getSession(id).board.filter((c) => c === "X").length, 1);
+    assert.strictEqual(service.getSession(id).currentPlayer, "O");
+  });
+
+  await runTest("H. two near-simultaneous same-player callbacks accept only one move", async () => {
+    const { service } = createService();
+    const started = startOpen(service);
+    joinBoth(service, started.session.id);
+    const id = started.session.id;
+    const [a, b] = await Promise.all([
+      service.move({
+        sessionId: id,
+        userId: USER_A,
+        cell: 0,
+        chatId: COMMUNITY_CHAT,
+      }),
+      service.move({
+        sessionId: id,
+        userId: USER_A,
+        cell: 1,
+        chatId: COMMUNITY_CHAT,
+      }),
+    ]);
+    const accepted = [a, b].filter((r) => r.ok);
+    const rejected = [a, b].filter((r) => !r.ok);
+    assert.strictEqual(accepted.length, 1);
+    assert.strictEqual(rejected.length, 1);
+    assert.ok(["not-your-turn", "occupied", "busy"].includes(rejected[0].reason));
+    const live = service.getSession(id);
+    assert.strictEqual(live.board.filter((c) => c === "X").length, 1);
+    assert.strictEqual(live.currentPlayer, "O");
+  });
+
+  await runTest("I. Telegram edit failure after a move retries the live board", async () => {
+    const { service } = createService();
+    const started = startOpen(service);
+    joinBoth(service, started.session.id);
+    const ctx = createMockCtx({
+      userId: USER_A,
+      callbackData: buildMoveCallbackData(started.session.id, 0),
+      editFailTimes: 1,
+    });
+    await handlePvpCallback(ctx, {
+      runtime: service,
+      awardPvpWinXpFn: () => ({ awarded: false, pointsToAdd: 0 }),
+    });
+    assert.strictEqual(service.getSession(started.session.id).currentPlayer, "O");
+    assert.strictEqual(service.getSession(started.session.id).board[0], "X");
+    assert.ok(ctx.editAttempts >= 2);
+    assert.ok(ctx.edited.length >= 1);
+    assert.ok(ctx.edited[0].text.includes(`Turn: ${MARK_O} Alice`));
+  });
+
+  await runTest("J. player IDs stay strings after numeric join/reload snapshot", async () => {
+    const { service } = createService();
+    const started = startOpen(service);
+    joinBoth(service, started.session.id);
+    const live = service.getSession(started.session.id);
+    assert.strictEqual(live.players.X.userId, String(USER_A));
+    assert.strictEqual(live.players.O.userId, String(USER_B));
+    const asNumber = await service.move({
+      sessionId: started.session.id,
+      userId: USER_A,
+      cell: 8,
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(asNumber.ok, true);
+    const asString = await service.move({
+      sessionId: started.session.id,
+      userId: String(USER_B),
+      cell: 7,
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(asString.ok, true);
+    assert.strictEqual(service.getSession(started.session.id).players.X.userId, "111");
+    assert.strictEqual(service.getSession(started.session.id).players.O.userId, "222");
+  });
+
+  await runTest("K. game-over callbacks cannot mutate a finished board", async () => {
+    const { service } = createService();
+    const started = startOpen(service);
+    joinBoth(service, started.session.id);
+    const id = started.session.id;
+    await playTttWinLine(service, id);
+    const finished = service.getSession(id);
+    assert.strictEqual(finished.status, STATUS.WON);
+    const board = finished.board.slice();
+    const ctx = createMockCtx({
+      userId: USER_B,
+      firstName: "Alice",
+      callbackData: buildMoveCallbackData(id, 8),
+    });
+    await handlePvpCallback(ctx, {
+      runtime: service,
+      awardPvpWinXpFn: () => ({ awarded: false, pointsToAdd: 0 }),
+    });
+    const after = service.getSession(id);
+    assert.strictEqual(after.status, STATUS.WON);
+    assert.deepStrictEqual(after.board, board);
+    assert.strictEqual(after.currentPlayer, finished.currentPlayer);
   });
 
   await runTest("2-4. group + member start; bots/private rejected", async () => {
@@ -1020,6 +1223,9 @@ async function main() {
       awardPvpWinXpFn: () => ({ awarded: true, pointsToAdd: 3 }),
     });
     assert.ok(ctx.cbAnswers.some((a) => a.includes("Not your turn")));
+    assert.ok(ctx.edited.length >= 1);
+    assert.ok(ctx.edited[0].text.includes("Turn:"));
+    assert.ok(ctx.edited[0].text.includes("Kevin"));
   });
 
   await runTest("coexistence: ChatFight blocks /tictactoe", async () => {

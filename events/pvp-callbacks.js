@@ -3,7 +3,7 @@
  * Callback data: pvp:ttt:... | pvp:c4:... | pvp:chk:...  (opaque session ids, never uids)
  */
 
-const { log, logError, formatErrorForLog } = require("../utils/logger");
+const { log, error: logError, formatErrorForLog } = require("../utils/logger");
 const { awardPvpWinXp } = require("../services/points");
 const { PLAYER_BUSY_TEXT } = require("../services/pvpMatchReservation");
 const {
@@ -153,6 +153,25 @@ async function safeEdit(ctx, text, extra) {
     );
   }
   return false;
+}
+
+async function refreshLivePvpBoard(ctx, runtime, sessionId) {
+  if (
+    !runtime ||
+    typeof runtime.getSession !== "function" ||
+    typeof runtime.renderMessage !== "function"
+  ) {
+    return false;
+  }
+  const live = runtime.getSession(sessionId);
+  if (!live) {
+    return false;
+  }
+  const fresh = runtime.renderMessage(live);
+  if (!fresh || !fresh.text) {
+    return false;
+  }
+  return safeEdit(ctx, fresh.text, fresh.extra);
 }
 
 async function finalizeWinXp(runtime, sessionId, awardXpFn) {
@@ -468,10 +487,18 @@ async function handlePvpCallbackBody(ctx, options = {}) {
         result.reason === "invalid-session"
       ) {
         await rejectStalePvp(ctx, runtime, parsed);
+        return;
       } else if (result.reason === "wrong-chat") {
         await cbAnswer(ctx, "Wrong chat.");
+        return;
       } else {
         await cbAnswer(ctx, "Invalid move.");
+      }
+      if (result.rendered) {
+        const edited = await safeEdit(ctx, result.rendered.text, result.rendered.extra);
+        if (!edited && parsed.game === "tictactoe") {
+          await refreshLivePvpBoard(ctx, runtime, parsed.sessionId);
+        }
       }
       return;
     }
@@ -498,7 +525,10 @@ async function handlePvpCallbackBody(ctx, options = {}) {
         }
       }
       if (rendered) {
-        await safeEdit(ctx, rendered.text, rendered.extra);
+        const edited = await safeEdit(ctx, rendered.text, rendered.extra);
+        if (!edited && parsed.game === "tictactoe") {
+          await refreshLivePvpBoard(ctx, runtime, parsed.sessionId);
+        }
       }
     }
     schedulePvpSessionCleanup(
