@@ -62,8 +62,42 @@ async function fetchWithTimeout(url, options = {}) {
   }
 }
 
+/**
+ * Bound any thenable (Telegram send/edit, etc.) so a hung promise cannot stall
+ * the caller. The underlying work is not cancelled; callers must ignore late
+ * fulfillment against a stale token/generation.
+ *
+ * @template T
+ * @param {Promise<T>|T} work
+ * @param {number} [timeoutMs]
+ * @param {{ setTimeoutFn?: Function, clearTimeoutFn?: Function }} [options]
+ * @returns {Promise<T>}
+ */
+function raceWithTimeout(work, timeoutMs, options = {}) {
+  const ms =
+    Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? Math.floor(timeoutMs)
+      : TELEGRAM_TIMEOUT_MS;
+  const setTimeoutFn =
+    typeof options.setTimeoutFn === "function" ? options.setTimeoutFn : setTimeout;
+  const clearTimeoutFn =
+    typeof options.clearTimeoutFn === "function"
+      ? options.clearTimeoutFn
+      : clearTimeout;
+  let handle;
+  const timeoutPromise = new Promise((_, reject) => {
+    handle = setTimeoutFn(() => reject(abortError(ms)), ms);
+  });
+  return Promise.race([Promise.resolve(work), timeoutPromise]).finally(() => {
+    if (handle != null) {
+      clearTimeoutFn(handle);
+    }
+  });
+}
+
 module.exports = {
   DEFAULT_TIMEOUT_MS,
   TELEGRAM_TIMEOUT_MS,
   fetchWithTimeout,
+  raceWithTimeout,
 };

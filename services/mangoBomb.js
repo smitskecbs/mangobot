@@ -9,6 +9,7 @@ const { Markup } = require("telegraf");
 const { sanitizePvpDisplayName } = require("./pvpSessionManager");
 const { XP_WALLET_GAME_LOCKED_LINE } = require("./xpWalletGate");
 const { log, error: logError } = require("../utils/logger");
+const { TELEGRAM_TIMEOUT_MS } = require("../utils/safeFetch");
 const { emptyInlineKeyboardExtra } = require("../utils/expiredMessageCleanup");
 const {
   GAME_OVER_TOAST,
@@ -53,6 +54,7 @@ const STALE_CALLBACK = GAME_OVER_TOAST;
 const BETWEEN_ROUNDS_TOAST = "Next round is starting…";
 const ROUND_LIVE_TOAST = "Round on — pass the bomb!";
 const RENDER_TIMEOUT_MS = 5_000;
+const START_PUBLISH_TIMEOUT_MS = TELEGRAM_TIMEOUT_MS;
 const QUEUE_TIMEOUT_MS = 5_000;
 const WATCHDOG_MS = 5_000;
 const WATCHDOG_GRACE_MS = 1_500;
@@ -240,6 +242,10 @@ function createMangoBombService(options = {}) {
     Number.isFinite(options.renderTimeoutMs) && options.renderTimeoutMs > 0
       ? options.renderTimeoutMs
       : RENDER_TIMEOUT_MS;
+  const startPublishTimeoutMs =
+    Number.isFinite(options.startPublishTimeoutMs) && options.startPublishTimeoutMs > 0
+      ? options.startPublishTimeoutMs
+      : START_PUBLISH_TIMEOUT_MS;
   const queueTimeoutMs =
     Number.isFinite(options.queueTimeoutMs) && options.queueTimeoutMs > 0
       ? options.queueTimeoutMs
@@ -713,6 +719,7 @@ function createMangoBombService(options = {}) {
       bombStartedAt: game.bombStartedAt,
       bombDeadline: includeInternal ? game.bombDeadline : undefined,
       bombGeneration: game.bombGeneration,
+      instanceSeq: game.instanceSeq,
       renderRevision: game.renderRevision,
       pendingTransition: pendingType(game),
       players,
@@ -729,6 +736,15 @@ function createMangoBombService(options = {}) {
     clearGameTimer(game, "countdown");
     clearGameTimer(game, "bomb");
     clearGameTimer(game, "pause");
+    clearPublishTimeout(game);
+  }
+
+  function clearPublishTimeout(game) {
+    if (!game) {
+      return;
+    }
+    clearUtility(game.publishTimeoutHandle);
+    game.publishTimeoutHandle = null;
   }
 
   function dropGame(game) {
@@ -1287,14 +1303,16 @@ function createMangoBombService(options = {}) {
     ) {
       return { ok: false, reason: "inactive" };
     }
-    clearGameTimer(game, "lobby");
+    // Keep CLOSE_LOBBY pending while status is still lobby. Clearing it here
+    // made the watchdog treat a mid-award close as a broken invariant, cancel
+    // with "unexpected error", then this function would still arm a zombie round.
     clearGameTimer(game, "countdown");
-    clearPending(game, PENDING.CLOSE_LOBBY);
     if (game.players.size < MIN_PLAYERS) {
       const empty = game.players.size === 0;
       const state = empty ? FINAL_STATE.EMPTY : FINAL_STATE.NOT_ENOUGH;
       const text = empty ? buildEmptyLobbyText() : buildNotEnoughPlayersText();
       setStatus(game, STATUS.CANCELLED, "lobby-cancel");
+      clearPending(game, PENDING.CLOSE_LOBBY);
       log("[mango-bomb] cancelled");
       logGameCleanup(GAME_TYPE.MANGOBOMB, state);
       bumpRevision(game);
@@ -1309,12 +1327,24 @@ function createMangoBombService(options = {}) {
         maybeRemind(userId, result, game);
       }
     }
+    const live = gamesById.get(gameId);
+    if (
+      !live ||
+      live.status !== STATUS.LOBBY ||
+      (instanceSeqExpected != null && live.instanceSeq !== instanceSeqExpected)
+    ) {
+      return { ok: false, reason: "inactive" };
+    }
     log("[mango-bomb] round started");
-    game.roundNumber = 1;
-    armBomb(game, null);
-    bumpRevision(game);
-    queueRender(game, buildBombText(game), passKeyboard(game.id), "lobby-close");
-    return { ok: true, status: STATUS.RUNNING, snapshot: snapshot(game, true) };
+    live.roundNumber = 1;
+    const holder = armBomb(live, null);
+    if (!holder) {
+      await cancelDueToInternalError(live, "lobby-close", "no-holder");
+      return { ok: false, reason: "no-holder" };
+    }
+    bumpRevision(live);
+    queueRender(live, buildBombText(live), passKeyboard(live.id), "lobby-close");
+    return { ok: true, status: STATUS.RUNNING, snapshot: snapshot(live, true) };
   }
 
   function startWatchdog() {
@@ -1447,48 +1477,158 @@ function createMangoBombService(options = {}) {
       roundNumber: 0,
       instanceSeq: (instanceSeq += 1),
       source,
+      publishTimeoutHandle: null,
       timers: { lobby: null, countdown: null, bomb: null, pause: null },
     };
     gamesById.set(id, game);
     gamesByChat.set(String(chatId), game);
-    lastStartByChat.set(String(chatId), now);
-    const lobbyInstance = game.instanceSeq;
-    setGameTimer(game, "lobby", lobbyMs, () => {
-      const current = gamesById.get(id);
-      if (
-        !current ||
-        current.instanceSeq !== lobbyInstance ||
-        current.status !== STATUS.LOBBY
-      ) {
-        return;
-      }
-      setPending(current, PENDING.CLOSE_LOBBY);
-      enqueue(
-        current.chatId,
-        (token) => closeLobby(id, token, lobbyInstance),
-        "lobby-close"
+    try {
+      const lobbyInstance = game.instanceSeq;
+      setGameTimer(game, "lobby", lobbyMs, () => {
+        const current = gamesById.get(id);
+        if (
+          !current ||
+          current.instanceSeq !== lobbyInstance ||
+          current.status !== STATUS.LOBBY
+        ) {
+          return;
+        }
+        setPending(current, PENDING.CLOSE_LOBBY);
+        enqueue(
+          current.chatId,
+          (token) => closeLobby(id, token, lobbyInstance),
+          "lobby-close"
+        );
+      });
+      scheduleLobbyCountdown(game);
+      startWatchdog();
+    } catch (err) {
+      logError(
+        "[mango-bomb] lobby start failed",
+        err && err.message ? err.message : err
       );
-    });
-    scheduleLobbyCountdown(game);
-    startWatchdog();
+      discardUnpublishedGame(game);
+      return { ok: false, reason: "internal-error" };
+    }
     log("[mango-bomb] lobby started");
     const lobbySeconds = Math.max(1, Math.round(lobbyMs / 1000));
     return {
       ok: true,
       gameId: id,
+      instanceSeq: game.instanceSeq,
       text: buildLobbyText(0, lobbySeconds),
       extra: joinKeyboard(id),
       snapshot: snapshot(game),
     };
   }
 
-  function setMessageId(gameId, messageId) {
+  function commitStartCooldown(game) {
+    if (!game || game.chatId == null) {
+      return;
+    }
+    lastStartByChat.set(String(game.chatId), game.startedAt || nowFn());
+  }
+
+  function isStartCooldownActive(chatId) {
+    if (chatId == null || !startCooldownMs) {
+      return false;
+    }
+    const last = lastStartByChat.get(String(chatId));
+    if (!last) {
+      return false;
+    }
+    return nowFn() - last < startCooldownMs;
+  }
+
+  function discardUnpublishedGame(game) {
+    if (!game) {
+      return;
+    }
+    setStatus(game, STATUS.CANCELLED, "unpublished");
+    clearPending(game);
+    dropGame(game);
+  }
+
+  function abortUnpublishedStart(gameId, expectedInstanceSeq) {
     const game = gamesById.get(gameId);
     if (!game) {
       return false;
     }
+    if (
+      expectedInstanceSeq != null &&
+      Number(game.instanceSeq) !== Number(expectedInstanceSeq)
+    ) {
+      return false;
+    }
+    if (game.messageId != null) {
+      return false;
+    }
+    if (game.status !== STATUS.LOBBY) {
+      return false;
+    }
+    lastStartByChat.delete(String(game.chatId));
+    discardUnpublishedGame(game);
+    return true;
+  }
+
+  function isStartAttemptLive(gameId, expectedInstanceSeq) {
+    const game = gamesById.get(gameId);
+    if (!game || game.status !== STATUS.LOBBY || game.messageId != null) {
+      return false;
+    }
+    if (
+      expectedInstanceSeq != null &&
+      Number(game.instanceSeq) !== Number(expectedInstanceSeq)
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  function armUnpublishedPublishTimeout(gameId, expectedInstanceSeq) {
+    const game = gamesById.get(gameId);
+    if (!isStartAttemptLive(gameId, expectedInstanceSeq)) {
+      return false;
+    }
+    clearPublishTimeout(game);
+    const instance = game.instanceSeq;
+    game.publishTimeoutHandle = utilityTimeout(() => {
+      const current = gamesById.get(gameId);
+      if (
+        !current ||
+        current.instanceSeq !== instance ||
+        current.messageId != null ||
+        current.status !== STATUS.LOBBY
+      ) {
+        return;
+      }
+      log("[mango-bomb] start publish timeout");
+      abortUnpublishedStart(gameId, instance);
+    }, startPublishTimeoutMs);
+    return true;
+  }
+
+  function setMessageId(gameId, messageId, expectedInstanceSeq) {
+    const game = gamesById.get(gameId);
+    if (!game || messageId == null) {
+      return false;
+    }
+    if (
+      expectedInstanceSeq != null &&
+      Number(game.instanceSeq) !== Number(expectedInstanceSeq)
+    ) {
+      return false;
+    }
+    if (game.messageId != null) {
+      return String(game.messageId) === String(messageId);
+    }
+    if (game.status !== STATUS.LOBBY) {
+      return false;
+    }
+    clearPublishTimeout(game);
     game.messageId = messageId;
-    if (game.status === STATUS.LOBBY && !hasActiveCountdownTimer(game)) {
+    commitStartCooldown(game);
+    if (!hasActiveCountdownTimer(game)) {
       scheduleLobbyCountdown(game);
     }
     return true;
@@ -1836,6 +1976,7 @@ function createMangoBombService(options = {}) {
     PASS_COOLDOWN_MS: passCooldownMs,
     BETWEEN_ROUNDS_MS: betweenRoundsMs,
     START_COOLDOWN_MS: startCooldownMs,
+    START_PUBLISH_TIMEOUT_MS: startPublishTimeoutMs,
     MIN_PLAYERS,
     XP_PARTICIPATE,
     XP_SURVIVE,
@@ -1850,6 +1991,10 @@ function createMangoBombService(options = {}) {
     tryPass,
     tryWait,
     setMessageId,
+    abortUnpublishedStart,
+    isStartCooldownActive,
+    isStartAttemptLive,
+    armUnpublishedPublishTimeout,
     forceLobbyEnd,
     forceExplode,
     isMangoBombOpen,
@@ -2035,6 +2180,7 @@ module.exports = {
   PASS_COOLDOWN_MS,
   BETWEEN_ROUNDS_MS,
   START_COOLDOWN_MS,
+  START_PUBLISH_TIMEOUT_MS,
   MIN_PLAYERS,
   XP_PARTICIPATE,
   XP_SURVIVE,
@@ -2062,5 +2208,6 @@ module.exports = {
   createMangoBombService,
   getMangoBombRuntime: () => defaultService,
   startLobby: (input) => defaultService.startLobby(input),
+  abortUnpublishedStart: (gameId) => defaultService.abortUnpublishedStart(gameId),
   isMangoBombOpen: (chatId) => defaultService.isMangoBombOpen(chatId),
 };

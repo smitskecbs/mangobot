@@ -1238,12 +1238,23 @@ async function main() {
     assert.strictEqual(service.startLobby({ chatId: COMMUNITY_CHAT }).ok, true);
     service.reset();
     const { service: cooled } = createService({ startCooldownMs: 90_000 });
-    assert.strictEqual(cooled.startLobby({ chatId: COMMUNITY_CHAT }).ok, true);
+    const published = cooled.startLobby({ chatId: COMMUNITY_CHAT });
+    assert.strictEqual(published.ok, true);
+    assert.strictEqual(cooled.isStartCooldownActive(COMMUNITY_CHAT), false);
+    cooled.setMessageId(published.gameId, 9001);
+    assert.strictEqual(cooled.isStartCooldownActive(COMMUNITY_CHAT), true);
     cooled.cancelAll();
     const again = cooled.startLobby({ chatId: COMMUNITY_CHAT });
     assert.strictEqual(again.ok, false);
     assert.strictEqual(again.reason, "cooldown");
     assert.strictEqual(cooled.startLobby({ chatId: OTHER_CHAT }).ok, true);
+    const unpublished = createService({ startCooldownMs: 90_000 }).service;
+    const prepared = unpublished.startLobby({ chatId: COMMUNITY_CHAT });
+    assert.strictEqual(prepared.ok, true);
+    assert.strictEqual(unpublished.abortUnpublishedStart(prepared.gameId), true);
+    const retry = unpublished.startLobby({ chatId: COMMUNITY_CHAT });
+    assert.strictEqual(retry.ok, true);
+    assert.strictEqual(unpublished.isStartCooldownActive(COMMUNITY_CHAT), false);
   });
 
   await runTest("busy flag overlaps Trivia", async () => {

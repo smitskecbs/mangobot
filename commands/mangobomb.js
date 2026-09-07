@@ -15,13 +15,15 @@ const {
 } = require("../services/communityGameState");
 const {
   startLobby,
+  abortUnpublishedStart,
   getMangoBombRuntime,
     parseMangoBombCallbackData,
     STALE_CALLBACK,
     STATUS,
 } = require("../services/mangoBomb");
 const { reminderForBlockedXp } = require("../services/xpWalletGate");
-const { logError } = require("../utils/logger");
+const { error: logError } = require("../utils/logger");
+const { TELEGRAM_TIMEOUT_MS, raceWithTimeout } = require("../utils/safeFetch");
 const {
   emptyInlineKeyboardExtra,
 } = require("../utils/expiredMessageCleanup");
@@ -45,6 +47,10 @@ Play it in the ManGo Games topic.`;
 const MANGO_BOMB_TOPIC_REQUIRED_TEXT = `🥭💣 ManGo Bomb is played in the Games topic.
 
 Open Games and start the next round there. 🎮`;
+
+const START_FAILED_TEXT = `🥭💣 Could not start ManGo Bomb.
+
+No game was created. You can try again now.`;
 
 function busyOptions(options = {}) {
   return {
@@ -140,7 +146,54 @@ async function handleMangoBomb(ctx, options = {}) {
   const setMessageIdFn =
     typeof options.setMessageIdFn === "function"
       ? options.setMessageIdFn
-      : (gameId, messageId) => getMangoBombRuntime().setMessageId(gameId, messageId);
+      : (gameId, messageId, instanceSeq) =>
+          getMangoBombRuntime().setMessageId(gameId, messageId, instanceSeq);
+  const abortFn =
+    typeof options.abortUnpublishedStartFn === "function"
+      ? options.abortUnpublishedStartFn
+      : (gameId, instanceSeq) => abortUnpublishedStart(gameId, instanceSeq);
+  const runtime =
+    options.runtime ||
+    (typeof options.getRuntimeFn === "function"
+      ? options.getRuntimeFn()
+      : getMangoBombRuntime());
+  const armPublishTimeoutFn =
+    typeof options.armUnpublishedPublishTimeoutFn === "function"
+      ? options.armUnpublishedPublishTimeoutFn
+      : (gameId, instanceSeq) =>
+          runtime && typeof runtime.armUnpublishedPublishTimeout === "function"
+            ? runtime.armUnpublishedPublishTimeout(gameId, instanceSeq)
+            : false;
+  const isStartAttemptLiveFn =
+    typeof options.isStartAttemptLiveFn === "function"
+      ? options.isStartAttemptLiveFn
+      : (gameId, instanceSeq) =>
+          runtime && typeof runtime.isStartAttemptLive === "function"
+            ? runtime.isStartAttemptLive(gameId, instanceSeq)
+            : false;
+  const publishTimeoutMs =
+    Number.isFinite(options.publishTimeoutMs) && options.publishTimeoutMs > 0
+      ? options.publishTimeoutMs
+      : TELEGRAM_TIMEOUT_MS;
+  const setTimeoutFn =
+    typeof options.setTimeoutFn === "function" ? options.setTimeoutFn : setTimeout;
+  const clearTimeoutFn =
+    typeof options.clearTimeoutFn === "function"
+      ? options.clearTimeoutFn
+      : clearTimeout;
+  const deleteStartMessageFn =
+    typeof options.deleteStartMessageFn === "function"
+      ? options.deleteStartMessageFn
+      : ctx && ctx.telegram && typeof ctx.telegram.deleteMessage === "function"
+        ? (chatId, messageId) => ctx.telegram.deleteMessage(chatId, messageId)
+        : null;
+  const editStartMessageFn =
+    typeof options.editStartMessageFn === "function"
+      ? options.editStartMessageFn
+      : ctx && ctx.telegram && typeof ctx.telegram.editMessageText === "function"
+        ? (chatId, messageId, text, extra) =>
+            ctx.telegram.editMessageText(chatId, messageId, undefined, text, extra)
+        : null;
   const assertStartFn =
     typeof options.assertCanStartFn === "function"
       ? options.assertCanStartFn
@@ -191,11 +244,20 @@ async function handleMangoBomb(ctx, options = {}) {
     return ctx.reply("🥭💣 A ManGo Bomb round is already running.");
   }
 
-  const result = startFn({
-    chatId: ctx.chat.id,
-    threadId: getMessageThreadId(ctx),
-    source: "manual",
-  });
+  let result;
+  try {
+    result = startFn({
+      chatId: ctx.chat.id,
+      threadId: getMessageThreadId(ctx),
+      source: "manual",
+    });
+  } catch (err) {
+    logError(
+      "[mango-bomb] startLobby threw",
+      err && err.message ? err.message : err
+    );
+    return ctx.reply(START_FAILED_TEXT);
+  }
   if (!result.ok) {
     if (result.reason === "already-active") {
       return ctx.reply("🥭💣 A ManGo Bomb round is already running.");
@@ -206,15 +268,111 @@ async function handleMangoBomb(ctx, options = {}) {
     if (result.reason === "wrong-chat") {
       return ctx.reply("🥭💣 ManGo Bomb is not available in this group.");
     }
-    return ctx.reply("🥭💣 Could not start ManGo Bomb.");
+    return ctx.reply(START_FAILED_TEXT);
   }
 
-  const sent = await ctx.reply(
-    result.text,
-    withCtxThreadExtra(ctx, result.extra || undefined)
+  async function cleanupOrphanStartMessage(sent) {
+    const chatId = ctx.chat && ctx.chat.id;
+    const messageId =
+      sent && (sent.message_id != null ? sent.message_id : sent.messageId);
+    if (chatId == null || messageId == null) {
+      return;
+    }
+    if (typeof deleteStartMessageFn === "function") {
+      try {
+        await deleteStartMessageFn(chatId, messageId);
+        return;
+      } catch (err) {
+        logError(
+          "[mango-bomb] orphan start delete failed",
+          err && err.message ? err.message : err
+        );
+      }
+    }
+    if (typeof editStartMessageFn === "function") {
+      try {
+        await editStartMessageFn(
+          chatId,
+          messageId,
+          START_FAILED_TEXT,
+          emptyInlineKeyboardExtra()
+        );
+      } catch (err) {
+        logError(
+          "[mango-bomb] orphan start edit failed",
+          err && err.message ? err.message : err
+        );
+      }
+    }
+  }
+
+  function ignoreLatePublish(err) {
+    if (err) {
+      logError(
+        "[mango-bomb] late start publish ignored",
+        err && err.message ? err.message : err
+      );
+    }
+  }
+
+  async function absorbLatePublish(sent) {
+    if (isStartAttemptLiveFn(result.gameId, result.instanceSeq)) {
+      return;
+    }
+    await cleanupOrphanStartMessage(sent);
+  }
+
+  async function failUnpublishedStart(err, sent) {
+    abortFn(result.gameId, result.instanceSeq);
+    if (err) {
+      logError(
+        "[mango-bomb] start publish failed",
+        err && err.message ? err.message : err
+      );
+    }
+    await cleanupOrphanStartMessage(sent);
+    try {
+      return await ctx.reply(START_FAILED_TEXT, withCtxThreadExtra(ctx));
+    } catch (_err) {
+      return undefined;
+    }
+  }
+
+  armPublishTimeoutFn(result.gameId, result.instanceSeq);
+
+  const publishWork = Promise.resolve().then(() =>
+    ctx.reply(result.text, withCtxThreadExtra(ctx, result.extra || undefined))
   );
-  if (sent && sent.message_id != null && result.gameId) {
-    setMessageIdFn(result.gameId, sent.message_id);
+  let sent;
+  try {
+    sent = await raceWithTimeout(publishWork, publishTimeoutMs, {
+      setTimeoutFn,
+      clearTimeoutFn,
+    });
+  } catch (err) {
+    const failed = await failUnpublishedStart(err);
+    publishWork.then(absorbLatePublish, ignoreLatePublish);
+    return failed;
+  }
+  if (!isStartAttemptLiveFn(result.gameId, result.instanceSeq)) {
+    publishWork.then(absorbLatePublish, ignoreLatePublish);
+    await cleanupOrphanStartMessage(sent);
+    return undefined;
+  }
+  if (!sent || sent.message_id == null || !result.gameId) {
+    return failUnpublishedStart(null, sent);
+  }
+  try {
+    const published = setMessageIdFn(
+      result.gameId,
+      sent.message_id,
+      result.instanceSeq
+    );
+    if (published === false) {
+      return failUnpublishedStart(null, sent);
+    }
+  } catch (err) {
+    return failUnpublishedStart(err, sent);
   }
   return sent;
 }
@@ -368,3 +526,4 @@ module.exports.handleBombDebug = handleBombDebug;
 module.exports.wireMangoBombRuntime = wireMangoBombRuntime;
 module.exports.PRIVATE_MANGO_BOMB_TEXT = PRIVATE_MANGO_BOMB_TEXT;
 module.exports.MANGO_BOMB_TOPIC_REQUIRED_TEXT = MANGO_BOMB_TOPIC_REQUIRED_TEXT;
+module.exports.START_FAILED_TEXT = START_FAILED_TEXT;
