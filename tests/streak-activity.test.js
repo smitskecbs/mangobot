@@ -580,11 +580,13 @@ await runTest("private /points shows streak fields", async () => {
     },
   };
   handlePoints(ctx, { pointsFile: file });
-  assert.ok(ctx.replies[0].text.includes("Your ManGo Progress"));
-  assert.ok(ctx.replies[0].text.includes("Current streak: 1 days"));
-  assert.ok(ctx.replies[0].text.includes("✅ Daily activity"));
+  assert.ok(ctx.replies[0].text.includes("My Profile"));
+  assert.ok(ctx.replies[0].text.includes("Activity Streak: 1 days"));
+  assert.ok(!ctx.replies[0].text.includes("✅ Daily activity"));
   const card = formatPointsCard(loadPoints(file).users[String(ALICE)]);
   assert.ok(card.includes("XP: 1"));
+  assert.ok(card.includes("Activity Streak: 1 days"));
+  assert.ok(!card.includes("Claimed today:"));
 });
 
 await runTest("my streak private zero state", async () => {
@@ -598,15 +600,15 @@ await runTest("my streak private zero state", async () => {
     },
   };
   handleMyStreak(ctx, { pointsFile: file });
-  assert.ok(ctx.replies[0].text.includes("Current streak: 0 days"));
+  assert.ok(ctx.replies[0].text.includes("Activity Streak: 0 days"));
   assert.ok(ctx.replies[0].text.includes("Send a message in the ManGo community"));
   assert.strictEqual(
     formatPersonalStreakMessage({}),
     [
-      "🔥 Your ManGo Streak",
+      "🔥 Your Activity Streak",
       "",
-      "Current streak: 0 days",
-      "Longest streak: 0 days",
+      "Activity Streak: 0 days",
+      "Longest Activity Streak: 0 days",
       "",
       "Send a message in the ManGo community to start one.",
     ].join("\n")

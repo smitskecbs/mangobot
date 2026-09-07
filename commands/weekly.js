@@ -7,10 +7,7 @@ const {
   getWeeklyTop,
   formatWeeklyLines,
 } = require("../services/leaderboard");
-const {
-  isPrivateChat,
-  getPrivateMenuKeyboard,
-} = require("../utils/botMenu");
+const { getRankingsResultExtra } = require("../utils/botMenu");
 
 function handleWeekly(ctx, options = {}) {
   const data = loadPoints(options.pointsFile);
@@ -25,10 +22,7 @@ function handleWeekly(ctx, options = {}) {
     text = `🥭 Weekly ManGo Leaders\n\n${lines.join("\n")}`;
   }
 
-  if (isPrivateChat(ctx)) {
-    return ctx.reply(text, getPrivateMenuKeyboard());
-  }
-  return ctx.reply(text);
+  return ctx.reply(text, getRankingsResultExtra(ctx));
 }
 
 module.exports = (bot) => {

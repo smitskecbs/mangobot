@@ -10,7 +10,7 @@ const { handleBounch } = require("./bounch");
 const { handleLeaderboard } = require("./leaderboard");
 const { handleWeekly } = require("./weekly");
 const { handleWeeklyWinners } = require("./weeklywinners");
-const { handleHelp } = require("./help");
+const { handleHelp, HELP_MESSAGE } = require("./help");
 const { handleTicTacToe } = require("./tictactoe");
 const { handleConnectFour } = require("./connect4");
 const { handleCheckers } = require("./checkers");
@@ -23,7 +23,7 @@ const { handlePresale } = require("./presale");
 const { handleCommunityBuilder } = require("./communitybuilder");
 const { handleShop } = require("./shop");
 const { handleDailyQuest } = require("./dailyquest");
-const { formatShopProgressBlock } = require("../services/mangoShop");
+const { formatMemberStatusCard } = require("../services/memberActivityProfile");
 const {
   handleStreak,
   handleStreakRecord,
@@ -31,7 +31,6 @@ const {
 } = require("./streak");
 const {
   MENU_LABELS,
-  GROUP_PROFILE_TEXT,
   PRIVATE_MENU_HINT,
   GROUP_MENU_CALLBACK,
   PRIVATE_HUB_CALLBACK,
@@ -41,6 +40,9 @@ const {
   getPrivateProfileMenuExtra,
   getGroupMenuExtra,
   getGroupRankingsMenuExtra,
+  getPrivateRankingsMenuExtra,
+  getPrivateGamesMenuExtra,
+  getGroupHelpMenuExtra,
   getGroupGamesMenuExtra,
   getGroupProfileMenuExtra,
   isGroupMenuCallback,
@@ -50,7 +52,7 @@ const {
   formatGroupMenuText,
   formatGroupRankingsText,
   formatGroupGamesText,
-  formatGroupProfileText,
+  PRIVATE_GAMES_TEXT,
 } = require("../utils/botMenu");
 const {
   isAllowedGameTopic,
@@ -102,6 +104,14 @@ const PRIVATE_HUB_ACTION_RE = new RegExp(
     PRIVATE_HUB_CALLBACK.STREAK,
     PRIVATE_HUB_CALLBACK.WALLET_STATUS,
     PRIVATE_HUB_CALLBACK.REWARDS,
+    PRIVATE_HUB_CALLBACK.DAILY_QUEST,
+    PRIVATE_HUB_CALLBACK.RANKINGS,
+    PRIVATE_HUB_CALLBACK.GAMES,
+    PRIVATE_HUB_CALLBACK.LEADERBOARD,
+    PRIVATE_HUB_CALLBACK.WEEKLY,
+    PRIVATE_HUB_CALLBACK.WEEKLY_WINNERS,
+    PRIVATE_HUB_CALLBACK.STREAK_BOARD,
+    PRIVATE_HUB_CALLBACK.STREAK_RECORD,
   ].join("|")})$`
 );
 
@@ -194,11 +204,11 @@ function handlePrivateProfile(ctx, options = {}) {
   if (!isPrivateChat(ctx)) {
     return undefined;
   }
-  const block =
-    ctx.from && typeof formatShopProgressBlock === "function"
-      ? formatShopProgressBlock(ctx.from.id, options)
-      : "";
-  const text = block ? `${GROUP_PROFILE_TEXT}\n\n${block}` : GROUP_PROFILE_TEXT;
+  const displayName = sanitizePvpDisplayName(ctx && ctx.from);
+  const text = formatMemberStatusCard(ctx.from.id, {
+    ...options,
+    displayName,
+  });
   return ctx.reply(text, getPrivateProfileMenuExtra());
 }
 
@@ -242,6 +252,33 @@ async function handlePrivateHubCallback(ctx, options = {}) {
   }
   if (data === PRIVATE_HUB_CALLBACK.REWARDS) {
     return handleRewards(ctx, options);
+  }
+  if (data === PRIVATE_HUB_CALLBACK.DAILY_QUEST) {
+    return handleDailyQuest(ctx, options);
+  }
+  if (data === PRIVATE_HUB_CALLBACK.RANKINGS) {
+    return ctx.reply(
+      formatGroupRankingsText(sanitizePvpDisplayName(ctx.from)),
+      getPrivateRankingsMenuExtra()
+    );
+  }
+  if (data === PRIVATE_HUB_CALLBACK.GAMES) {
+    return ctx.reply(PRIVATE_GAMES_TEXT, getPrivateGamesMenuExtra(ctx));
+  }
+  if (data === PRIVATE_HUB_CALLBACK.LEADERBOARD) {
+    return handleLeaderboard(ctx, options);
+  }
+  if (data === PRIVATE_HUB_CALLBACK.WEEKLY) {
+    return handleWeekly(ctx, options);
+  }
+  if (data === PRIVATE_HUB_CALLBACK.WEEKLY_WINNERS) {
+    return handleWeeklyWinners(ctx, options);
+  }
+  if (data === PRIVATE_HUB_CALLBACK.STREAK_BOARD) {
+    return handleStreak(ctx, options);
+  }
+  if (data === PRIVATE_HUB_CALLBACK.STREAK_RECORD) {
+    return handleStreakRecord(ctx, options);
   }
 }
 
@@ -311,11 +348,11 @@ async function handleGroupMenuCallback(ctx, options = {}) {
       data === GROUP_MENU_CALLBACK.PROFILE ||
       data === GROUP_MENU_CALLBACK.PROGRESS
     ) {
-      return showMenuView(
-        ctx,
-        formatGroupProfileText(displayName),
-        getGroupProfileMenuExtra(ctx)
-      );
+      const text = formatMemberStatusCard(ctx.from.id, {
+        ...options,
+        displayName,
+      });
+      return showMenuView(ctx, text, getGroupProfileMenuExtra(ctx));
     }
     if (data === GROUP_MENU_CALLBACK.BACK) {
       return showMenuView(
@@ -336,22 +373,22 @@ async function handleGroupMenuCallback(ctx, options = {}) {
     return handlePresale(ctx, options);
   }
   if (data === GROUP_MENU_CALLBACK.LEADERBOARD) {
-    return handleLeaderboard(ctx, options);
+    return attachSentMenuOwnership(ctx, handleLeaderboard(ctx, options));
   }
   if (data === GROUP_MENU_CALLBACK.WEEKLY) {
-    return handleWeekly(ctx, options);
+    return attachSentMenuOwnership(ctx, handleWeekly(ctx, options));
   }
   if (data === GROUP_MENU_CALLBACK.WEEKLY_WINNERS) {
-    return handleWeeklyWinners(ctx, options);
+    return attachSentMenuOwnership(ctx, handleWeeklyWinners(ctx, options));
   }
   if (data === GROUP_MENU_CALLBACK.STREAK) {
-    return handleStreak(ctx, options);
+    return attachSentMenuOwnership(ctx, handleStreak(ctx, options));
   }
   if (data === GROUP_MENU_CALLBACK.STREAK_RECORD) {
-    return handleStreakRecord(ctx, options);
+    return attachSentMenuOwnership(ctx, handleStreakRecord(ctx, options));
   }
   if (data === GROUP_MENU_CALLBACK.HELP) {
-    return handleHelp(ctx);
+    return showMenuView(ctx, HELP_MESSAGE, getGroupHelpMenuExtra(ctx));
   }
   if (data === GROUP_MENU_CALLBACK.TICTACTOE) {
     return handleTicTacToe(ctx, options);
@@ -456,6 +493,23 @@ module.exports = (bot) => {
       return;
     }
     return handleWeekly(ctx);
+  });
+
+  bot.hears(MENU_LABELS.RANKINGS, (ctx) => {
+    if (!isPrivateChat(ctx)) {
+      return;
+    }
+    return ctx.reply(
+      formatGroupRankingsText(sanitizePvpDisplayName(ctx.from)),
+      getPrivateRankingsMenuExtra()
+    );
+  });
+
+  bot.hears(MENU_LABELS.GAMES, (ctx) => {
+    if (!isPrivateChat(ctx)) {
+      return;
+    }
+    return ctx.reply(PRIVATE_GAMES_TEXT, getPrivateGamesMenuExtra(ctx));
   });
 
   bot.hears(MENU_LABELS.HELP, (ctx) => {

@@ -718,10 +718,10 @@ function formatPersonalStreakMessage(user) {
   const streak = readStreak(user);
   const last = formatLastActiveLabel(streak.lastActiveDate);
   const lines = [
-    "🔥 Your ManGo Streak",
+    "🔥 Your Activity Streak",
     "",
-    `Current streak: ${streak.current} days`,
-    `Longest streak: ${streak.longest} days`,
+    `Activity Streak: ${streak.current} days`,
+    `Longest Activity Streak: ${streak.longest} days`,
   ];
   if (last) {
     lines.push(`Last active: ${last}`);
@@ -754,8 +754,8 @@ function formatPointsCard(user, options = {}) {
     `Weekly XP: ${weeklyPoints}`,
     `Rank: ${rank.emoji} ${rank.title}`,
     "",
-    `🔥 Current streak: ${streak.current} days`,
-    `🏆 Longest streak: ${streak.longest} days`,
+    `🔥 Activity Streak: ${streak.current} days`,
+    `🏆 Longest Activity Streak: ${streak.longest} days`,
     "",
     walletLine,
   ];
@@ -764,10 +764,7 @@ function formatPointsCard(user, options = {}) {
   }
   lines.push(
     "",
-    "Claimed today:",
-    formatClaimedTodayLines(user),
-    "",
-    formatBounchUnlocksLine(user)
+    "Looking for today's activities? Open 🎯 Daily Quest."
   );
   return lines.join("\n");
 }

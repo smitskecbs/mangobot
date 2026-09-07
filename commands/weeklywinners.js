@@ -2,10 +2,7 @@
  * /weeklywinners — Top 3 of the last fully closed UTC week.
  */
 
-const {
-  isPrivateChat,
-  getPrivateMenuKeyboard,
-} = require("../utils/botMenu");
+const { getRankingsResultExtra } = require("../utils/botMenu");
 const {
   getLatestWeeklyWinners,
   formatWeeklyWinnersMessage,
@@ -33,10 +30,7 @@ function handleWeeklyWinners(ctx, options = {}) {
   const latest = getLatestWeeklyWinners(options.winnersFile);
   const text = formatWeeklyWinnersMessage(latest);
 
-  if (isPrivateChat(ctx)) {
-    return ctx.reply(text, getPrivateMenuKeyboard());
-  }
-  return ctx.reply(text);
+  return ctx.reply(text, getRankingsResultExtra(ctx));
 }
 
 module.exports = (bot) => {

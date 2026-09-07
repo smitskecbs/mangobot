@@ -837,7 +837,8 @@ async function main() {
       sessionId: "abc123",
       answerIndex: 1,
     });
-    assert.ok(HELP_MESSAGE.includes("Open Trivia categories"));
+    assert.ok(HELP_MESSAGE.includes("/menu"));
+    assert.ok(HELP_MESSAGE.includes("Daily Quest"));
   });
 
   await runTest("anti-repeat window", async () => {

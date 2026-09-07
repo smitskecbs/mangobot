@@ -359,7 +359,12 @@ async function main() {
     handleHelp(menu);
     assert.strictEqual(menu.replies[1].text, HELP_MESSAGE);
     assert.ok(
-      menu.replies[1].extra.reply_markup.keyboard.every(
+      menu.replies[1].extra.reply_markup.inline_keyboard.some((row) =>
+        row.some((b) => b.text === "🥭 Main Menu")
+      )
+    );
+    assert.ok(
+      menu.replies[0].extra.reply_markup.keyboard.every(
         (row) => !row.includes(MENU_LABELS.ADMIN)
       )
     );

@@ -748,7 +748,7 @@ async function main() {
     const blob = JSON.stringify(extra);
     assert.ok(blob.includes(GROUP_MENU_CALLBACK.MANGOBOMB));
     assert.ok(blob.includes("ManGo Bomb"));
-    assert.ok(HELP_MESSAGE.includes("/mangobomb"));
+    assert.ok(HELP_MESSAGE.includes("Open /menu"));
     assert.ok(!HELP_MESSAGE.includes("/bombdebug"));
   });
 

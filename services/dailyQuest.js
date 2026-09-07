@@ -732,7 +732,7 @@ function getDailyQuestSnapshot(userId, options = {}) {
 function formatDailyQuestProgressLine(userId, options = {}) {
   try {
     const snap = getDailyQuestSnapshot(userId, options);
-    return [`🔥 Daily Streak: ${snap.streak}`, `🎯 Today: ${snap.completedToday}/3`].join(
+    return [`🎯 Quest Streak: ${snap.streak}`, `🎯 Today: ${snap.completedToday}/3`].join(
       "\n"
     );
   } catch (_err) {

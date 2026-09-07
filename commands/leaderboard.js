@@ -7,10 +7,7 @@ const {
   getLifetimeTop,
   formatLifetimeLines,
 } = require("../services/leaderboard");
-const {
-  isPrivateChat,
-  getPrivateMenuKeyboard,
-} = require("../utils/botMenu");
+const { getRankingsResultExtra } = require("../utils/botMenu");
 
 function handleLeaderboard(ctx, options = {}) {
   const data = loadPoints(options.pointsFile);
@@ -25,10 +22,7 @@ function handleLeaderboard(ctx, options = {}) {
     text = `🥭 ManGo Leaderboard — Top 10\n\n${lines.join("\n")}`;
   }
 
-  if (isPrivateChat(ctx)) {
-    return ctx.reply(text, getPrivateMenuKeyboard());
-  }
-  return ctx.reply(text);
+  return ctx.reply(text, getRankingsResultExtra(ctx));
 }
 
 module.exports = (bot) => {

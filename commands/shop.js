@@ -164,6 +164,9 @@ function buildHomeText(userId, options) {
   const lines = [
     "🏪 ManGo Shop",
     "",
+    "Spend ManGo Loot on titles.",
+    "Loot comes from Daily Quests. Builder Points (BP) are not XP.",
+    "",
     "Your balance:",
     `🥭 ManGo Loot: ${model.loot.balance}`,
     "",

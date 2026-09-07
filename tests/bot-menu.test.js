@@ -17,7 +17,6 @@ const {
   GROUP_RANKINGS_TEXT,
   GROUP_GAMES_TEXT,
   GROUP_PROGRESS_TEXT,
-  GROUP_PROFILE_TEXT,
   PRIVATE_MENU_HINT,
   GROUP_MENU_CALLBACK,
   PRIVATE_HUB_CALLBACK,
@@ -42,7 +41,6 @@ const {
   formatGroupMenuText,
   formatGroupRankingsText,
   formatGroupGamesText,
-  formatGroupProfileText,
 } = require("../utils/botMenu");
 const { handleSnake } = require("../commands/snake");
 const { handleBounch } = require("../commands/bounch");
@@ -75,6 +73,8 @@ const {
   awardDailyActivityPoint,
   hasClaimedDailyActivity,
   loadPoints,
+  formatClaimedTodayLines,
+  formatBounchUnlocksLine,
 } = require("../services/points");
 
 const TEST_SECRET = "test-game-link-secret-do-not-use-in-prod";
@@ -370,6 +370,8 @@ runTest("menu bevat private opties zonder PvP", async () => {
     MENU_LABELS.COMMUNITY_BUILDER,
     MENU_LABELS.SHOP,
     MENU_LABELS.DAILY_QUEST,
+    MENU_LABELS.RANKINGS,
+    MENU_LABELS.GAMES,
     MENU_LABELS.PHASE2,
     MENU_LABELS.ADMIN,
     MENU_LABELS.SNAKE,
@@ -384,10 +386,11 @@ runTest("menu bevat private opties zonder PvP", async () => {
   const kb = getPrivateMenuKeyboard();
   const rows = kb.reply_markup.keyboard;
   assert.deepStrictEqual(rows, [
-    [MENU_LABELS.MY_PROFILE, MENU_LABELS.WALLET],
-    [MENU_LABELS.REWARDS, MENU_LABELS.HELP],
-    [MENU_LABELS.DAILY_QUEST, MENU_LABELS.SHOP],
-    [MENU_LABELS.COMMUNITY_BUILDER],
+    [MENU_LABELS.WALLET, MENU_LABELS.DAILY_QUEST],
+    [MENU_LABELS.MY_PROFILE, MENU_LABELS.GAMES],
+    [MENU_LABELS.RANKINGS, MENU_LABELS.REWARDS],
+    [MENU_LABELS.SHOP, MENU_LABELS.COMMUNITY_BUILDER],
+    [MENU_LABELS.HELP],
     [MENU_LABELS.SNAKE, MENU_LABELS.BOUNCH],
   ]);
   assert.ok(rows.every((row) => row.length <= 2));
@@ -429,11 +432,12 @@ runTest("Points menu-button → bestaande points output", async () => {
   });
   const ctx = createMockCtx({ chatType: "private", userId: USER_A });
   handlePoints(ctx, { pointsFile: testPointsFile });
-  assert.ok(ctx.replies[0].text.includes("🥭 Your ManGo Progress"));
+  assert.ok(ctx.replies[0].text.includes("👤 My Profile"));
   assert.ok(ctx.replies[0].text.includes("XP: 5"));
   assert.ok(ctx.replies[0].text.includes("Weekly XP:"));
-  assert.ok(ctx.replies[0].text.includes("Claimed today:"));
-  assert.ok(ctx.replies[0].text.includes("Current streak:"));
+  assert.ok(!ctx.replies[0].text.includes("Claimed today:"));
+  assert.ok(ctx.replies[0].text.includes("Activity Streak:"));
+  assert.ok(ctx.replies[0].text.includes("Open 🎯 Daily Quest"));
 });
 
 runTest("Leaderboard menu-button → bestaande leaderboard output", async () => {
@@ -605,9 +609,13 @@ runTest("Points menu-button includes game claimed + unlock lines", async () => {
   const ctx = createMockCtx({ chatType: "private", userId: USER_A });
   handlePoints(ctx, { pointsFile: testPointsFile });
   const text = ctx.replies[0].text;
-  assert.ok(text.includes("⬜ Snake"));
-  assert.ok(text.includes("⬜ Bounch"));
-  assert.ok(text.includes("🎮 Bounch unlocks: 0 / 7"));
+  assert.ok(!text.includes("Claimed today:"));
+  assert.ok(text.includes("Open 🎯 Daily Quest"));
+  const user = loadPoints(testPointsFile).users[String(USER_A)];
+  const today = formatClaimedTodayLines(user);
+  assert.ok(today.includes("⬜ Snake"));
+  assert.ok(today.includes("⬜ Bounch"));
+  assert.ok(formatBounchUnlocksLine(user).includes("🎮 Bounch unlocks: 0 / 7"));
 });
 
 runTest("isPrivateMenuLabel exact match only", async () => {
@@ -629,20 +637,20 @@ runTest("/menu group toont Wallet en Rewards op hoofdmenu", async () => {
   assert.ok(rows.every((row) => row.length <= 2));
   const labels = rows.flat().map((b) => b.text);
   assert.deepStrictEqual(labels, [
-    "🏆 Rankings",
-    "🎮 Games",
-    "👤 My Profile",
     "👛 Wallet",
-    "🎁 Rewards",
-    "ℹ️ Help",
     "🎯 Daily Quest",
+    "👤 My Profile",
+    "🎮 Games",
+    "🏆 Rankings",
+    "🎁 Rewards",
     "🏪 ManGo Shop",
     "🤝 Community Builder",
+    "ℹ️ Help",
   ]);
   const streakLabels = labels.filter((t) => /streak/i.test(t));
   assert.strictEqual(streakLabels.length, 0);
-  const wallet = rows[1][1];
-  const rewards = rows[2][0];
+  const wallet = rows[0][0];
+  const rewards = rows[2][1];
   assert.strictEqual(wallet.url, `https://t.me/${BOT_USERNAME}?start=wallet`);
   assert.strictEqual(rewards.url, `https://t.me/${BOT_USERNAME}?start=rewards`);
 });
@@ -666,14 +674,14 @@ runTest("Rankings submenu layout", async () => {
       "Leaderboard",
       "Weekly",
       "Weekly Winners",
-      "Streak",
-      "Streak Record",
+      "Activity Streak",
+      "Longest Activity",
       "⬅️ Back",
     ]
   );
   assert.strictEqual(
     rows.flat().filter((b) => /streak/i.test(b.text)).length,
-    2
+    1
   );
 });
 
@@ -706,24 +714,22 @@ runTest("My Profile submenu deep-links", async () => {
   const rows = getInlineRows(getGroupProfileMenuExtra(ctx));
   assert.ok(rows.every((row) => row.length <= 2));
   const buttons = rows.flat();
-  const points = buttons.find((b) => b.text === "My Points");
-  const myStreak = buttons.find((b) => b.text === "My Streak");
-  assert.strictEqual(points.url, `https://t.me/${BOT_USERNAME}?start=points`);
-  assert.strictEqual(myStreak.url, `https://t.me/${BOT_USERNAME}?start=streak`);
-  const wallet = buttons.find((b) => b.text === "Wallet Status");
-  assert.strictEqual(wallet.url, `https://t.me/${BOT_USERNAME}?start=wallet`);
-  const rewards = buttons.find((b) => b.text === "Rewards");
-  assert.strictEqual(rewards.url, `https://t.me/${BOT_USERNAME}?start=rewards`);
+  const points = buttons.find((b) => b.text === "🎯 Daily Quest");
+  const myStreak = buttons.find((b) => b.text === "🏆 Rankings");
+  assert.ok(points.url === `https://t.me/${BOT_USERNAME}?start=dailyquest` || points.callback_data);
+  assert.ok(myStreak.callback_data === GROUP_MENU_CALLBACK.RANKINGS);
+  const wallet = buttons.find((b) => b.text === "👛 Wallet");
+  assert.ok(wallet.url === `https://t.me/${BOT_USERNAME}?start=wallet` || wallet.callback_data);
   assert.ok(buttons.some((b) => b.callback_data === GROUP_MENU_CALLBACK.BACK));
   assert.strictEqual(
     buttons.filter((b) => /streak/i.test(b.text)).length,
-    1
+    0
   );
   assert.deepStrictEqual(
     rows.map((row) => row.map((b) => b.text)),
     [
-      ["My Points", "My Streak"],
-      ["Wallet Status", "Rewards"],
+      ["🎯 Daily Quest", "👛 Wallet"],
+      ["🏆 Rankings"],
       ["⬅️ Back"],
     ]
   );
@@ -732,8 +738,8 @@ runTest("My Profile submenu deep-links", async () => {
       row.map((b) => b.text)
     ),
     [
-      ["My Points", "My Streak"],
-      ["Wallet Status", "Rewards"],
+      ["🎯 Daily Quest", "👛 Wallet"],
+      ["🏆 Rankings"],
       ["⬅️ Back"],
     ]
   );
@@ -746,10 +752,11 @@ runTest("/menu private toont reply-keyboard hint", async () => {
   assert.ok(ctx.replies[0].extra.reply_markup.keyboard);
   const rows = ctx.replies[0].extra.reply_markup.keyboard;
   assert.deepStrictEqual(rows, [
-    [MENU_LABELS.MY_PROFILE, MENU_LABELS.WALLET],
-    [MENU_LABELS.REWARDS, MENU_LABELS.HELP],
-    [MENU_LABELS.DAILY_QUEST, MENU_LABELS.SHOP],
-    [MENU_LABELS.COMMUNITY_BUILDER],
+    [MENU_LABELS.WALLET, MENU_LABELS.DAILY_QUEST],
+    [MENU_LABELS.MY_PROFILE, MENU_LABELS.GAMES],
+    [MENU_LABELS.RANKINGS, MENU_LABELS.REWARDS],
+    [MENU_LABELS.SHOP, MENU_LABELS.COMMUNITY_BUILDER],
+    [MENU_LABELS.HELP],
     [MENU_LABELS.SNAKE, MENU_LABELS.BOUNCH],
   ]);
   assert.ok(rows.every((row) => row.length <= 2));
@@ -775,10 +782,11 @@ runTest("/start points private → persoonlijke points", async () => {
     startPayload: "points",
   });
   handleStart(ctx, { pointsFile: testPointsFile });
-  assert.ok(ctx.replies[0].text.includes("🥭 Your ManGo Progress"));
+  assert.ok(ctx.replies[0].text.includes("👤 My Profile"));
   assert.ok(ctx.replies[0].text.includes("XP: 9"));
-  assert.ok(ctx.replies[0].text.includes("Claimed today:"));
-  assert.ok(ctx.replies[0].text.includes("Current streak:"));
+  assert.ok(!ctx.replies[0].text.includes("Claimed today:"));
+  assert.ok(ctx.replies[0].text.includes("Activity Streak:"));
+  assert.ok(ctx.replies[0].text.includes("Open 🎯 Daily Quest"));
 });
 
 runTest("/start points group → geen persoonlijke points", async () => {
@@ -845,7 +853,7 @@ runTest("Help callback toont bestaande help", async () => {
     })
   );
   await handleGroupMenuCallback(ctx);
-  assert.strictEqual(ctx.replies[0].text, HELP_MESSAGE);
+  assert.strictEqual(ctx.edits[0].text, HELP_MESSAGE);
 });
 
 runTest("Streak callback toont publieke current streak board", async () => {
@@ -857,7 +865,7 @@ runTest("Streak callback toont publieke current streak board", async () => {
   );
   await handleGroupMenuCallback(ctx, { pointsFile: testPointsFile });
   assert.strictEqual(ctx.answered.length, 1);
-  assert.ok(ctx.replies[0].text.includes("ManGo Active Streaks"));
+  assert.ok(ctx.replies[0].text.includes("Activity Streaks"));
 });
 
 runTest("Streak Record callback toont longest board", async () => {
@@ -868,7 +876,7 @@ runTest("Streak Record callback toont longest board", async () => {
     })
   );
   await handleGroupMenuCallback(ctx, { pointsFile: testPointsFile });
-  assert.ok(ctx.replies[0].text.includes("Longest ManGo Streaks"));
+  assert.ok(ctx.replies[0].text.includes("Longest Activity Streaks"));
 });
 
 runTest("Rankings / Games / Profile / Back navigation edits menu", async () => {
@@ -901,8 +909,11 @@ runTest("Rankings / Games / Profile / Back navigation edits menu", async () => {
       callbackData: GROUP_MENU_CALLBACK.PROFILE,
     })
   );
-  await handleGroupMenuCallback(profileCtx);
-  assert.strictEqual(profileCtx.edits[0].text, formatGroupProfileText("Ada"));
+  await handleGroupMenuCallback(profileCtx, { pointsFile: testPointsFile });
+  assert.ok(profileCtx.edits[0].text.includes("👤 My Profile"));
+  assert.ok(profileCtx.edits[0].text.includes("Name: Ada"));
+  assert.ok(profileCtx.edits[0].text.includes("Your ManGo progress at a glance."));
+  assert.ok(!profileCtx.edits[0].text.includes("Claimed today:"));
 
   const progressCtx = ownedCallback(
     createMockCtx({
@@ -910,8 +921,9 @@ runTest("Rankings / Games / Profile / Back navigation edits menu", async () => {
       callbackData: GROUP_MENU_CALLBACK.PROGRESS,
     })
   );
-  await handleGroupMenuCallback(progressCtx);
-  assert.strictEqual(progressCtx.edits[0].text, formatGroupProfileText("Ada"));
+  await handleGroupMenuCallback(progressCtx, { pointsFile: testPointsFile });
+  assert.ok(progressCtx.edits[0].text.includes("👤 My Profile"));
+  assert.ok(!progressCtx.edits[0].text.includes("Claimed today:"));
 
   const backCtx = ownedCallback(
     createMockCtx({
@@ -924,15 +936,15 @@ runTest("Rankings / Games / Profile / Back navigation edits menu", async () => {
   assert.deepStrictEqual(
     getInlineButtons(backCtx.edits[0].extra).map((b) => b.text),
     [
-      "🏆 Rankings",
-      "🎮 Games",
-      "👤 My Profile",
       "👛 Wallet",
-      "🎁 Rewards",
-      "ℹ️ Help",
       "🎯 Daily Quest",
+      "👤 My Profile",
+      "🎮 Games",
+      "🏆 Rankings",
+      "🎁 Rewards",
       "🏪 ManGo Shop",
       "🤝 Community Builder",
+      "ℹ️ Help",
     ]
   );
 });
@@ -1141,8 +1153,8 @@ runTest("/start streak private → persoonlijke streak, geen uid", async () => {
     startPayload: "streak",
   });
   handleStart(ctx, { pointsFile: testPointsFile });
-  assert.ok(ctx.replies[0].text.includes("Your ManGo Streak"));
-  assert.ok(ctx.replies[0].text.includes("Current streak:"));
+  assert.ok(ctx.replies[0].text.includes("Your Activity Streak"));
+  assert.ok(ctx.replies[0].text.includes("Activity Streak:"));
   assert.ok(!JSON.stringify(ctx.replies[0]).includes("uid="));
 });
 
@@ -1154,7 +1166,7 @@ runTest("/start streak group → geen persoonlijke streak dump", async () => {
   });
   handleStart(ctx, { pointsFile: testPointsFile });
   assert.strictEqual(ctx.replies[0].text, WELCOME_MESSAGE);
-  assert.ok(!ctx.replies[0].text.includes("Your ManGo Streak"));
+  assert.ok(!ctx.replies[0].text.includes("Your Activity Streak"));
 });
 
 runTest("owner can use their own group menu callbacks", async () => {
@@ -1285,10 +1297,11 @@ runTest("forgetting menu A does not affect menu B", async () => {
     callbackData: GROUP_MENU_CALLBACK.PROFILE,
   });
   await handleGroupMenuCallback(staleA);
-  await handleGroupMenuCallback(liveB);
+  await handleGroupMenuCallback(liveB, { pointsFile: testPointsFile });
   assert.deepStrictEqual(staleA.edits, []);
   assert.deepStrictEqual(staleA.answered, [MENU_EXPIRED_GENERIC]);
-  assert.strictEqual(liveB.edits[0].text, formatGroupProfileText("Piet"));
+  assert.ok(liveB.edits[0].text.includes("Name: Piet"));
+  assert.ok(liveB.edits[0].text.includes("👤 My Profile"));
 });
 
 runTest("Back on menu A does not change menu B", async () => {
@@ -1479,16 +1492,18 @@ runTest("/menu command skips daily activity", async () => {
 runTest("private My Profile submenu layout and Back", async () => {
   const ctx = createMockCtx({ chatType: "private" });
   handlePrivateProfile(ctx);
-  assert.ok(ctx.replies[0].text.includes(GROUP_PROFILE_TEXT));
-  assert.ok(ctx.replies[0].text.includes("Community Title:"));
+  assert.ok(ctx.replies[0].text.includes("👤 My Profile"));
+  assert.ok(ctx.replies[0].text.includes("Your ManGo progress at a glance."));
   assert.ok(ctx.replies[0].text.includes("ManGo Loot:"));
+  assert.ok(ctx.replies[0].text.includes("Builder Points (BP, not XP)"));
+  assert.ok(!ctx.replies[0].text.includes("Claimed today:"));
   const rows = getInlineRows(ctx.replies[0].extra);
   assert.ok(rows.every((row) => row.length <= 2));
   assert.deepStrictEqual(
     rows.map((row) => row.map((b) => b.text)),
     [
-      ["My Points", "My Streak"],
-      ["Wallet Status", "Rewards"],
+      ["🎯 Daily Quest", "👛 Wallet"],
+      ["🏆 Rankings"],
       ["⬅️ Back"],
     ]
   );

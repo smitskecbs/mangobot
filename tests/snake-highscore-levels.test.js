@@ -22,7 +22,7 @@ const { awardSnakeGameXp, loadPoints } = require("../services/points");
 require("../services/xpWalletGate").setXpWalletAutoLinkForTests(true);
 const { HELP_MESSAGE } = require("../commands/help");
 const { buildSnakeReply, buildSignedGameUrl } = require("../utils/gameLinks");
-const { MENU_LABELS } = require("../utils/botMenu");
+const { MENU_LABELS, PRIVATE_GAMES_TEXT } = require("../utils/botMenu");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-snake-levels-"));
 const testFile = path.join(tempDir, "snake-highscores.json");
@@ -162,16 +162,17 @@ await runTest("bot copy explains difficulties and keeps personal play link + hig
   assert.match(reply, /No level unlocking/);
   assert.match(reply, /\/snakehighscore/);
   assert.ok(reply.includes(built.url));
-  assert.match(HELP_MESSAGE, /Classic, Walls, Center, Danger Zone/);
-  assert.match(HELP_MESSAGE, /One leaderboard/);
-  assert.match(HELP_MESSAGE, /No unlocking/);
+  assert.match(PRIVATE_GAMES_TEXT, /Classic, Walls, Center, Danger Zone/);
+  assert.match(PRIVATE_GAMES_TEXT, /One leaderboard/);
+  assert.match(PRIVATE_GAMES_TEXT, /No unlocking/);
   assert.strictEqual(MENU_LABELS.SNAKE, "🎮 Play Snake");
 });
 
 await runTest("no new member slash-command is required", async () => {
-  assert.match(HELP_MESSAGE, /\/snake\n/);
+  assert.ok(HELP_MESSAGE.includes("/menu"));
   assert.doesNotMatch(HELP_MESSAGE, /\/snakedifficulty/);
   assert.doesNotMatch(HELP_MESSAGE, /\/snakelevel/);
+  assert.doesNotMatch(HELP_MESSAGE, /\/launch/);
 });
 
 

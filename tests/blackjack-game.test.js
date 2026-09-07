@@ -694,7 +694,7 @@ function createMockCtx(opts = {}) {
     const extra = getGroupGamesMenuExtra({ botInfo: { username: "ManGoBot" } });
     const blob = JSON.stringify(extra);
     assert.ok(blob.includes(GROUP_MENU_CALLBACK.BLACKJACK));
-    assert.ok(HELP_MESSAGE.includes("/blackjack"));
+    assert.ok(HELP_MESSAGE.includes("/menu"));
     assert.strictEqual(ACTION_REGISTRY.blackjack, undefined);
     const engineSrc = fs.readFileSync(
       path.join(__dirname, "../services/communityActivityEngine.js"),

@@ -289,13 +289,13 @@ runTest("12. points wallet status", async () => {
   const unverified = createMockCtx({ userId: 80 });
   handlePoints(unverified, { pointsFile, walletFile: file });
   assert.ok(unverified.replies[0].text.includes("Wallet: ⬜ Not linked"));
-  assert.ok(unverified.replies[0].text.includes("XP earning locked"));
+  assert.ok(unverified.replies[0].text.includes("XP earning: 🔒 Locked"));
   const wallet = generateSolanaWallet();
   connectUser(file, 80, wallet, 8000);
   const verified = createMockCtx({ userId: 80 });
   handlePoints(verified, { pointsFile, walletFile: file });
   assert.ok(verified.replies[0].text.includes("Wallet: ✅ Verified"));
-  assert.ok(!verified.replies[0].text.includes("XP earning locked"));
+  assert.ok(!verified.replies[0].text.includes("XP earning: 🔒 Locked"));
   assert.ok(!verified.replies[0].text.includes(wallet.address));
 });
 
@@ -382,28 +382,23 @@ runTest("menu Wallet Status deep-link", async () => {
   assert.deepStrictEqual(
     rows.map((row) => row.map((b) => b.text)),
     [
-      ["My Points", "My Streak"],
-      ["Wallet Status", "Rewards"],
+      ["🎯 Daily Quest", "👛 Wallet"],
+      ["🏆 Rankings"],
       ["⬅️ Back"],
     ]
   );
   assert.strictEqual(
-    rows[1][0].url,
+    rows[0][1].url,
     "https://t.me/ManGoMemeFunCommunityBot?start=wallet"
-  );
-  assert.strictEqual(
-    rows[1][1].url,
-    "https://t.me/ManGoMemeFunCommunityBot?start=rewards"
   );
 });
 
 runTest("help lists /wallet /mywallet /presale", async () => {
   const ctx = createMockCtx();
   handleHelp(ctx);
-  assert.ok(HELP_MESSAGE.includes("/wallet"));
-  assert.ok(HELP_MESSAGE.includes("/mywallet"));
-  assert.ok(HELP_MESSAGE.includes("/rewards"));
-  assert.ok(HELP_MESSAGE.includes("/presale"));
+  assert.ok(HELP_MESSAGE.includes("/menu"));
+  assert.ok(HELP_MESSAGE.includes("Wallet"));
+  assert.ok(!HELP_MESSAGE.includes("/launch"));
   assert.strictEqual(ctx.replies[0].text, HELP_MESSAGE);
 });
 

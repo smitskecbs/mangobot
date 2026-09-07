@@ -445,7 +445,7 @@ async function main() {
     const flat = JSON.stringify(rankings);
     assert.ok(flat.includes("Weekly Winners"));
     assert.ok(flat.includes(GROUP_MENU_CALLBACK.WEEKLY_WINNERS));
-    assert.ok(HELP_MESSAGE.includes("/weeklywinners"));
+    assert.ok(HELP_MESSAGE.includes("Rankings"));
 
     const wf = winnersFile();
     writeWinnersState(

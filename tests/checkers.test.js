@@ -740,7 +740,7 @@ async function main() {
   await runTest("community busy and menu/help wiring", async () => {
     assert.strictEqual(ACTION_REGISTRY.checkers.enabledForAuto, false);
     assert.strictEqual(GAME_TYPE.CHECKERS, "checkers");
-    assert.ok(HELP_MESSAGE.includes("/checkers"));
+    assert.ok(HELP_MESSAGE.includes("/menu"));
     assert.strictEqual(
       isCommunityChallengeBusy({
         isChatFightOpenFn: () => false,

@@ -1,58 +1,36 @@
 /**
- * /help — list available commands.
+ * /help — beginner-friendly ManGo loop. Slash commands still exist for power users.
  */
 
 const {
   isPrivateChat,
-  getPrivateMenuKeyboard,
+  getPrivateHelpMenuExtra,
 } = require("../utils/botMenu");
 
-const HELP_MESSAGE = `🥭 Commands
+const HELP_MESSAGE = `ℹ️ Help
 
-🥭 Community
-/menu
-/points
-/wallet
-/mywallet
-/rewards
-/presale
-/leaderboard
-/weekly
-/weeklywinners
-/builderboard
-/chatfight
-/tictactoe — Start Tic-Tac-Toe
-/connect4 — Start Connect Four
-/checkers — Start Checkers
-/trivia — Open Trivia categories
-/mangobomb — Start a ManGo Bomb round
-/blackjack — Start a ManGo Blackjack round
-/streak — Active streak leaderboard
-/streakrecord — Longest streak leaderboard
+ManGo is simple:
 
-🐍 Snake
-4 difficulties on the game page: Classic, Walls, Center, Danger Zone. Harder = more points. One leaderboard. No unlocking.
-/snake
-/snakehighscore
-/snakescore
+1. Register your wallet
+2. Open /menu
+3. Check Daily Quest
+4. Chat, play and join in
+5. Earn XP and build your Activity Streak
+6. Check Rankings
+7. Help ManGo grow in Community Builder to earn Builder Points (BP, not XP)
+8. Daily Quests earn ManGo Loot you can use in the Shop
 
-🏀 Bounch
-/bounch
-/bounchhighscore
-/bounchscore
+Rewards shows gifts and claims tied to your linked wallet.
 
-📖 Information
-/about
-/community
-/launch
-/links
-/rules
+Wallet comes first. XP and Loot stay locked until your wallet is linked.
 
-/help`;
+Open /menu anytime to get back.
+
+Power users can still type commands. You do not need them for ordinary use.`;
 
 function handleHelp(ctx) {
   if (isPrivateChat(ctx)) {
-    return ctx.reply(HELP_MESSAGE, getPrivateMenuKeyboard(ctx));
+    return ctx.reply(HELP_MESSAGE, getPrivateHelpMenuExtra());
   }
   return ctx.reply(HELP_MESSAGE);
 }

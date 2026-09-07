@@ -83,7 +83,7 @@ Join the conversation and keep ManGo active.`,
 
 GM / GMango / GN / GNango can earn daily XP.
 
-Check /points to see what you still have available.`,
+Check Daily Quest in /menu to see what you still have available.`,
   `⚔️ Ready for a ChatFight?
 
 An admin can start /chatfight or watch for the next community challenge.`,

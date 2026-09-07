@@ -13,7 +13,6 @@ const { encodeBase58 } = require("../utils/base58");
 const { signEd25519Detached } = require("../utils/ed25519");
 const {
   MENU_LABELS,
-  GROUP_PROFILE_TEXT,
   PRIVATE_MENU_HINT,
   GROUP_MENU_CALLBACK,
   PRIVATE_HUB_CALLBACK,
@@ -220,7 +219,8 @@ runTest("3. My Profile naam", () => {
   assert.ok(labels.includes("👤 My Profile"));
   assert.ok(!labels.includes("👤 My Progress"));
   const privateRows = getPrivateMenuKeyboard().reply_markup.keyboard;
-  assert.ok(privateRows[0].includes(MENU_LABELS.MY_PROFILE));
+  assert.ok(privateRows.some((row) => row.includes(MENU_LABELS.MY_PROFILE)));
+  assert.deepStrictEqual(privateRows[0], [MENU_LABELS.WALLET, MENU_LABELS.DAILY_QUEST]);
 });
 
 runTest("4. max 2 buttons per row", () => {
@@ -254,11 +254,12 @@ runTest("5. Back behavior", async () => {
   const profile = createMockCtx({ chatType: "private" });
   handlePrivateProfile(profile);
   assert.ok(
-    profile.replies[0].text.startsWith(GROUP_PROFILE_TEXT),
+    profile.replies[0].text.startsWith("👤 My Profile"),
     "private My Profile keeps the hub intro copy"
   );
-  assert.ok(profile.replies[0].text.includes("Community Title:"));
+  assert.ok(profile.replies[0].text.includes("Your ManGo progress at a glance."));
   assert.ok(profile.replies[0].text.includes("ManGo Loot:"));
+  assert.ok(!profile.replies[0].text.includes("Claimed today:"));
   const privateBack = createMockCtx({
     chatType: "private",
     callbackData: PRIVATE_HUB_CALLBACK.PROFILE_BACK,
@@ -597,9 +598,10 @@ runTest("group rewards/presale privacy + help commands", () => {
   assert.strictEqual(rewardsCtx.replies[0].text, GROUP_REWARDS_TEXT);
   assert.ok(!JSON.stringify(rewardsCtx.replies[0]).includes("55"));
   handleHelp(createMockCtx());
-  assert.ok(HELP_MESSAGE.includes("/wallet"));
-  assert.ok(HELP_MESSAGE.includes("/rewards"));
-  assert.ok(HELP_MESSAGE.includes("/presale"));
+  assert.ok(HELP_MESSAGE.includes("/menu"));
+  assert.ok(HELP_MESSAGE.includes("Daily Quest"));
+  assert.ok(HELP_MESSAGE.includes("Wallet"));
+  assert.ok(!HELP_MESSAGE.includes("/launch"));
   assert.ok(
     !HELP_MESSAGE.split("\n").some((line) => line.trim() === "/reward")
   );

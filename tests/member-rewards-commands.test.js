@@ -270,8 +270,8 @@ runTest("/start rewards private", () => {
 
 runTest("help lists /rewards /presale not admin reward internals", () => {
   handleHelp(createMockCtx());
-  assert.ok(HELP_MESSAGE.includes("/rewards"));
-  assert.ok(HELP_MESSAGE.includes("/presale"));
+  assert.ok(HELP_MESSAGE.includes("Rewards"));
+  assert.ok(!HELP_MESSAGE.includes("/launch"));
   assert.ok(!HELP_MESSAGE.includes("/membercheck"));
   assert.ok(!HELP_MESSAGE.includes("/memberrewards"));
   assert.ok(!HELP_MESSAGE.includes("/reconciledelivery"));

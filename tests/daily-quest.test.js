@@ -299,7 +299,7 @@ async function main() {
     const files = nextFiles();
     const ctx = mockPrivate();
     handleDailyQuest(ctx, communityOpts(files));
-    assert.ok(ctx.replies[0].text.includes("Loot earning locked"));
+    assert.ok(ctx.replies[0].text.includes("Connect your wallet first"));
     noteDailyQuestCommunity(USER, communityOpts(files));
     assert.strictEqual(getLootBalance(USER, files.shopFile), 0);
     const snap = getDailyQuestSnapshot(USER, communityOpts(files));
@@ -350,9 +350,15 @@ async function main() {
     const priv = mockPrivate();
     handleDailyQuest(priv, opts(files));
     assert.ok(priv.replies[0].text.includes("🎯 Daily Quest"));
+    assert.ok(priv.replies[0].text.includes("Your ManGo checklist for today"));
+    assert.ok(priv.replies[0].text.includes("⚡ XP TODAY"));
+    assert.ok(priv.replies[0].text.includes("🎯 DAILY QUESTS"));
+    assert.ok(priv.replies[0].text.includes("Complete Daily Quests to earn ManGo Loot"));
     assert.ok(priv.replies[0].text.includes("UTC"));
     assert.ok(priv.replies[0].text.includes("Today:"));
     assert.ok(priv.replies[0].text.includes("Complete each quest: +5"));
+    assert.ok(priv.replies[0].text.includes("🎯 Quest Streak:"));
+    assert.ok(!priv.replies[0].text.includes("🔥 Streak:"));
     const selected = selectQuestsForDate(utcDate(DAY));
     if (selected.includes(QUEST_IDS.BOT_GAME_1)) {
       assert.ok(priv.replies[0].text.includes("Snake and Bounch do not count"));
@@ -394,7 +400,7 @@ async function main() {
     fillDailyQuest(USER, selectQuestsForDate(utcDate(DAY))[1], opts(files));
     const block = formatShopProgressBlock(USER, opts(files));
     assert.ok(block.includes("🥭 ManGo Loot:"));
-    assert.ok(block.includes("🔥 Daily Streak: 0"));
+    assert.ok(block.includes("🎯 Quest Streak: 0"));
     assert.ok(block.includes("🎯 Today: 2/3"));
     const detail = loadMemberDetail(USER, opts(files));
     assert.ok(String(detail.dailyQuestToday).includes("2/3"));

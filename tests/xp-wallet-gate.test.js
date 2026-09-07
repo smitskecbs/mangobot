@@ -493,7 +493,7 @@ await runTest("/points locked copy", async () => {
     },
   };
   handlePoints(ctx, { pointsFile, walletFile });
-  assert.ok(ctx.replies[0].includes(XP_WALLET_LOCKED_POINTS_LINE));
+  assert.ok(ctx.replies[0].includes("XP earning: 🔒 Locked"));
   registerManualWallet(50, generateSolanaWallet().address, walletFile, 17_000);
   const linked = {
     chat: { type: "private" },
@@ -504,7 +504,8 @@ await runTest("/points locked copy", async () => {
     },
   };
   handlePoints(linked, { pointsFile, walletFile });
-  assert.ok(!linked.replies[0].includes("XP earning locked"));
+  assert.ok(linked.replies[0].includes("XP earning: ✅ Enabled"));
+  assert.ok(!linked.replies[0].includes("XP earning: 🔒 Locked"));
 });
 
 await runTest("slash commands do not claim daily XP", async () => {

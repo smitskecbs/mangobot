@@ -17,7 +17,10 @@ const {
   getPrivateMenuKeyboard,
 } = require("../utils/botMenu");
 
-const WELCOME_MESSAGE = "🥭 Welcome to ManGo Bot!\n\nType /help for commands.";
+const WELCOME_MESSAGE = `🥭 Welcome to ManGo Bot!
+
+Open /menu to get started.
+New here? Connect your wallet first, then check Daily Quest.`;
 
 /**
  * @param {object} ctx

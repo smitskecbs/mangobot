@@ -33,6 +33,8 @@ ${WALLET_REQUIREMENT_LINES.join("\n")}
 
 📌 Please read the Start Here topic first — it explains how ManGo, XP, games and the community work.
 
+Then open /menu in a private chat with the bot.
+
 🌐 Use /links for official ManGo links.
 
 Have fun, get involved and enjoy ManGo! 🥭`;
@@ -42,6 +44,8 @@ const WELCOME_TEXT_NO_WALLET_WARNING = (name) => `🥭 Welcome ${name}!
 Welcome to the ManGo community!
 
 📌 Please read the Start Here topic first — it explains how ManGo, XP, games and the community work.
+
+Then open /menu in a private chat with the bot.
 
 🌐 Use /links for official ManGo links.
 

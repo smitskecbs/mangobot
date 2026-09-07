@@ -1337,11 +1337,10 @@ async function main() {
     assert.ok(lines.includes(`PvP wins today: 0 / ${PVP_DAILY_WIN_CAP}`));
   });
 
-  await runTest("/help lists /tictactoe and /connect4", async () => {
-    assert.ok(HELP_MESSAGE.includes("/tictactoe"));
-    assert.ok(HELP_MESSAGE.includes("/connect4"));
-    assert.ok(HELP_MESSAGE.includes("/streak"));
-    assert.ok(HELP_MESSAGE.includes("/streakrecord"));
+  await runTest("help explains Games via /menu, not a command dump", async () => {
+    assert.ok(HELP_MESSAGE.includes("/menu"));
+    assert.ok(HELP_MESSAGE.includes("Daily Quest"));
+    assert.ok(!HELP_MESSAGE.includes("/launch"));
   });
 
   await runTest("activity engine metadata enabledForAuto", async () => {

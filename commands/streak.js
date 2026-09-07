@@ -14,6 +14,7 @@ const {
 const {
   isPrivateChat,
   getPrivateMenuKeyboard,
+  getRankingsResultExtra,
 } = require("../utils/botMenu");
 
 function handleStreak(ctx, options = {}) {
@@ -21,24 +22,24 @@ function handleStreak(ctx, options = {}) {
   const top = getCurrentStreakTop(data.users);
   let text;
   if (top.length === 0) {
-    text = `🔥 ManGo Active Streaks
+    text = `🔥 Activity Streaks
 
 No active streaks yet.
 
-Keep the streak alive by being active in the community every day. 🥭`;
+Keep your Activity Streak going by being active in the community every day. 🥭`;
   } else {
     const lines = formatCurrentStreakLines(top);
-    text = `🔥 ManGo Active Streaks
+    text = `🔥 Activity Streaks
 
 ${lines.join("\n")}
 
-Keep the streak alive by being active in the community every day. 🥭`;
+Keep your Activity Streak going by being active in the community every day. 🥭`;
   }
 
   if (isPrivateChat(ctx)) {
-    return ctx.reply(text, getPrivateMenuKeyboard());
+    return ctx.reply(text, getRankingsResultExtra(ctx));
   }
-  return ctx.reply(text);
+  return ctx.reply(text, getRankingsResultExtra(ctx));
 }
 
 function handleStreakRecord(ctx, options = {}) {
@@ -46,20 +47,20 @@ function handleStreakRecord(ctx, options = {}) {
   const top = getLongestStreakTop(data.users);
   let text;
   if (top.length === 0) {
-    text = `🏆 Longest ManGo Streaks
+    text = `🏆 Longest Activity Streaks
 
 No streak records yet.`;
   } else {
     const lines = formatLongestStreakLines(top);
-    text = `🏆 Longest ManGo Streaks
+    text = `🏆 Longest Activity Streaks
 
 ${lines.join("\n")}`;
   }
 
   if (isPrivateChat(ctx)) {
-    return ctx.reply(text, getPrivateMenuKeyboard());
+    return ctx.reply(text, getRankingsResultExtra(ctx));
   }
-  return ctx.reply(text);
+  return ctx.reply(text, getRankingsResultExtra(ctx));
 }
 
 function handleMyStreak(ctx, options = {}) {

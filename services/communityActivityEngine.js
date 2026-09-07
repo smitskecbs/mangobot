@@ -261,7 +261,7 @@ GNango 🥭`,
     `🥭 Remember:
 GM / GMango / GN / GNango can earn daily XP.
 
-Check /points to see what you still have available.`,
+Check Daily Quest in /menu to see what you still have available.`,
   ]),
   [ACTION_IDS.CHECKIN]: Object.freeze([
     `🥭 ManGo check-in

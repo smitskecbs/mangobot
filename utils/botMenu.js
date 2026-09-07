@@ -13,6 +13,8 @@ const MENU_LABELS = Object.freeze({
   COMMUNITY_BUILDER: "🤝 Community Builder",
   SHOP: "🏪 ManGo Shop",
   DAILY_QUEST: "🎯 Daily Quest",
+  RANKINGS: "🏆 Rankings",
+  GAMES: "🎮 Games",
   PHASE2: "🚀 Phase 2 Control Center",
   ADMIN: "🛠 Admin",
   SNAKE: "🎮 Play Snake",
@@ -27,14 +29,26 @@ const MENU_LABELS = Object.freeze({
 const MENU_LABEL_LIST = Object.freeze(Object.values(MENU_LABELS));
 
 const GROUP_MENU_TITLE = "🥭 ManGo Menu";
-const GROUP_MENU_BODY = "Choose what you want to explore.";
+const GROUP_MENU_BODY =
+  "Your ManGo hub.\nNew here? Start with Wallet, then check Daily Quest.";
 const GROUP_RANKINGS_TITLE = "🏆 Rankings";
-const GROUP_RANKINGS_BODY = "Check community progress and weekly competition.";
+const GROUP_RANKINGS_BODY =
+  "See how you compare on XP, weekly score, and Activity Streak.";
 const GROUP_GAMES_TITLE = "🎮 Games";
-const GROUP_GAMES_BODY = "Play, compete and challenge the community.";
+const GROUP_GAMES_BODY =
+  "Play here.\nSnake and Bounch open privately with your profile.\nTic-Tac-Toe, Connect Four, Checkers, Trivia, ManGo Bomb and Blackjack start in the Games topic.";
 const GROUP_PROFILE_TITLE = "👤 My Profile";
-const GROUP_PROFILE_BODY =
-  "Check your XP, streak, wallet status and rewards.";
+const GROUP_PROFILE_BODY = "Your ManGo progress at a glance.";
+const MAIN_MENU_BUTTON_LABEL = "🥭 Main Menu";
+const PRIVATE_GAMES_TEXT = `🎮 Games
+
+Play Snake and Bounch here with your profile.
+
+Snake has 4 difficulties on the game page: Classic, Walls, Center, Danger Zone. Harder = more points. One leaderboard. No unlocking.
+
+Tic-Tac-Toe, Connect Four, Checkers, Trivia, ManGo Bomb and Blackjack are played in the ManGo group, in the Games topic.
+
+Open /menu → Games there to start them.`;
 
 const GROUP_MENU_TEXT = `${GROUP_MENU_TITLE}\n\n${GROUP_MENU_BODY}`;
 
@@ -46,8 +60,7 @@ const GROUP_PROFILE_TEXT = `${GROUP_PROFILE_TITLE}\n\n${GROUP_PROFILE_BODY}`;
 
 const GROUP_PROGRESS_TEXT = GROUP_PROFILE_TEXT;
 
-const PRIVATE_MENU_HINT =
-  "🥭 Use the menu below to open your profile, wallet, daily quest, shop, or play.";
+const PRIVATE_MENU_HINT = `${GROUP_MENU_TITLE}\n\n${GROUP_MENU_BODY}`;
 
 const GROUP_MENU_CALLBACK = Object.freeze({
   RANKINGS: "gmenu:rankings",
@@ -81,6 +94,14 @@ const PRIVATE_HUB_CALLBACK = Object.freeze({
   STREAK: "phub:streak",
   WALLET_STATUS: "phub:wallet",
   REWARDS: "phub:rewards",
+  DAILY_QUEST: "phub:dquest",
+  RANKINGS: "phub:rankings",
+  GAMES: "phub:games",
+  LEADERBOARD: "phub:lb",
+  WEEKLY: "phub:weekly",
+  WEEKLY_WINNERS: "phub:weeklywinners",
+  STREAK_BOARD: "phub:streakboard",
+  STREAK_RECORD: "phub:streakrecord",
 });
 
 const GROUP_SNAKE_MESSAGE =
@@ -265,10 +286,11 @@ function keyboardUserId(ctxOrUserId) {
 
 function getPrivateMenuKeyboard(ctxOrUserId) {
   const rows = [
-    [MENU_LABELS.MY_PROFILE, MENU_LABELS.WALLET],
-    [MENU_LABELS.REWARDS, MENU_LABELS.HELP],
-    [MENU_LABELS.DAILY_QUEST, MENU_LABELS.SHOP],
-    [MENU_LABELS.COMMUNITY_BUILDER],
+    [MENU_LABELS.WALLET, MENU_LABELS.DAILY_QUEST],
+    [MENU_LABELS.MY_PROFILE, MENU_LABELS.GAMES],
+    [MENU_LABELS.RANKINGS, MENU_LABELS.REWARDS],
+    [MENU_LABELS.SHOP, MENU_LABELS.COMMUNITY_BUILDER],
+    [MENU_LABELS.HELP],
     [MENU_LABELS.SNAKE, MENU_LABELS.BOUNCH],
   ];
   if (isAdmin(keyboardUserId(ctxOrUserId))) {
@@ -325,32 +347,29 @@ function privateDeepLinkButton(ctx, label, payload, fallbackCallback) {
 function getGroupMenuExtra(ctx) {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("🏆 Rankings", GROUP_MENU_CALLBACK.RANKINGS),
-      Markup.button.callback("🎮 Games", GROUP_MENU_CALLBACK.GAMES),
-    ],
-    [
-      Markup.button.callback("👤 My Profile", GROUP_MENU_CALLBACK.PROFILE),
       privateDeepLinkButton(ctx, "👛 Wallet", "wallet", GROUP_MENU_CALLBACK.WALLET),
-    ],
-    [
-      privateDeepLinkButton(ctx, "🎁 Rewards", "rewards", GROUP_MENU_CALLBACK.REWARDS),
-      Markup.button.callback("ℹ️ Help", GROUP_MENU_CALLBACK.HELP),
-    ],
-    [
       privateDeepLinkButton(
         ctx,
         "🎯 Daily Quest",
         "dailyquest",
         GROUP_MENU_CALLBACK.DAILY_QUEST
       ),
+    ],
+    [
+      Markup.button.callback("👤 My Profile", GROUP_MENU_CALLBACK.PROFILE),
+      Markup.button.callback("🎮 Games", GROUP_MENU_CALLBACK.GAMES),
+    ],
+    [
+      Markup.button.callback("🏆 Rankings", GROUP_MENU_CALLBACK.RANKINGS),
+      privateDeepLinkButton(ctx, "🎁 Rewards", "rewards", GROUP_MENU_CALLBACK.REWARDS),
+    ],
+    [
       privateDeepLinkButton(
         ctx,
         "🏪 ManGo Shop",
         "shop",
         GROUP_MENU_CALLBACK.SHOP
       ),
-    ],
-    [
       privateDeepLinkButton(
         ctx,
         "🤝 Community Builder",
@@ -358,6 +377,7 @@ function getGroupMenuExtra(ctx) {
         GROUP_MENU_CALLBACK.BUILDER
       ),
     ],
+    [Markup.button.callback("ℹ️ Help", GROUP_MENU_CALLBACK.HELP)],
   ]);
 }
 
@@ -376,11 +396,104 @@ function getGroupRankingsMenuExtra() {
         "Weekly Winners",
         GROUP_MENU_CALLBACK.WEEKLY_WINNERS
       ),
-      Markup.button.callback("Streak", GROUP_MENU_CALLBACK.STREAK),
+      Markup.button.callback("Activity Streak", GROUP_MENU_CALLBACK.STREAK),
     ],
     [
-      Markup.button.callback("Streak Record", GROUP_MENU_CALLBACK.STREAK_RECORD),
+      Markup.button.callback(
+        "Longest Activity",
+        GROUP_MENU_CALLBACK.STREAK_RECORD
+      ),
       Markup.button.callback("⬅️ Back", GROUP_MENU_CALLBACK.BACK),
+    ],
+  ]);
+}
+
+function getRankingsResultExtra(ctx) {
+  if (isPrivateChat(ctx)) {
+    return Markup.inlineKeyboard([
+      [Markup.button.callback("⬅️ Rankings", PRIVATE_HUB_CALLBACK.RANKINGS)],
+      [Markup.button.callback(MAIN_MENU_BUTTON_LABEL, PRIVATE_HUB_CALLBACK.PROFILE_BACK)],
+    ]);
+  }
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("⬅️ Rankings", GROUP_MENU_CALLBACK.RANKINGS)],
+    [Markup.button.callback(MAIN_MENU_BUTTON_LABEL, GROUP_MENU_CALLBACK.BACK)],
+  ]);
+}
+
+function getPrivateRankingsMenuExtra() {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback("Leaderboard", PRIVATE_HUB_CALLBACK.LEADERBOARD),
+      Markup.button.callback("Weekly", PRIVATE_HUB_CALLBACK.WEEKLY),
+    ],
+    [
+      Markup.button.callback(
+        "Weekly Winners",
+        PRIVATE_HUB_CALLBACK.WEEKLY_WINNERS
+      ),
+      Markup.button.callback(
+        "Activity Streak",
+        PRIVATE_HUB_CALLBACK.STREAK_BOARD
+      ),
+    ],
+    [
+      Markup.button.callback(
+        "Longest Activity",
+        PRIVATE_HUB_CALLBACK.STREAK_RECORD
+      ),
+      Markup.button.callback("⬅️ Back", PRIVATE_HUB_CALLBACK.PROFILE_BACK),
+    ],
+  ]);
+}
+
+function getPrivateGamesMenuExtra(ctx) {
+  const username = resolveBotUsername(ctx);
+  const snakeUrl = buildPrivateDeepLink(username, "snake");
+  const bounchUrl = buildPrivateDeepLink(username, "bounch");
+  const rows = [];
+  const playRow = [];
+  if (snakeUrl) {
+    playRow.push(Markup.button.url("🐍 Play Snake", snakeUrl));
+  }
+  if (bounchUrl) {
+    playRow.push(Markup.button.url("🏀 Play Bounch", bounchUrl));
+  }
+  if (playRow.length) {
+    rows.push(playRow);
+  }
+  rows.push([
+    Markup.button.callback("⬅️ Back", PRIVATE_HUB_CALLBACK.PROFILE_BACK),
+  ]);
+  return Markup.inlineKeyboard(rows);
+}
+
+function getGroupHelpMenuExtra(ctx) {
+  return Markup.inlineKeyboard([
+    [
+      privateDeepLinkButton(ctx, "👛 Wallet", "wallet", GROUP_MENU_CALLBACK.WALLET),
+      privateDeepLinkButton(
+        ctx,
+        "🎯 Daily Quest",
+        "dailyquest",
+        GROUP_MENU_CALLBACK.DAILY_QUEST
+      ),
+    ],
+    [Markup.button.callback("⬅️ Back", GROUP_MENU_CALLBACK.BACK)],
+  ]);
+}
+
+function getPrivateHelpMenuExtra() {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback("👛 Wallet", PRIVATE_HUB_CALLBACK.WALLET_STATUS),
+      Markup.button.callback("🎯 Daily Quest", PRIVATE_HUB_CALLBACK.DAILY_QUEST),
+    ],
+    [
+      Markup.button.callback(
+        MAIN_MENU_BUTTON_LABEL,
+        PRIVATE_HUB_CALLBACK.PROFILE_BACK
+      ),
     ],
   ]);
 }
@@ -432,34 +545,29 @@ function getGroupGamesMenuExtra(ctx) {
  */
 function getGroupProfileMenuExtra(ctx, backCallback = GROUP_MENU_CALLBACK.BACK) {
   const username = resolveBotUsername(ctx);
-  const pointsUrl = buildPrivateDeepLink(username, "points");
-  const streakUrl = buildPrivateDeepLink(username, "streak");
+  const questUrl = buildPrivateDeepLink(username, "dailyquest");
   const walletUrl = buildPrivateDeepLink(username, "wallet");
-  const rewardsUrl = buildPrivateDeepLink(username, "rewards");
-
-  const personalRow = [];
-  if (pointsUrl) {
-    personalRow.push(Markup.button.url("My Points", pointsUrl));
-  }
-  if (streakUrl) {
-    personalRow.push(Markup.button.url("My Streak", streakUrl));
-  }
 
   const rows = [];
-  if (personalRow.length) {
-    rows.push(personalRow);
+  const first = [];
+  if (questUrl) {
+    first.push(Markup.button.url("🎯 Daily Quest", questUrl));
+  } else {
+    first.push(
+      Markup.button.callback("🎯 Daily Quest", GROUP_MENU_CALLBACK.DAILY_QUEST)
+    );
   }
-
-  const statusRow = [];
   if (walletUrl) {
-    statusRow.push(Markup.button.url("Wallet Status", walletUrl));
+    first.push(Markup.button.url("👛 Wallet", walletUrl));
+  } else {
+    first.push(
+      Markup.button.callback("👛 Wallet", GROUP_MENU_CALLBACK.WALLET)
+    );
   }
-  if (rewardsUrl) {
-    statusRow.push(Markup.button.url("Rewards", rewardsUrl));
-  }
-  if (statusRow.length) {
-    rows.push(statusRow);
-  }
+  rows.push(first);
+  rows.push([
+    Markup.button.callback("🏆 Rankings", GROUP_MENU_CALLBACK.RANKINGS),
+  ]);
   rows.push([Markup.button.callback("⬅️ Back", backCallback)]);
 
   return Markup.inlineKeyboard(rows);
@@ -472,16 +580,10 @@ function getGroupProgressMenuExtra(ctx) {
 function getPrivateProfileMenuExtra() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("My Points", PRIVATE_HUB_CALLBACK.POINTS),
-      Markup.button.callback("My Streak", PRIVATE_HUB_CALLBACK.STREAK),
+      Markup.button.callback("🎯 Daily Quest", PRIVATE_HUB_CALLBACK.DAILY_QUEST),
+      Markup.button.callback("👛 Wallet", PRIVATE_HUB_CALLBACK.WALLET_STATUS),
     ],
-    [
-      Markup.button.callback(
-        "Wallet Status",
-        PRIVATE_HUB_CALLBACK.WALLET_STATUS
-      ),
-      Markup.button.callback("Rewards", PRIVATE_HUB_CALLBACK.REWARDS),
-    ],
+    [Markup.button.callback("🏆 Rankings", PRIVATE_HUB_CALLBACK.RANKINGS)],
     [Markup.button.callback("⬅️ Back", PRIVATE_HUB_CALLBACK.PROFILE_BACK)],
   ]);
 }
@@ -492,7 +594,15 @@ function isPrivateHubCallback(data) {
     data === PRIVATE_HUB_CALLBACK.POINTS ||
     data === PRIVATE_HUB_CALLBACK.STREAK ||
     data === PRIVATE_HUB_CALLBACK.WALLET_STATUS ||
-    data === PRIVATE_HUB_CALLBACK.REWARDS
+    data === PRIVATE_HUB_CALLBACK.REWARDS ||
+    data === PRIVATE_HUB_CALLBACK.DAILY_QUEST ||
+    data === PRIVATE_HUB_CALLBACK.RANKINGS ||
+    data === PRIVATE_HUB_CALLBACK.GAMES ||
+    data === PRIVATE_HUB_CALLBACK.LEADERBOARD ||
+    data === PRIVATE_HUB_CALLBACK.WEEKLY ||
+    data === PRIVATE_HUB_CALLBACK.WEEKLY_WINNERS ||
+    data === PRIVATE_HUB_CALLBACK.STREAK_BOARD ||
+    data === PRIVATE_HUB_CALLBACK.STREAK_RECORD
   );
 }
 
@@ -544,6 +654,8 @@ module.exports = {
   GROUP_GAMES_TEXT,
   GROUP_PROFILE_TEXT,
   GROUP_PROGRESS_TEXT,
+  PRIVATE_GAMES_TEXT,
+  MAIN_MENU_BUTTON_LABEL,
   formatOwnedMenuText,
   formatGroupMenuText,
   formatGroupRankingsText,
@@ -571,6 +683,11 @@ module.exports = {
   getGroupGameGateExtra,
   getGroupMenuExtra,
   getGroupRankingsMenuExtra,
+  getRankingsResultExtra,
+  getPrivateRankingsMenuExtra,
+  getPrivateGamesMenuExtra,
+  getGroupHelpMenuExtra,
+  getPrivateHelpMenuExtra,
   getGroupGamesMenuExtra,
   getGroupProfileMenuExtra,
   getGroupProgressMenuExtra,

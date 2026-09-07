@@ -20,6 +20,12 @@ const {
 const { isCommunityCompetitionExcluded } = require("../utils/competition");
 const { getMemberWalletProfile } = require("./memberWalletProfile");
 const { normalizeUserId } = require("./walletLinks");
+const {
+  XP_EARNING_ENABLED_LINE,
+  XP_EARNING_LOCKED_LINE,
+} = require("./xpWalletGate");
+const { getLootAccount } = require("./mangoLoot");
+const { readAlltimeBp } = require("./mangoShop");
 
 function getMemberActivityProfile(userId, options = {}) {
   const telegramUserId = normalizeUserId(userId);
@@ -79,6 +85,58 @@ function getMemberActivityProfile(userId, options = {}) {
   };
 }
 
+function formatMemberStatusCard(userId, options = {}) {
+  const profile = getMemberActivityProfile(userId, options);
+  const rawName =
+    typeof options.displayName === "string" && options.displayName.trim()
+      ? options.displayName.trim()
+      : profile.displayName;
+  const name = rawName || "there";
+  let loot = 0;
+  let bp = 0;
+  try {
+    loot = getLootAccount(userId, options.shopFile).balance;
+  } catch (_err) {
+    loot = 0;
+  }
+  try {
+    const value = readAlltimeBp(userId, options);
+    bp = typeof value === "number" ? value : 0;
+  } catch (_err) {
+    bp = 0;
+  }
+  const xpEnabled = Boolean(
+    profile.wallet && (profile.wallet.verified || profile.wallet.registered)
+  );
+  const walletLine = profile.wallet.verified
+    ? "Wallet: ✅ Verified"
+    : profile.wallet.registered
+      ? "Wallet: 🟡 Registered"
+      : "Wallet: ⬜ Not linked";
+  return [
+    "👤 My Profile",
+    "Your ManGo progress at a glance.",
+    "",
+    `Name: ${name}`,
+    walletLine,
+    "",
+    `XP: ${profile.xp.lifetime}`,
+    `Weekly XP: ${profile.xp.weekly}`,
+    `Rank: ${profile.rank.emoji} ${profile.rank.title}`,
+    "",
+    `🔥 Activity Streak: ${profile.streak.current} days`,
+    `🏆 Longest Activity Streak: ${profile.streak.longest} days`,
+    "",
+    `🤝 Builder Points (BP, not XP): ${bp}`,
+    `🥭 ManGo Loot: ${loot}`,
+    "",
+    xpEnabled ? XP_EARNING_ENABLED_LINE : XP_EARNING_LOCKED_LINE,
+    "",
+    "Looking for today's activities? Open 🎯 Daily Quest.",
+  ].join("\n");
+}
+
 module.exports = {
   getMemberActivityProfile,
+  formatMemberStatusCard,
 };

@@ -18,6 +18,11 @@ const {
   BASE_DAILY_MAX,
   setDailyQuestMessenger,
 } = require("../services/dailyQuest");
+const {
+  loadPoints,
+  getUserRecord,
+  formatClaimedTodayLines,
+} = require("../services/points");
 
 const GROUP_QUEST_TEXT =
   "Open a private chat with the bot to use Daily Quest.";
@@ -70,7 +75,7 @@ function lockedKeyboard() {
 function homeKeyboard() {
   return Markup.inlineKeyboard([
     [btn("🔄 Refresh", DQUEST_CALLBACK.REFRESH)],
-    [btn("🏪 ManGo Shop", DQUEST_CALLBACK.SHOP)],
+    [btn("👛 Wallet", "phub:wallet"), btn("🏪 ManGo Shop", DQUEST_CALLBACK.SHOP)],
     [btn("⬅️ Back", "phub:back")],
   ]);
 }
@@ -95,10 +100,13 @@ function formatQuestBlock(quest) {
 function buildLockedText() {
   return [
     "🎯 Daily Quest",
+    "Your ManGo checklist for today 🥭",
     "",
-    "🔒 Loot earning locked",
+    "🔒 Connect your wallet first.",
     "",
-    "Link a Solana wallet to your ManGo profile first.",
+    "XP and Daily Quests stay locked until a wallet is linked to your ManGo profile.",
+    "",
+    "Open 👛 Wallet, then come back here.",
   ].join("\n");
 }
 
@@ -107,10 +115,20 @@ function buildHomeText(userId, options) {
   if (!snap.lootUnlocked) {
     return buildLockedText();
   }
+  const data = loadPoints(options.pointsFile);
+  const user = getUserRecord(data, userId);
+  const xpToday = formatClaimedTodayLines(user);
   const blocks = (snap.questList || []).map((quest) => formatQuestBlock(quest));
   return [
     "🎯 Daily Quest",
+    "Your ManGo checklist for today 🥭",
     snap.dateLabel || snap.date,
+    "",
+    "⚡ XP TODAY",
+    xpToday,
+    "",
+    "🎯 DAILY QUESTS",
+    "Complete Daily Quests to earn ManGo Loot.",
     "",
     ...blocks.reduce((acc, block, idx) => {
       if (idx > 0) {
@@ -120,15 +138,12 @@ function buildHomeText(userId, options) {
       return acc;
     }, []),
     "",
-    "🥭 ManGo Loot",
     `Complete each quest: +${ACTIVITY_LOOT}`,
     `Complete all 3: +${FULL_COMPLETION_LOOT} bonus`,
     "",
     `Today: ${snap.completedToday} / 3`,
-    "",
-    `🔥 Streak: ${snap.streak} days`,
-    "",
     `Today's Loot: ${Math.min(snap.lootAwardedToday, BASE_DAILY_MAX)} / ${BASE_DAILY_MAX}`,
+    `🎯 Quest Streak: ${snap.streak} days`,
   ].join("\n");
 }
 

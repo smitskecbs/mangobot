@@ -771,7 +771,7 @@ runTest("33. gm/gmango triggers still work normally", async () => {
 
 runTest("34. menu labels unaffected", async () => {
   assert.ok(MENU_LABELS.POINTS);
-  assert.ok(HELP_MESSAGE.includes("/chatfight"));
+  assert.ok(HELP_MESSAGE.includes("/menu"));
   const ctx = createMockCtx({
     chatType: "private",
     text: MENU_LABELS.POINTS,
