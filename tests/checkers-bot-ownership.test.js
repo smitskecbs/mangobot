@@ -91,14 +91,32 @@ function startOpen(service, userId = USER_A, name = "Kevin") {
   });
   assert.strictEqual(started.ok, true);
   service.setMessageId(started.session.id, 5001);
-  return started;
+  const waiting = service.chooseMode({
+    sessionId: started.session.id,
+    userId,
+    mode: "pvp",
+    chatId: COMMUNITY_CHAT,
+  });
+  assert.strictEqual(waiting.ok, true);
+  return { ok: true, session: waiting.session };
 }
 
 function startVsBot(service) {
-  const started = startOpen(service);
-  const expired = service.expireJoin(started.session.id);
-  assert.strictEqual(expired.session.opponentType, "bot");
-  return started;
+  const started = service.startChallenge({
+    chatId: COMMUNITY_CHAT,
+    starter: { userId: USER_A, displayName: "Kevin", isBot: false },
+  });
+  assert.strictEqual(started.ok, true);
+  service.setMessageId(started.session.id, 5001);
+  const bot = service.chooseMode({
+    sessionId: started.session.id,
+    userId: USER_A,
+    mode: "bot",
+    chatId: COMMUNITY_CHAT,
+  });
+  assert.strictEqual(bot.ok, true);
+  assert.strictEqual(bot.session.opponentType, "bot");
+  return { ok: true, session: bot.session };
 }
 
 function joinPvp(service, sessionId, userId = USER_B, name = "Pippi") {
@@ -335,7 +353,7 @@ async function main() {
       chatId: COMMUNITY_CHAT,
     });
     assert.strictEqual(stale.ok, false);
-    assert.strictEqual(stale.reason, "invalid-piece");
+    assert.strictEqual(stale.reason, "empty");
     assert.ok(stale.rendered);
     assert.strictEqual(labelAt(stale.rendered, 13), EMPTY_DARK);
     assert.strictEqual(labelAt(stale.rendered, 20), MARK_B);
@@ -347,7 +365,7 @@ async function main() {
       runtime: service,
       parseCallbackData: parsePvpCallbackData,
     });
-    assert.ok(ctx.answered.some((text) => text.includes("That's not your piece.")));
+    assert.ok(ctx.answered.some((text) => text.includes("That square is empty.")));
     assert.ok(ctx.edits.length >= 1);
     const refreshed = ctx.edits[ctx.edits.length - 1];
     const pos = sqToRowCol(13);

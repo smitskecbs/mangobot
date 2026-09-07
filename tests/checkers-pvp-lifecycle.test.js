@@ -96,7 +96,14 @@ function startKevinLobby(service) {
   });
   assert.strictEqual(started.ok, true);
   service.setMessageId(started.session.id, 8001);
-  return started;
+  const waiting = service.chooseMode({
+    sessionId: started.session.id,
+    userId: KEVIN,
+    mode: "pvp",
+    chatId: COMMUNITY_CHAT,
+  });
+  assert.strictEqual(waiting.ok, true);
+  return { ok: true, session: waiting.session };
 }
 
 function pippiJoins(service, sessionId) {
@@ -309,7 +316,7 @@ async function main() {
     assert.ok(!applied.some((text) => text.includes("This game has ended.")));
     const last = applied[applied.length - 1];
     if (last) {
-      assert.ok(last.includes("CHECKERS"));
+      assert.ok(last.includes("Checkers"));
       assert.ok(!last.includes("looking for an opponent"));
     }
   });

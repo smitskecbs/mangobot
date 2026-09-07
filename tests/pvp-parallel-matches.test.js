@@ -207,6 +207,12 @@ async function main() {
       displayName: "Pippi",
       chatId: COMMUNITY_CHAT,
     });
+    chk.chooseMode({
+      sessionId: k.session.id,
+      userId: USER_C,
+      mode: "pvp",
+      chatId: COMMUNITY_CHAT,
+    });
     chk.join({
       sessionId: k.session.id,
       userId: USER_D,

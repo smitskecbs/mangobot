@@ -18,6 +18,11 @@ const {
 const {
   parsePvpCallbackData: parseChkCallbackData,
   getCheckersRuntime,
+  MUST_CAPTURE_TOAST,
+  NOT_YOUR_PIECE_TOAST,
+  EMPTY_SQUARE_TOAST,
+  STALE_BOARD_TOAST,
+  NO_MOVES_TOAST,
 } = require("../services/checkers");
 const {
   GAME_OVER_TOAST,
@@ -56,6 +61,13 @@ function pvpSnapshotStillCurrent(runtime, sessionSnap) {
     sessionSnap.turnGeneration != null &&
     live.turnGeneration != null &&
     Number(live.turnGeneration) !== Number(sessionSnap.turnGeneration)
+  ) {
+    return false;
+  }
+  if (
+    sessionSnap.boardGeneration != null &&
+    live.boardGeneration != null &&
+    Number(live.boardGeneration) !== Number(sessionSnap.boardGeneration)
   ) {
     return false;
   }
@@ -153,6 +165,19 @@ async function safeEdit(ctx, text, extra) {
     );
   }
   return false;
+}
+
+async function applyRenderedEdit(ctx, runtime, parsed, rendered) {
+  let edited = false;
+  if (rendered && rendered.text) {
+    edited = await safeEdit(ctx, rendered.text, rendered.extra);
+  }
+  if (!edited && parsed && parsed.game === "checkers") {
+    await refreshLivePvpBoard(ctx, runtime, parsed.sessionId);
+  } else if (!edited && parsed && parsed.game === "tictactoe") {
+    await refreshLivePvpBoard(ctx, runtime, parsed.sessionId);
+  }
+  return edited;
 }
 
 async function refreshLivePvpBoard(ctx, runtime, sessionId) {
@@ -409,6 +434,44 @@ async function handlePvpCallbackBody(ctx, options = {}) {
     return;
   }
 
+  if (parsed.action === "mode") {
+    if (typeof runtime.chooseMode !== "function") {
+      await cbAnswer(ctx, "Invalid move.");
+      return;
+    }
+    const result = runtime.chooseMode({
+      sessionId: parsed.sessionId,
+      userId,
+      mode: parsed.mode,
+      chatId,
+    });
+    if (!result.ok) {
+      if (result.reason === "not-starter") {
+        await cbAnswer(ctx, "Only the player who started this can choose.");
+      } else if (result.reason === "player-busy") {
+        await cbAnswer(ctx, PLAYER_BUSY_TEXT);
+      } else if (
+        result.reason === "invalid-session" ||
+        result.reason === "not-waiting" ||
+        result.reason === "wrong-phase"
+      ) {
+        await rejectStalePvp(ctx, runtime, parsed);
+        return;
+      } else if (result.reason === "wrong-chat") {
+        await cbAnswer(ctx, "Wrong chat.");
+      } else {
+        await cbAnswer(ctx, "Could not start.");
+      }
+      if (result.rendered) {
+        await applyRenderedEdit(ctx, runtime, parsed, result.rendered);
+      }
+      return;
+    }
+    await cbAnswer(ctx);
+    await applyRenderedEdit(ctx, runtime, parsed, result.rendered);
+    return;
+  }
+
   if (parsed.action === "sel") {
     if (typeof runtime.select !== "function") {
       await cbAnswer(ctx, "Invalid move.");
@@ -418,6 +481,7 @@ async function handlePvpCallbackBody(ctx, options = {}) {
       sessionId: parsed.sessionId,
       userId,
       square: parsed.square,
+      generation: parsed.generation,
       chatId,
     });
 
@@ -427,9 +491,15 @@ async function handlePvpCallbackBody(ctx, options = {}) {
       } else if (result.reason === "outsider") {
         await cbAnswer(ctx, "This game belongs to two other players.");
       } else if (result.reason === "invalid-piece") {
-        await cbAnswer(ctx, "That's not your piece.");
+        await cbAnswer(ctx, NOT_YOUR_PIECE_TOAST);
+      } else if (result.reason === "empty") {
+        await cbAnswer(ctx, EMPTY_SQUARE_TOAST);
+      } else if (result.reason === "must-capture") {
+        await cbAnswer(ctx, MUST_CAPTURE_TOAST);
+      } else if (result.reason === "stale-board") {
+        await cbAnswer(ctx, STALE_BOARD_TOAST);
       } else if (result.reason === "no-moves") {
-        await cbAnswer(ctx, "That piece has no moves.");
+        await cbAnswer(ctx, NO_MOVES_TOAST);
       } else if (result.reason === "must-continue") {
         await cbAnswer(ctx, "You must continue with the same piece.");
       } else if (
@@ -444,16 +514,29 @@ async function handlePvpCallbackBody(ctx, options = {}) {
       } else {
         await cbAnswer(ctx, "Invalid move.");
       }
-      if (result.rendered) {
-        await safeEdit(ctx, result.rendered.text, result.rendered.extra);
+      await applyRenderedEdit(ctx, runtime, parsed, result.rendered);
+      return;
+    }
+
+    if (result.moved) {
+      await cbAnswer(ctx);
+      await applyRenderedEdit(ctx, runtime, parsed, result.rendered);
+      if (result.needsXp) {
+        const fin = await finalizeWinXp(runtime, parsed.sessionId, awardXpFn);
+        if (fin.rendered) {
+          await applyRenderedEdit(ctx, runtime, parsed, fin.rendered);
+        }
       }
+      schedulePvpSessionCleanup(
+        result.session,
+        ctx.telegram,
+        pvpGameType(parsed)
+      );
       return;
     }
 
     await cbAnswer(ctx);
-    if (result.rendered) {
-      await safeEdit(ctx, result.rendered.text, result.rendered.extra);
-    }
+    await applyRenderedEdit(ctx, runtime, parsed, result.rendered);
     return;
   }
 
@@ -465,6 +548,7 @@ async function handlePvpCallbackBody(ctx, options = {}) {
       column: parsed.column,
       from: parsed.from,
       to: parsed.to,
+      generation: parsed.generation,
       chatId,
     });
 
@@ -478,7 +562,11 @@ async function handlePvpCallbackBody(ctx, options = {}) {
       } else if (result.reason === "full") {
         await cbAnswer(ctx, "That column is full.");
       } else if (result.reason === "must-capture") {
-        await cbAnswer(ctx, "You must capture.");
+        await cbAnswer(ctx, MUST_CAPTURE_TOAST);
+      } else if (result.reason === "stale-board") {
+        await cbAnswer(ctx, STALE_BOARD_TOAST);
+      } else if (result.reason === "empty") {
+        await cbAnswer(ctx, EMPTY_SQUARE_TOAST);
       } else if (result.reason === "must-continue") {
         await cbAnswer(ctx, "You must continue with the same piece.");
       } else if (
@@ -494,12 +582,7 @@ async function handlePvpCallbackBody(ctx, options = {}) {
       } else {
         await cbAnswer(ctx, "Invalid move.");
       }
-      if (result.rendered) {
-        const edited = await safeEdit(ctx, result.rendered.text, result.rendered.extra);
-        if (!edited && parsed.game === "tictactoe") {
-          await refreshLivePvpBoard(ctx, runtime, parsed.sessionId);
-        }
-      }
+      await applyRenderedEdit(ctx, runtime, parsed, result.rendered);
       return;
     }
 
@@ -507,13 +590,11 @@ async function handlePvpCallbackBody(ctx, options = {}) {
 
     const isCheckers = parsed.game === "checkers";
     if (isCheckers) {
-      if (result.rendered) {
-        await safeEdit(ctx, result.rendered.text, result.rendered.extra);
-      }
+      await applyRenderedEdit(ctx, runtime, parsed, result.rendered);
       if (result.needsXp) {
         const fin = await finalizeWinXp(runtime, parsed.sessionId, awardXpFn);
         if (fin.rendered) {
-          await safeEdit(ctx, fin.rendered.text, fin.rendered.extra);
+          await applyRenderedEdit(ctx, runtime, parsed, fin.rendered);
         }
       }
     } else {
@@ -585,7 +666,7 @@ function registerPvpCallbacks(bot, options = {}) {
       parseCallbackData: parseC4CallbackData,
     })
   );
-  bot.action(/^pvp:chk:(join|sel|mv|noop):/, (ctx) =>
+  bot.action(/^pvp:chk:(join|sel|mv|noop|mode):/, (ctx) =>
     handlePvpCallback(ctx, {
       ...options,
       runtime: chkRuntime,

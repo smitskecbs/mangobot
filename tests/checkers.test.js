@@ -247,7 +247,19 @@ function startOpen(service, starterId = USER_A, name = "Kevin") {
   });
   assert.strictEqual(started.ok, true);
   service.setMessageId(started.session.id, 5001);
-  return started;
+  const waiting = service.chooseMode({
+    sessionId: started.session.id,
+    userId: starterId,
+    mode: "pvp",
+    chatId: COMMUNITY_CHAT,
+  });
+  assert.strictEqual(waiting.ok, true);
+  return {
+    ok: true,
+    session: waiting.session,
+    text: waiting.rendered.text,
+    keyboard: waiting.rendered.extra,
+  };
 }
 
 function joinBoth(service, sessionId, joinerId = USER_B, name = "Alice") {
@@ -263,10 +275,21 @@ function joinBoth(service, sessionId, joinerId = USER_B, name = "Alice") {
 }
 
 function startVsBot(service) {
-  const started = startOpen(service);
-  const expired = service.expireJoin(started.session.id);
-  assert.strictEqual(expired.session.opponentType, "bot");
-  return started;
+  const started = service.startChallenge({
+    chatId: COMMUNITY_CHAT,
+    starter: { userId: USER_A, displayName: "Kevin", isBot: false },
+  });
+  assert.strictEqual(started.ok, true);
+  service.setMessageId(started.session.id, 5001);
+  const bot = service.chooseMode({
+    sessionId: started.session.id,
+    userId: USER_A,
+    mode: "bot",
+    chatId: COMMUNITY_CHAT,
+  });
+  assert.strictEqual(bot.ok, true);
+  assert.strictEqual(bot.session.opponentType, "bot");
+  return { ok: true, session: bot.session };
 }
 
 function setCaptureWinBoard(service, sessionId, current = BLACK) {
@@ -295,14 +318,32 @@ async function main() {
 
   await runTest("lobby creation", async () => {
     const { service } = createService();
-    const r = startOpen(service);
+    const choice = service.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_A, displayName: "Kevin", isBot: false },
+    });
+    assert.strictEqual(choice.ok, true);
+    assert.strictEqual(choice.session.status, STATUS.WAITING);
+    assert.strictEqual(choice.session.phase, "start-choice");
+    assert.ok(choice.text.includes("How do you want to play?"));
+    assert.ok(JSON.stringify(choice.keyboard).includes("Play vs ManGoBot"));
+    assert.ok(JSON.stringify(choice.keyboard).includes("Wait for Opponent"));
+    service.setMessageId(choice.session.id, 5001);
+    const r = service.chooseMode({
+      sessionId: choice.session.id,
+      userId: USER_A,
+      mode: "pvp",
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(r.ok, true);
     assert.strictEqual(r.session.status, STATUS.WAITING);
+    assert.strictEqual(r.session.phase, "pvp-lobby");
     assert.strictEqual(r.session.players.b.userId, String(USER_A));
     assert.strictEqual(r.session.currentPlayer, BLACK);
     assert.strictEqual(countPieces(r.session.board, BLACK), 12);
     assert.strictEqual(countPieces(r.session.board, WHITE), 12);
-    assert.ok(r.text.includes("Checkers"));
-    assert.ok(r.text.includes("looking for an opponent"));
+    assert.ok(r.rendered.text.includes("Checkers"));
+    assert.ok(r.rendered.text.includes("looking for an opponent"));
   });
 
   await runTest("/checkers starts in the community group", async () => {
@@ -312,8 +353,10 @@ async function main() {
       startChallengeFn: (p) => service.startChallenge(p),
       isBusyFn: () => false,
       setMessageIdFn: (id, mid) => service.setMessageId(id, mid),
+      assertCanStartFn: async () => ({ ok: true }),
     });
-    assert.ok(ctx.replies[0].includes("Checkers"));
+    assert.ok(String(ctx.replies[0]).includes("Checkers"));
+    assert.ok(String(ctx.replies[0]).includes("How do you want to play?"));
   });
 
   await runTest("second human join starts immediately and cancels bot timeout", async () => {
@@ -335,15 +378,19 @@ async function main() {
     assert.strictEqual(session.players.w.isBot, false);
   });
 
-  await runTest("no-human join timeout starts vs bot", async () => {
+  await runTest("no-human join timeout re-prompts instead of starting vs bot", async () => {
     const { service, timers } = createService({ joinTimeoutMs: 5000 });
     const started = startOpen(service);
     timers.advance(5000);
     const s = service.getSession(started.session.id);
-    assert.strictEqual(s.status, STATUS.ACTIVE);
-    assert.strictEqual(s.opponentType, "bot");
-    assert.strictEqual(s.players.w.isBot, true);
-    assert.strictEqual(s.players.w.userId, BOT_USER_ID);
+    assert.strictEqual(s.status, STATUS.WAITING);
+    assert.strictEqual(s.phase, "wait-prompt");
+    assert.strictEqual(s.opponentType, "human");
+    assert.strictEqual(s.players.w, null);
+    const rendered = service.renderMessage(s);
+    assert.ok(rendered.text.includes("Still waiting for an opponent"));
+    assert.ok(JSON.stringify(rendered.extra).includes("Keep Waiting"));
+    assert.ok(JSON.stringify(rendered.extra).includes("Play vs ManGoBot"));
   });
 
   await runTest("duplicate join is safe", async () => {
@@ -471,8 +518,8 @@ async function main() {
     const rendered = service.renderMessage(session);
     const board = formatBoard(session.board);
     assert.ok(!rendered.text.includes(board));
-    assert.ok(rendered.text.includes("🏁 CHECKERS"));
-    assert.ok(rendered.text.includes("Select your piece."));
+    assert.ok(rendered.text.includes("♟️ Checkers"));
+    assert.ok(rendered.text.includes("Your turn") || rendered.text.includes("Kevin's turn"));
     assert.ok(rendered.text.includes("🟠"));
     assert.ok(rendered.text.includes("🟢"));
     assert.ok(!rendered.text.includes("🟥"));

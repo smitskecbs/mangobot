@@ -86,9 +86,15 @@ function startVsBot(service) {
   });
   assert.strictEqual(started.ok, true);
   service.setMessageId(started.session.id, 5001);
-  const expired = service.expireJoin(started.session.id);
-  assert.strictEqual(expired.session.opponentType, "bot");
-  return started;
+  const bot = service.chooseMode({
+    sessionId: started.session.id,
+    userId: USER_A,
+    mode: "bot",
+    chatId: COMMUNITY_CHAT,
+  });
+  assert.strictEqual(bot.ok, true);
+  assert.strictEqual(bot.session.opponentType, "bot");
+  return { ok: true, session: bot.session };
 }
 
 function firstLegalMove(session) {
@@ -167,8 +173,8 @@ async function main() {
     const codePoints = new Set(labels.map((t) => [...t].length));
     assert.strictEqual(codePoints.size, 1);
     assert.ok(!rendered.text.includes(formatBoard(session.board)));
-    assert.ok(rendered.text.includes("🏁 CHECKERS"));
-    assert.ok(rendered.text.includes("Select your piece."));
+    assert.ok(rendered.text.includes("♟️ Checkers"));
+    assert.ok(rendered.text.includes("Your turn"));
     assert.ok(labels.includes("🟠"));
     assert.ok(labels.includes("🟢"));
     assert.ok(!labels.includes("🟥"));
@@ -212,14 +218,15 @@ async function main() {
     const pos16 = sqToRowCol(16);
     assert.strictEqual(rowColToSq(pos20.row, pos20.col), 20);
     assert.strictEqual(isDark(pos20.row, pos20.col), true);
+    const gen = sel.session.boardGeneration;
     const rows = sel.rendered.extra.reply_markup.inline_keyboard;
     assert.strictEqual(
       rows[pos20.row][pos20.col].callback_data,
-      buildSelectCallbackData(started.session.id, 20)
+      buildSelectCallbackData(started.session.id, 20, gen)
     );
     assert.strictEqual(
       rows[pos16.row][pos16.col].callback_data,
-      buildMoveCallbackData(started.session.id, 20, 16)
+      buildMoveCallbackData(started.session.id, 20, 16, gen)
     );
     const light = rows[0][0];
     assert.ok(!isDark(0, 0));
@@ -541,7 +548,7 @@ async function main() {
     await handleChk(ctx, service);
     assert.strictEqual(ctx.order[0], "ack");
     assert.ok(ctx.order.indexOf("ack") < ctx.order.indexOf("edit"));
-    assert.ok(ctx.edits.some((e) => String(e.text).includes("ManGo Bot is thinking")));
+    assert.ok(ctx.edits.some((e) => String(e.text).includes("ManGoBot is thinking")));
     const afterHuman = service.getSession(started.session.id);
     assert.strictEqual(afterHuman.status, STATUS.ACTIVE);
     assert.strictEqual(afterHuman.currentPlayer, WHITE);

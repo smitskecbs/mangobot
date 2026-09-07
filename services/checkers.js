@@ -1,7 +1,7 @@
 /**
  * Checkers PvP — in-memory sessions via generic PvP manager.
- * Lobby / join / bot fallback matches Tic-Tac-Toe and Connect Four.
- * Not auto-started by Activity Engine (enabledForAuto: false).
+ * Start always asks bot vs wait. Lobby timeout re-prompts; it does not
+ * silently start a bot match. Not auto-started by Activity Engine.
  */
 
 const { Markup } = require("telegraf");
@@ -37,6 +37,7 @@ const {
   isDark,
   rowColToSq,
   sideOf,
+  allCaptures,
 } = require("./checkersRules");
 const {
   takeResolvedQuestUsers,
@@ -55,10 +56,12 @@ const GAME_ID = "checkers";
 const JOIN_TIMEOUT_MS = 60 * 1000;
 const LOBBY_COUNTDOWN_MS = 5 * 1000;
 const TURN_TIMEOUT_MS = 120 * 1000;
-const BOT_THINK_MIN_MS = 700;
-const BOT_THINK_MAX_MS = 1000;
+const BOT_THINK_MIN_MS = 400;
+const BOT_THINK_MAX_MS = 700;
+const BOT_CHAIN_THINK_MIN_MS = 250;
+const BOT_CHAIN_THINK_MAX_MS = 400;
 const PAIR_COOLDOWN_MS = DEFAULT_PAIR_COOLDOWN_MS;
-const BOT_DISPLAY_NAME = "🤖 ManGo Bot";
+const BOT_DISPLAY_NAME = "ManGoBot";
 
 const STATUS = Object.freeze({
   WAITING: "waiting",
@@ -67,6 +70,19 @@ const STATUS = Object.freeze({
   DRAW: "draw",
   EXPIRED: "expired",
 });
+
+const PHASE = Object.freeze({
+  START_CHOICE: "start-choice",
+  PVP_LOBBY: "pvp-lobby",
+  WAIT_PROMPT: "wait-prompt",
+  PLAYING: "playing",
+});
+
+const MUST_CAPTURE_TOAST = "⚠️ You must capture. Select a highlighted piece.";
+const NOT_YOUR_PIECE_TOAST = "That's not your piece.";
+const EMPTY_SQUARE_TOAST = "That square is empty.";
+const STALE_BOARD_TOAST = "Board updated.";
+const NO_MOVES_TOAST = "That piece has no moves.";
 
 // Round pieces on a square board. Telegram still auto-sizes buttons;
 // circles read as draughts on a phone better than colored squares.
@@ -130,20 +146,58 @@ function destSquares(session) {
   );
 }
 
+function captureFromSquares(session) {
+  if (!session || !session.board || !session.currentPlayer) {
+    return [];
+  }
+  const moves = allCaptures(session.board, session.currentPlayer);
+  const froms = [];
+  const seen = new Set();
+  for (let i = 0; i < moves.length; i += 1) {
+    const from = moves[i].from;
+    if (seen.has(from)) continue;
+    seen.add(from);
+    froms.push(from);
+  }
+  return froms;
+}
+
+function appendGeneration(base, generation) {
+  if (!Number.isInteger(generation)) {
+    return base;
+  }
+  return `${base}:${generation}`;
+}
+
 function buildJoinCallbackData(sessionId) {
   return `pvp:chk:join:${sessionId}`;
 }
 
-function buildSelectCallbackData(sessionId, square) {
-  return `pvp:chk:sel:${sessionId}:${square}`;
+function buildSelectCallbackData(sessionId, square, generation) {
+  return appendGeneration(`pvp:chk:sel:${sessionId}:${square}`, generation);
 }
 
-function buildMoveCallbackData(sessionId, from, to) {
-  return `pvp:chk:mv:${sessionId}:${from}:${to}`;
+function buildMoveCallbackData(sessionId, from, to, generation) {
+  return appendGeneration(`pvp:chk:mv:${sessionId}:${from}:${to}`, generation);
 }
 
 function buildNoopCallbackData(sessionId) {
   return `pvp:chk:${NOOP_ACTION}:${sessionId}`;
+}
+
+function buildModeCallbackData(sessionId, mode) {
+  return `pvp:chk:mode:${sessionId}:${mode}`;
+}
+
+function parseOptionalGeneration(raw) {
+  if (raw == null || raw === "") {
+    return null;
+  }
+  const generation = Number(raw);
+  if (!Number.isInteger(generation) || generation < 0) {
+    return null;
+  }
+  return generation;
 }
 
 function parsePvpCallbackData(data) {
@@ -167,18 +221,38 @@ function parsePvpCallbackData(data) {
     if (parts.length !== 4) return null;
     return { action: NOOP_ACTION, sessionId, game: GAME_ID };
   }
-  if (action === "sel") {
+  if (action === "mode") {
     if (parts.length !== 5) return null;
+    const mode = parts[4];
+    if (mode !== "bot" && mode !== "pvp" && mode !== "cancel" && mode !== "keep") {
+      return null;
+    }
+    return { action: "mode", sessionId, mode, game: GAME_ID };
+  }
+  if (action === "sel") {
+    if (parts.length !== 5 && parts.length !== 6) return null;
     const square = Number(parts[4]);
     if (!isPlayableSquare(square)) return null;
-    return { action: "sel", sessionId, square, game: GAME_ID };
+    const generation = parts.length === 6 ? parseOptionalGeneration(parts[5]) : null;
+    if (parts.length === 6 && generation == null) return null;
+    const parsedSel = { action: "sel", sessionId, square, game: GAME_ID };
+    if (generation != null) {
+      parsedSel.generation = generation;
+    }
+    return parsedSel;
   }
   if (action === "mv") {
-    if (parts.length !== 6) return null;
+    if (parts.length !== 6 && parts.length !== 7) return null;
     const from = Number(parts[4]);
     const to = Number(parts[5]);
     if (!isPlayableSquare(from) || !isPlayableSquare(to)) return null;
-    return { action: "mv", sessionId, from, to, game: GAME_ID };
+    const generation = parts.length === 7 ? parseOptionalGeneration(parts[6]) : null;
+    if (parts.length === 7 && generation == null) return null;
+    const parsedMv = { action: "mv", sessionId, from, to, game: GAME_ID };
+    if (generation != null) {
+      parsedMv.generation = generation;
+    }
+    return parsedMv;
   }
   return null;
 }
@@ -186,6 +260,22 @@ function parsePvpCallbackData(data) {
 function buildJoinKeyboard(sessionId) {
   return Markup.inlineKeyboard([
     Markup.button.callback("JOIN GAME", buildJoinCallbackData(sessionId)),
+  ]);
+}
+
+function buildStartChoiceKeyboard(sessionId) {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("🤖 Play vs ManGoBot", buildModeCallbackData(sessionId, "bot"))],
+    [Markup.button.callback("👥 Wait for Opponent", buildModeCallbackData(sessionId, "pvp"))],
+    [Markup.button.callback("❌ Cancel", buildModeCallbackData(sessionId, "cancel"))],
+  ]);
+}
+
+function buildWaitPromptKeyboard(sessionId) {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("👥 Keep Waiting", buildModeCallbackData(sessionId, "keep"))],
+    [Markup.button.callback("🤖 Play vs ManGoBot", buildModeCallbackData(sessionId, "bot"))],
+    [Markup.button.callback("❌ Cancel", buildModeCallbackData(sessionId, "cancel"))],
   ]);
 }
 
@@ -205,6 +295,9 @@ function buildBoardKeyboard(session) {
   const selected = isPlayableSquare(session.selectedSquare)
     ? session.selectedSquare
     : null;
+  const gen = Number.isInteger(session.boardGeneration)
+    ? session.boardGeneration
+    : 0;
   const noopData = buildNoopCallbackData(session.id);
   const rows = [];
   for (let row = 0; row < BOARD_SIZE; row += 1) {
@@ -217,9 +310,9 @@ function buildBoardKeyboard(session) {
       const sq = rowColToSq(row, col);
       let data;
       if (selected != null && destSet.has(sq)) {
-        data = buildMoveCallbackData(session.id, selected, sq);
+        data = buildMoveCallbackData(session.id, selected, sq, gen);
       } else {
-        data = buildSelectCallbackData(session.id, sq);
+        data = buildSelectCallbackData(session.id, sq, gen);
       }
       buttons.push(
         Markup.button.callback(squareButtonLabel(session, sq, destSet), data)
@@ -235,21 +328,29 @@ function lobbyRemainingSeconds(session, nowMs) {
   return Math.max(0, Math.ceil((endsAt - nowMs) / 1000));
 }
 
+function buildStartChoiceText() {
+  return `♟️ Checkers
+
+How do you want to play?`;
+}
+
 function buildWaitingText(session, nowMs) {
   const black = session.players.b;
   const name = black && black.displayName ? black.displayName : "Player";
   const seconds = lobbyRemainingSeconds(session, nowMs);
   const display = seconds > 0 ? seconds : 1;
-  return `🏁 ManGo Checkers
+  return `♟️ Checkers
 
 ${name} is looking for an opponent.
 
-Players:
-1/2
+Players: 1/2
+⏳ Waiting... ${display}s`;
+}
 
-⏳ Starting in ${display}s
+function buildWaitPromptText() {
+  return `⏳ Still waiting for an opponent...
 
-If nobody joins, ${name} will play against 🤖 ManGo Bot.`;
+What would you like to do?`;
 }
 
 function turnMark(side) {
@@ -262,6 +363,20 @@ function playerLooksLikeBot(player) {
   );
 }
 
+function seatLabel(side) {
+  return side === WHITE ? "White" : "Black";
+}
+
+function hasForcedCapture(session) {
+  if (!session || session.status !== STATUS.ACTIVE) {
+    return false;
+  }
+  if (isPlayableSquare(session.pendingFrom)) {
+    return true;
+  }
+  return captureFromSquares(session).length > 0;
+}
+
 function buildActiveText(session) {
   const black = session.players.b;
   const white = session.players.w;
@@ -269,21 +384,42 @@ function buildActiveText(session) {
     session.currentPlayer === WHITE ? white : black;
   const turnName = turnPlayer && turnPlayer.displayName ? turnPlayer.displayName : "Player";
   const botThinking = playerLooksLikeBot(turnPlayer);
-  const hint = botThinking
-    ? "ManGo Bot is thinking…"
-    : isPlayableSquare(session.pendingFrom)
-      ? "Continue the capture with the same piece."
-      : isPlayableSquare(session.selectedSquare)
-        ? "Choose a destination."
-        : "Select your piece.";
-  return `🏁 CHECKERS
+  const vsBot = opponentIsBotPlayers(session);
+  const lines = ["♟️ Checkers", ""];
+  if (vsBot) {
+    const humanSeat = playerLooksLikeBot(black) ? WHITE : BLACK;
+    lines.push(`${turnMark(humanSeat)} You: ${seatLabel(humanSeat)}`);
+    lines.push(`${turnMark(humanSeat === BLACK ? WHITE : BLACK)} ManGoBot: ${seatLabel(humanSeat === BLACK ? WHITE : BLACK)}`);
+  } else {
+    lines.push(`${MARK_B} ${black.displayName}`);
+    lines.push(`${MARK_W} ${white.displayName}`);
+  }
+  lines.push("");
+  if (botThinking) {
+    lines.push(`${MARK_W} ManGoBot is thinking...`);
+  } else {
+    const youTurn =
+      vsBot && !playerLooksLikeBot(turnPlayer) ? "👉 Your turn" : `👉 ${turnName}'s turn`;
+    lines.push(youTurn);
+    if (hasForcedCapture(session)) {
+      lines.push("⚠️ Capture required");
+    }
+    if (isPlayableSquare(session.pendingFrom)) {
+      lines.push("Continue with the same piece.");
+    } else if (isPlayableSquare(session.selectedSquare)) {
+      lines.push("Choose a ✨ square.");
+    }
+  }
+  return lines.join("\n");
+}
 
-${MARK_B} ${black.displayName}
-${MARK_W} ${white.displayName}
-
-Turn: ${turnMark(session.currentPlayer)} ${turnName}
-
-${hint}`;
+function opponentIsBotPlayers(session) {
+  return Boolean(
+    session &&
+      session.players &&
+      ((session.players.b && playerLooksLikeBot(session.players.b)) ||
+        (session.players.w && playerLooksLikeBot(session.players.w)))
+  );
 }
 
 function formatXpLine(xpResult, rewardEligible) {
@@ -359,6 +495,18 @@ function buildExpiredText(session) {
 function renderMessage(session, xpResult, nowMs = Date.now()) {
   const { emptyInlineKeyboardExtra } = require("../utils/expiredMessageCleanup");
   if (session.status === STATUS.WAITING) {
+    if (session.phase === PHASE.START_CHOICE) {
+      return {
+        text: buildStartChoiceText(),
+        extra: buildStartChoiceKeyboard(session.id),
+      };
+    }
+    if (session.phase === PHASE.WAIT_PROMPT) {
+      return {
+        text: buildWaitPromptText(),
+        extra: buildWaitPromptKeyboard(session.id),
+      };
+    }
     return {
       text: buildWaitingText(session, nowMs),
       extra: buildJoinKeyboard(session.id),
@@ -427,6 +575,14 @@ function createCheckersService(options = {}) {
     typeof options.botThinkMaxMs === "number"
       ? options.botThinkMaxMs
       : BOT_THINK_MAX_MS;
+  const botChainThinkMinMs =
+    typeof options.botChainThinkMinMs === "number"
+      ? options.botChainThinkMinMs
+      : BOT_CHAIN_THINK_MIN_MS;
+  const botChainThinkMaxMs =
+    typeof options.botChainThinkMaxMs === "number"
+      ? options.botChainThinkMaxMs
+      : BOT_CHAIN_THINK_MAX_MS;
   const randomIntFn =
     typeof options.randomIntFn === "function"
       ? options.randomIntFn
@@ -491,9 +647,11 @@ function createCheckersService(options = {}) {
     reservation.releaseMatch(session.id);
   }
 
-  function botThinkDelay() {
-    const min = Math.max(0, botThinkMinMs);
-    const max = Math.max(min, botThinkMaxMs);
+  function botThinkDelay(chained) {
+    const minRaw = chained ? botChainThinkMinMs : botThinkMinMs;
+    const maxRaw = chained ? botChainThinkMaxMs : botThinkMaxMs;
+    const min = Math.max(0, minRaw);
+    const max = Math.max(min, maxRaw);
     if (max <= min) {
       return min;
     }
@@ -555,8 +713,10 @@ function createCheckersService(options = {}) {
         questNoted: Boolean(session.questNoted),
         endReason: session.endReason || null,
         opponentType: session.opponentType || "human",
+        phase: session.phase || PHASE.START_CHOICE,
         botMoveGeneration: session.botMoveGeneration || 0,
         turnGeneration: session.turnGeneration || 0,
+        boardGeneration: session.boardGeneration || 0,
       })
     );
   }
@@ -593,6 +753,7 @@ function createCheckersService(options = {}) {
       chatId: String(chatId),
       messageId: null,
       status: STATUS.WAITING,
+      phase: PHASE.START_CHOICE,
       players: {
         b: {
           userId: String(starter.userId),
@@ -606,7 +767,7 @@ function createCheckersService(options = {}) {
       selectedSquare: null,
       pendingFrom: null,
       createdAt: now,
-      lobbyEndsAt: now + joinTimeoutMs,
+      lobbyEndsAt: null,
       startedAt: null,
       lastMoveAt: null,
       winnerUserId: null,
@@ -618,6 +779,7 @@ function createCheckersService(options = {}) {
       opponentType: "human",
       botMoveGeneration: 0,
       turnGeneration: 0,
+      boardGeneration: 1,
       timers: {
         joinTimeoutId: null,
         turnTimeoutId: null,
@@ -627,12 +789,8 @@ function createCheckersService(options = {}) {
     };
 
     manager.registerSession(session);
-    manager.schedule(session, "join", joinTimeoutMs, () => {
-      expireJoin(session.id);
-    });
-    scheduleLobbyCountdown(session);
-    log("[pvp] match started game=checkers mode=lobby");
-    logCheckersLifecycle("lobby-open", session);
+    log("[pvp] match started game=checkers mode=choice");
+    logCheckersLifecycle("start-choice", session);
 
     const rendered = renderMessage(session, null, manager.now());
     return {
@@ -681,7 +839,7 @@ function createCheckersService(options = {}) {
   function tickLobbyCountdown(sessionId) {
     const locked = manager.withSessionLock(sessionId, () => {
       const session = manager.getSession(sessionId);
-      if (!session || session.status !== STATUS.WAITING) {
+      if (!session || session.status !== STATUS.WAITING || session.phase !== PHASE.PVP_LOBBY) {
         return { ok: false, reason: "not-waiting" };
       }
       scheduleLobbyCountdown(session);
@@ -708,11 +866,13 @@ function createCheckersService(options = {}) {
       session.rewardEligible = true;
     }
     session.status = STATUS.ACTIVE;
+    session.phase = PHASE.PLAYING;
     session.startedAt = manager.now();
     session.lastMoveAt = session.startedAt;
     session.currentPlayer = BLACK;
     session.selectedSquare = null;
     session.pendingFrom = null;
+    session.boardGeneration = (session.boardGeneration || 0) + 1;
     manager.clearTimers(session);
     session.timers.joinTimeoutId = null;
     session.timers.countdownTimeoutId = null;
@@ -728,6 +888,157 @@ function createCheckersService(options = {}) {
     );
   }
 
+  function bumpBoardGeneration(session) {
+    session.boardGeneration = (session.boardGeneration || 0) + 1;
+    return session.boardGeneration;
+  }
+
+  function generationMismatch(session, generation) {
+    if (generation == null) {
+      return false;
+    }
+    return Number(generation) !== Number(session.boardGeneration || 0);
+  }
+
+  function beginPvpLobby(session) {
+    const now = manager.now();
+    session.status = STATUS.WAITING;
+    session.phase = PHASE.PVP_LOBBY;
+    session.createdAt = now;
+    session.lobbyEndsAt = now + joinTimeoutMs;
+    manager.clearTimers(session);
+    session.timers.joinTimeoutId = null;
+    session.timers.countdownTimeoutId = null;
+    session.timers.botTimeoutId = null;
+    session.timers.turnTimeoutId = null;
+    bumpBoardGeneration(session);
+    manager.schedule(session, "join", joinTimeoutMs, () => {
+      expireJoin(session.id);
+    });
+    scheduleLobbyCountdown(session);
+    log("[pvp] match started game=checkers mode=lobby");
+    logCheckersLifecycle("lobby-open", session);
+  }
+
+  function convertToBot(session) {
+    session.players.w = makeBotPlayer();
+    activateMatch(session, "bot");
+  }
+
+  function cancelSession(session, endReason) {
+    session.status = STATUS.EXPIRED;
+    session.endReason = endReason;
+    session.phase = PHASE.START_CHOICE;
+    bumpBoardGeneration(session);
+    finishOpen(session);
+    logGameCleanup(GAME_TYPE.CHECKERS, FINAL_STATE.NOT_ENOUGH);
+    logCheckersLifecycle("cancelled", session);
+  }
+
+  function starterUserId(session) {
+    return session && session.players && session.players.b
+      ? String(session.players.b.userId)
+      : null;
+  }
+
+  function chooseMode({ sessionId, userId, mode, chatId } = {}) {
+    const locked = manager.withSessionLock(sessionId, () => {
+      const session = manager.getSession(sessionId);
+      if (!session) {
+        return { ok: false, reason: "invalid-session" };
+      }
+      if (chatId != null && String(chatId) !== String(session.chatId)) {
+        return { ok: false, reason: "wrong-chat" };
+      }
+      if (userId == null) {
+        return { ok: false, reason: "no-user" };
+      }
+      if (String(userId) !== starterUserId(session)) {
+        return { ok: false, reason: "not-starter" };
+      }
+      if (session.status === STATUS.ACTIVE || session.status === STATUS.WON || session.status === STATUS.DRAW) {
+        return {
+          ok: false,
+          reason: "not-waiting",
+          session: snapshot(session),
+          rendered: renderMessage(session, null, manager.now()),
+        };
+      }
+      if (session.status !== STATUS.WAITING) {
+        return { ok: false, reason: "not-waiting" };
+      }
+
+      if (mode === "cancel") {
+        cancelSession(session, "cancelled");
+        return {
+          ok: true,
+          cancelled: true,
+          session: snapshot(session),
+          rendered: renderMessage(session, null, manager.now()),
+        };
+      }
+
+      if (session.phase === PHASE.START_CHOICE) {
+        if (mode === "bot") {
+          convertToBot(session);
+          return {
+            ok: true,
+            startedBot: true,
+            session: snapshot(session),
+            rendered: renderMessage(session, null, manager.now()),
+          };
+        }
+        if (mode === "pvp") {
+          beginPvpLobby(session);
+          return {
+            ok: true,
+            waiting: true,
+            session: snapshot(session),
+            rendered: renderMessage(session, null, manager.now()),
+          };
+        }
+        return { ok: false, reason: "bad-mode" };
+      }
+
+      if (session.phase === PHASE.WAIT_PROMPT) {
+        if (mode === "keep") {
+          beginPvpLobby(session);
+          return {
+            ok: true,
+            keptWaiting: true,
+            session: snapshot(session),
+            rendered: renderMessage(session, null, manager.now()),
+          };
+        }
+        if (mode === "bot") {
+          convertToBot(session);
+          return {
+            ok: true,
+            startedBot: true,
+            session: snapshot(session),
+            rendered: renderMessage(session, null, manager.now()),
+          };
+        }
+        return { ok: false, reason: "bad-mode" };
+      }
+
+      return {
+        ok: false,
+        reason: "wrong-phase",
+        session: snapshot(session),
+        rendered: renderMessage(session, null, manager.now()),
+      };
+    });
+    if (locked.ok && locked.cancelled && onSessionEnded) {
+      try {
+        onSessionEnded(locked.session);
+      } catch (_err) {
+        /* ignore */
+      }
+    }
+    return locked;
+  }
+
   function expireJoin(sessionId) {
     const locked = manager.withSessionLock(sessionId, () => {
       const session = manager.getSession(sessionId);
@@ -737,6 +1048,10 @@ function createCheckersService(options = {}) {
       }
       if (session.status !== STATUS.WAITING) {
         logCheckersLifecycle("join-timeout-skip", session, "reason=not-waiting");
+        return { ok: false, reason: "not-waiting" };
+      }
+      if (session.phase !== PHASE.PVP_LOBBY) {
+        logCheckersLifecycle("join-timeout-skip", session, "reason=wrong-phase");
         return { ok: false, reason: "not-waiting" };
       }
       const starter = session.players && session.players.b;
@@ -752,11 +1067,14 @@ function createCheckersService(options = {}) {
           rendered: renderMessage(session, null, manager.now()),
         };
       }
-      session.players.w = makeBotPlayer();
-      activateMatch(session, "bot");
+      session.phase = PHASE.WAIT_PROMPT;
+      session.lobbyEndsAt = null;
+      manager.clearTimers(session);
+      bumpBoardGeneration(session);
+      logCheckersLifecycle("wait-prompt", session);
       return {
         ok: true,
-        startedBot: true,
+        waitPrompt: true,
         session: snapshot(session),
         rendered: renderMessage(session, null, manager.now()),
       };
@@ -765,7 +1083,7 @@ function createCheckersService(options = {}) {
     if (
       locked.ok &&
       locked.session &&
-      locked.session.status !== STATUS.ACTIVE &&
+      locked.session.status === STATUS.EXPIRED &&
       onSessionEnded
     ) {
       try {
@@ -844,6 +1162,7 @@ function createCheckersService(options = {}) {
     session.pendingFrom = applied.state.pendingFrom;
     session.selectedSquare = applied.state.pendingFrom;
     session.lastMoveAt = manager.now();
+    bumpBoardGeneration(session);
 
     if (applied.ended) {
       finishWin(session, applied.winner, "win");
@@ -928,7 +1247,7 @@ function createCheckersService(options = {}) {
       if (chatId != null && String(chatId) !== String(session.chatId)) {
         return { ok: false, reason: "wrong-chat" };
       }
-      if (session.status !== STATUS.WAITING) {
+      if (session.status !== STATUS.WAITING || session.phase !== PHASE.PVP_LOBBY) {
         return { ok: false, reason: "not-waiting" };
       }
       if (isBot) {
@@ -967,7 +1286,7 @@ function createCheckersService(options = {}) {
     });
   }
 
-  function select({ sessionId, userId, square, chatId } = {}) {
+  function select({ sessionId, userId, square, chatId, generation } = {}) {
     return manager.withSessionLock(sessionId, () => {
       const session = manager.getSession(sessionId);
       if (!session) {
@@ -990,9 +1309,6 @@ function createCheckersService(options = {}) {
       if (!seat) {
         return { ok: false, reason: "outsider" };
       }
-      // Failed taps still return the live board so a stale vs-bot keyboard
-      // (bot-move edit skipped/delayed) can resync instead of looking like
-      // the human's own piece was rejected.
       function rejectSelect(reason) {
         return {
           ok: false,
@@ -1005,13 +1321,32 @@ function createCheckersService(options = {}) {
         return rejectSelect("not-your-turn");
       }
 
-      // Defensive only: re-selecting the forced piece must ACK and stay ACTIVE.
-      // The production TypeError on this callback was not reproduced.
+      const selected = isPlayableSquare(session.selectedSquare)
+        ? session.selectedSquare
+        : isPlayableSquare(session.pendingFrom)
+          ? session.pendingFrom
+          : null;
+      if (selected != null) {
+        const liveDests = destinations(boardState(session), selected);
+        if (liveDests.some((m) => m.to === square)) {
+          const applied = applyEngineMove(session, selected, square);
+          if (!applied.ok) {
+            return rejectSelect(applied.reason || "illegal");
+          }
+          return { ...applied, moved: true };
+        }
+      }
+
+      if (generationMismatch(session, generation)) {
+        return rejectSelect("stale-board");
+      }
+
       if (isPlayableSquare(session.pendingFrom)) {
         if (square !== session.pendingFrom) {
           return rejectSelect("must-continue");
         }
         session.selectedSquare = session.pendingFrom;
+        bumpBoardGeneration(session);
         return {
           ok: true,
           continued: true,
@@ -1022,6 +1357,7 @@ function createCheckersService(options = {}) {
 
       if (session.selectedSquare === square) {
         session.selectedSquare = null;
+        bumpBoardGeneration(session);
         return {
           ok: true,
           deselected: true,
@@ -1030,16 +1366,24 @@ function createCheckersService(options = {}) {
         };
       }
 
-      if (sideOf(session.board[square]) !== seat) {
+      const pieceSide = sideOf(session.board[square]);
+      if (pieceSide == null) {
+        return rejectSelect("empty");
+      }
+      if (pieceSide !== seat) {
         return rejectSelect("invalid-piece");
       }
 
       const dests = destinations(boardState(session), square);
       if (!dests.length) {
+        if (captureFromSquares(session).length) {
+          return rejectSelect("must-capture");
+        }
         return rejectSelect("no-moves");
       }
 
       session.selectedSquare = square;
+      bumpBoardGeneration(session);
       return {
         ok: true,
         session: snapshot(session),
@@ -1048,7 +1392,7 @@ function createCheckersService(options = {}) {
     });
   }
 
-  async function move({ sessionId, userId, from, to, chatId } = {}) {
+  async function move({ sessionId, userId, from, to, chatId, generation } = {}) {
     const locked = manager.withSessionLock(sessionId, () => {
       const session = manager.getSession(sessionId);
       if (!session) {
@@ -1068,13 +1412,24 @@ function createCheckersService(options = {}) {
       if (!seat) {
         return { ok: false, reason: "outsider" };
       }
+      function rejectMove(reason) {
+        return {
+          ok: false,
+          reason,
+          session: snapshot(session),
+          rendered: renderMessage(session, null, manager.now()),
+        };
+      }
       if (seat !== session.currentPlayer) {
-        return { ok: false, reason: "not-your-turn" };
+        return rejectMove("not-your-turn");
+      }
+      if (generationMismatch(session, generation)) {
+        return rejectMove("stale-board");
       }
 
       const applied = applyEngineMove(session, from, to);
       if (!applied.ok) {
-        return applied;
+        return rejectMove(applied.reason || "illegal");
       }
       return applied;
     });
@@ -1093,7 +1448,8 @@ function createCheckersService(options = {}) {
     session.botMoveGeneration = (session.botMoveGeneration || 0) + 1;
     const gen = session.botMoveGeneration;
     const sessionId = session.id;
-    manager.schedule(session, "bot", botThinkDelay(), () => {
+    const chained = isPlayableSquare(session.pendingFrom);
+    manager.schedule(session, "bot", botThinkDelay(chained), () => {
       Promise.resolve(performBotMove(sessionId, gen)).catch(() => {});
     });
   }
@@ -1220,6 +1576,7 @@ function createCheckersService(options = {}) {
     join,
     select,
     move,
+    chooseMode,
     expireJoin,
     tickLobbyCountdown,
     resolveTurnTimeout,
@@ -1262,14 +1619,22 @@ function getCheckersRuntime() {
 module.exports = {
   GAME_ID,
   STATUS,
+  PHASE,
   JOIN_TIMEOUT_MS,
   LOBBY_COUNTDOWN_MS,
   TURN_TIMEOUT_MS,
   PAIR_COOLDOWN_MS,
   BOT_THINK_MIN_MS,
   BOT_THINK_MAX_MS,
+  BOT_CHAIN_THINK_MIN_MS,
+  BOT_CHAIN_THINK_MAX_MS,
   BOT_USER_ID,
   PLAYER_BUSY_TEXT,
+  MUST_CAPTURE_TOAST,
+  NOT_YOUR_PIECE_TOAST,
+  EMPTY_SQUARE_TOAST,
+  STALE_BOARD_TOAST,
+  NO_MOVES_TOAST,
   MARK_B,
   MARK_W,
   MARK_BK,
@@ -1287,6 +1652,7 @@ module.exports = {
   buildSelectCallbackData,
   buildMoveCallbackData,
   buildNoopCallbackData,
+  buildModeCallbackData,
   parsePvpCallbackData,
   sanitizePvpDisplayName,
   createCheckersService,

@@ -88,7 +88,12 @@ function setupForcedJumpOn18(service) {
   });
   assert.strictEqual(started.ok, true);
   service.setMessageId(started.session.id, 8001);
-  const vsBot = service.expireJoin(started.session.id);
+  const vsBot = service.chooseMode({
+    sessionId: started.session.id,
+    userId: KEVIN,
+    mode: "bot",
+    chatId: COMMUNITY_CHAT,
+  });
   assert.strictEqual(vsBot.session.opponentType, "bot");
   const raw = service.manager.getSession(started.session.id);
   raw.board = emptyBoard();
@@ -131,14 +136,16 @@ async function main() {
     assert.strictEqual(moved.session.pendingFrom, 18);
     assert.strictEqual(moved.session.selectedSquare, 18);
     assert.strictEqual(moved.session.currentPlayer, BLACK);
-    assert.ok(moved.rendered.text.includes("Continue the capture with the same piece."));
+    assert.ok(moved.rendered.text.includes("Continue with the same piece."));
     const pos = sqToRowCol(18);
     const btn = moved.rendered.extra.reply_markup.inline_keyboard[pos.row][pos.col];
-    assert.strictEqual(btn.callback_data, buildSelectCallbackData(sessionId, 18));
+    const gen = moved.session.boardGeneration;
+    assert.strictEqual(btn.callback_data, buildSelectCallbackData(sessionId, 18, gen));
     assert.deepStrictEqual(parsePvpCallbackData(btn.callback_data), {
       action: "sel",
       sessionId,
       square: 18,
+      generation: gen,
       game: "checkers",
     });
   });
@@ -171,7 +178,7 @@ async function main() {
     assert.strictEqual(result.session.status, STATUS.ACTIVE);
     assert.strictEqual(result.session.pendingFrom, 18);
     assert.strictEqual(result.session.selectedSquare, 18);
-    assert.ok(result.rendered.text.includes("Continue the capture with the same piece."));
+    assert.ok(result.rendered.text.includes("Continue with the same piece."));
     const dests = destinations(
       {
         board: result.session.board,
@@ -184,7 +191,10 @@ async function main() {
     const pos11 = sqToRowCol(11);
     const destBtn =
       result.rendered.extra.reply_markup.inline_keyboard[pos11.row][pos11.col];
-    assert.strictEqual(destBtn.callback_data, buildMoveCallbackData(sessionId, 18, 11));
+    assert.strictEqual(
+      destBtn.callback_data,
+      buildMoveCallbackData(sessionId, 18, 11, result.session.boardGeneration)
+    );
   });
 
   await runTest("production-shaped sel:18 callback stays ACTIVE and can finish the jump", async () => {

@@ -260,7 +260,12 @@ async function main() {
     });
     assert.strictEqual(started.ok, true);
     chk.setMessageId(started.session.id, 5001);
-    const vsBot = chk.expireJoin(started.session.id);
+    const vsBot = chk.chooseMode({
+      sessionId: started.session.id,
+      userId: USER_A,
+      mode: "bot",
+      chatId: CHAT,
+    });
     assert.strictEqual(vsBot.session.opponentType, "bot");
     assert.strictEqual(chk.getSession(started.session.id).status, STATUS.ACTIVE);
 
@@ -339,7 +344,12 @@ async function main() {
       starter: { userId: USER_A, displayName: "Kevin", isBot: false },
     });
     chk.setMessageId(started.session.id, 5001);
-    chk.expireJoin(started.session.id);
+    chk.chooseMode({
+      sessionId: started.session.id,
+      userId: USER_A,
+      mode: "bot",
+      chatId: CHAT,
+    });
     assert.strictEqual(chk.getSession(started.session.id).status, STATUS.ACTIVE);
 
     const result = await processCommunityActivitySlot({
