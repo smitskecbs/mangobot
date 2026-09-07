@@ -113,7 +113,19 @@ function formatMemberStatusCard(userId, options = {}) {
     : profile.wallet.registered
       ? "Wallet: 🟡 Registered"
       : "Wallet: ⬜ Not linked";
-  return [
+  let giftLine = "";
+  try {
+    const { countRewardsForUser } = require("./memberRewards");
+    const counts = countRewardsForUser(userId, options.rewardsFile);
+    const pending = counts && typeof counts.pending === "number" ? counts.pending : 0;
+    giftLine =
+      pending > 0
+        ? `🎁 Mystery Gifts: ${pending} pending`
+        : "🎁 Mystery Gifts: none pending";
+  } catch (_err) {
+    giftLine = "";
+  }
+  const lines = [
     "👤 My Profile",
     "Your ManGo progress at a glance.",
     "",
@@ -129,11 +141,17 @@ function formatMemberStatusCard(userId, options = {}) {
     "",
     `🤝 Builder Points (BP, not XP): ${bp}`,
     `🥭 ManGo Loot: ${loot}`,
+  ];
+  if (giftLine) {
+    lines.push(giftLine);
+  }
+  lines.push(
     "",
     xpEnabled ? XP_EARNING_ENABLED_LINE : XP_EARNING_LOCKED_LINE,
     "",
-    "Looking for today's activities? Open 🎯 Daily Quest.",
-  ].join("\n");
+    "Looking for today's activities? Open 🎯 Daily Quest."
+  );
+  return lines.join("\n");
 }
 
 module.exports = {

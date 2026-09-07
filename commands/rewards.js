@@ -1,5 +1,5 @@
 /**
- * /rewards — member's own reward history (private).
+ * /rewards — Mystery Gifts explainer + member's own reward history (private).
  * Group: private deep-link only. Never shows another user's rewards.
  */
 
@@ -16,19 +16,36 @@ const {
   listRewardsForUser,
   userFacingRewardLine,
 } = require("../services/memberRewards");
+const { getMemberActivityProfile } = require("../services/memberActivityProfile");
+const { builderSummary } = require("../services/communityBuilder");
 
-const GROUP_REWARDS_TEXT = "🎁 View your rewards privately.";
+const GROUP_REWARDS_TEXT = "🎁 View your Mystery Gifts privately.";
 
 const REWARDS_HUB_CALLBACK = Object.freeze({
   BACK: "rhub:back",
 });
 
-const EMPTY_REWARDS_TEXT = `🥭 ManGo Rewards
+const MYSTERY_GIFTS_INTRO = `🎁 Mystery Gifts
 
-No rewards yet.
+Stay active and help ManGo grow.
 
-Stay active, play, contribute and help the community.
-Mystery Gifts and other rewards may appear here. 🎁`;
+Each week, ManGo can send Mystery Gifts to members who make a real contribution.
+
+You can stand out through:
+
+⚡ Community activity
+🤝 Builder contributions
+👥 Bringing real members into ManGo
+
+If you are selected, ManGoBot will tell you what happens next.`;
+
+const EMPTY_GIFTS_BLOCK = `🎁 Your Gifts
+
+No Mystery Gifts yet.`;
+
+const EMPTY_REWARDS_TEXT = `${MYSTERY_GIFTS_INTRO}
+
+${EMPTY_GIFTS_BLOCK}`;
 
 function getGroupRewardsExtra(ctx) {
   const username = resolveBotUsername(ctx);
@@ -36,7 +53,7 @@ function getGroupRewardsExtra(ctx) {
   if (!url) {
     return {};
   }
-  return Markup.inlineKeyboard([[Markup.button.url("Open Rewards", url)]]);
+  return Markup.inlineKeyboard([[Markup.button.url("Open Mystery Gifts", url)]]);
 }
 
 function buildRewardsHubExtra() {
@@ -45,7 +62,38 @@ function buildRewardsHubExtra() {
   ]);
 }
 
-function formatOwnRewards(rewards) {
+function formatActivityBlock(userId, options = {}) {
+  try {
+    const profile = getMemberActivityProfile(userId, options);
+    const summary = builderSummary(userId, options);
+    const xp = profile && profile.xp ? profile.xp.lifetime : 0;
+    const weekly = profile && profile.xp ? profile.xp.weekly : 0;
+    const streak =
+      profile && profile.streak && typeof profile.streak.current === "number"
+        ? profile.streak.current
+        : 0;
+    const bp =
+      summary && typeof summary.builderPoints === "number"
+        ? summary.builderPoints
+        : 0;
+    const referrals =
+      summary && typeof summary.validReferrals === "number"
+        ? summary.validReferrals
+        : 0;
+    return [
+      "📊 Your Activity",
+      `⚡ XP: ${xp}`,
+      `📅 Weekly XP: ${weekly}`,
+      `🔥 Activity Streak: ${streak} days`,
+      `🤝 Builder Points: ${bp}`,
+      `👥 Referrals: ${referrals}`,
+    ].join("\n");
+  } catch (_err) {
+    return "";
+  }
+}
+
+function formatGiftsHistory(rewards) {
   const summary = {
     pending: 0,
     delivered: 0,
@@ -67,28 +115,31 @@ function formatOwnRewards(rewards) {
     }
   }
 
-  if (!rewards.length) {
-    return EMPTY_REWARDS_TEXT;
-  }
-
   const lines = [
-    "🥭 ManGo Rewards",
+    "🎁 Your Gifts",
     "",
     "Pending:",
     String(summary.pending),
     "",
     "Sent:",
     String(summary.delivered),
-    "",
-    "Mystery Gifts:",
-    `${summary.mysteryPending} pending`,
-    "",
   ];
+  if (summary.mysteryPending > 0) {
+    lines.push("", "Mystery Gifts:", `${summary.mysteryPending} pending`);
+  }
+  lines.push("");
   for (const reward of rewards.slice(0, 10)) {
     lines.push(userFacingRewardLine(reward));
     lines.push("");
   }
   return lines.join("\n").trim();
+}
+
+function formatOwnRewards(rewards, extras = {}) {
+  const activity = formatActivityBlock(extras.userId, extras);
+  const gifts =
+    !rewards || !rewards.length ? EMPTY_GIFTS_BLOCK : formatGiftsHistory(rewards);
+  return [MYSTERY_GIFTS_INTRO, activity, gifts].filter(Boolean).join("\n\n");
 }
 
 function handleRewards(ctx, options = {}) {
@@ -104,7 +155,10 @@ function handleRewards(ctx, options = {}) {
   }
 
   const rewards = listRewardsForUser(ctx.from.id, options.rewardsFile);
-  return ctx.reply(formatOwnRewards(rewards), buildRewardsHubExtra());
+  return ctx.reply(
+    formatOwnRewards(rewards, { userId: ctx.from.id, ...options }),
+    buildRewardsHubExtra()
+  );
 }
 
 async function handleRewardsCallback(ctx) {
@@ -137,6 +191,7 @@ module.exports.handleRewards = handleRewards;
 module.exports.handleRewardsCallback = handleRewardsCallback;
 module.exports.GROUP_REWARDS_TEXT = GROUP_REWARDS_TEXT;
 module.exports.EMPTY_REWARDS_TEXT = EMPTY_REWARDS_TEXT;
+module.exports.MYSTERY_GIFTS_INTRO = MYSTERY_GIFTS_INTRO;
 module.exports.formatOwnRewards = formatOwnRewards;
 module.exports.getGroupRewardsExtra = getGroupRewardsExtra;
 module.exports.REWARDS_HUB_CALLBACK = REWARDS_HUB_CALLBACK;

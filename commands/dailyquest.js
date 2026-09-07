@@ -75,8 +75,11 @@ function lockedKeyboard() {
 function homeKeyboard() {
   return Markup.inlineKeyboard([
     [btn("🔄 Refresh", DQUEST_CALLBACK.REFRESH)],
-    [btn("👛 Wallet", "phub:wallet"), btn("🏪 ManGo Shop", DQUEST_CALLBACK.SHOP)],
-    [btn("⬅️ Back", "phub:back")],
+    [
+      btn("🎮 Games", "phub:games"),
+      btn("🏪 ManGo Shop", DQUEST_CALLBACK.SHOP),
+    ],
+    [btn("👛 Wallet", "phub:wallet"), btn("⬅️ Back", "phub:back")],
   ]);
 }
 

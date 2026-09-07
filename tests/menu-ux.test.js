@@ -35,6 +35,23 @@ const { handleHelp, HELP_MESSAGE } = require("../commands/help");
 const { handleStart, WELCOME_MESSAGE } = require("../commands/start");
 const { handleCommunityBuilder } = require("../commands/communitybuilder");
 const { handleLeaderboard } = require("../commands/leaderboard");
+const {
+  handleRewards,
+  EMPTY_REWARDS_TEXT,
+  formatOwnRewards,
+  GROUP_REWARDS_TEXT,
+} = require("../commands/rewards");
+const { formatWeeklyWinnersMessage } = require("../services/weeklyWinners");
+const { handleWallet, WALLET_HUB_CALLBACK } = require("../commands/wallet");
+const { handlePresale } = require("../commands/presale");
+const { handleShop } = require("../commands/shop");
+const {
+  JOIN_BUILDER_POINTS,
+  WALLET_BUILDER_POINTS,
+  ACTIVE_BUILDER_POINTS,
+  ACTIVE_LIFETIME_XP,
+  FIRST_WELCOME_POINTS,
+} = require("../services/communityBuilder");
 const { WELCOME_TEXT, WELCOME_TEXT_NO_WALLET_WARNING } = require("../events/welcome");
 const { CONCISE_WALLET_GRACE_NOTICE } = require("../services/walletGrace");
 const {
@@ -117,38 +134,43 @@ function runTest(name, fn) {
     const ctx = mockCtx({ chatType: "supergroup" });
     handleMenu(ctx);
     assert.ok(ctx.replies[0].text.includes("🥭 ManGo Menu"));
-    assert.ok(ctx.replies[0].text.includes("Your ManGo hub."));
     assert.ok(
-      ctx.replies[0].text.includes("Start with Wallet, then check Daily Quest")
+      ctx.replies[0].text.includes(
+        "New here? Connect your wallet, then open Daily Quest."
+      )
     );
+    assert.ok(!ctx.replies[0].text.includes("Your ManGo hub."));
     assert.deepStrictEqual(labelsOf(ctx.replies[0].extra), [
       "👛 Wallet",
       "🎯 Daily Quest",
       "👤 My Profile",
       "🎮 Games",
       "🏆 Rankings",
-      "🎁 Rewards",
-      "🏪 ManGo Shop",
+      "🎁 Mystery Gifts",
       "🤝 Community Builder",
       "ℹ️ Help",
     ]);
+    assert.ok(!labelsOf(ctx.replies[0].extra).includes("🏪 ManGo Shop"));
     assert.strictEqual(labelsOf(ctx.replies[0].extra)[0], "👛 Wallet");
   });
 
-  await runTest("2. private menu same nine destinations plus Snake/Bounch", () => {
+  await runTest("2. private menu simplified first-level", () => {
     const rows = getPrivateMenuKeyboard().reply_markup.keyboard;
     assert.deepStrictEqual(rows, [
       [MENU_LABELS.WALLET, MENU_LABELS.DAILY_QUEST],
       [MENU_LABELS.MY_PROFILE, MENU_LABELS.GAMES],
       [MENU_LABELS.RANKINGS, MENU_LABELS.REWARDS],
-      [MENU_LABELS.SHOP, MENU_LABELS.COMMUNITY_BUILDER],
-      [MENU_LABELS.HELP],
-      [MENU_LABELS.SNAKE, MENU_LABELS.BOUNCH],
+      [MENU_LABELS.COMMUNITY_BUILDER, MENU_LABELS.HELP],
     ]);
+    const flat = rows.flat();
+    assert.ok(!flat.includes(MENU_LABELS.SHOP));
+    assert.ok(!flat.includes(MENU_LABELS.SNAKE));
+    assert.ok(!flat.includes(MENU_LABELS.BOUNCH));
+    assert.strictEqual(MENU_LABELS.REWARDS, "🎁 Mystery Gifts");
     const ctx = mockCtx();
     handleMenu(ctx);
     assert.strictEqual(ctx.replies[0].text, PRIVATE_MENU_HINT);
-    assert.ok(PRIVATE_MENU_HINT.includes("Start with Wallet"));
+    assert.ok(PRIVATE_MENU_HINT.includes("Connect your wallet"));
   });
 
   await runTest("3-8. Daily Quest XP TODAY vs DAILY QUESTS; checklist source", () => {
@@ -183,6 +205,7 @@ function runTest(name, fn) {
       "🎯 Daily Quest",
       "👛 Wallet",
       "🏆 Rankings",
+      "🏪 ManGo Shop",
       "⬅️ Back",
     ]);
     const pointsCtx = mockCtx();
@@ -212,9 +235,11 @@ function runTest(name, fn) {
     const ctx = mockCtx();
     handleCommunityBuilder(ctx, files);
     const text = ctx.replies[0].text;
-    assert.ok(text.includes("BP is not XP"));
-    assert.ok(text.includes("Genuine referrals can earn BP"));
-    assert.ok(text.includes("Useful contributions may also receive BP"));
+    assert.ok(text.includes("Builder Points are different from XP"));
+    assert.ok(text.includes("Invite real people with your personal link"));
+    assert.ok(text.includes("they connect a wallet"));
+    assert.ok(text.includes("they become active in ManGo"));
+    assert.ok(text.includes("Do not spam invites"));
     const buttons = labelsOf(ctx.replies[0].extra);
     assert.ok(buttons.includes("📨 My Invite Link"));
     assert.ok(buttons.includes("👥 My Referrals"));
@@ -239,31 +264,37 @@ function runTest(name, fn) {
     assert.ok(PRIVATE_GAMES_TEXT.includes("Games topic"));
     assert.ok(PRIVATE_GAMES_TEXT.includes("Tic-Tac-Toe"));
     const extra = getPrivateGamesMenuExtra(mockCtx());
+    const names = labelsOf(extra);
+    assert.ok(names.includes("🐍 Play Snake") || names.includes("🏀 Play Bounch") || extra.reply_markup);
     const blob = JSON.stringify(extra);
     assert.ok(!blob.includes(GROUP_MENU_CALLBACK.TICTACTOE));
     assert.ok(!blob.includes(GROUP_MENU_CALLBACK.MANGOBOMB));
   });
 
-  await runTest("17-19. Wallet/Rewards/Shop remain first-level destinations", () => {
+  await runTest("17-19. Shop off first-level; Wallet/Mystery Gifts remain", () => {
     const group = labelsOf(getGroupMenuExtra(mockCtx({ chatType: "group" })));
     assert.ok(group.includes("👛 Wallet"));
-    assert.ok(group.includes("🎁 Rewards"));
-    assert.ok(group.includes("🏪 ManGo Shop"));
+    assert.ok(group.includes("🎁 Mystery Gifts"));
+    assert.ok(!group.includes("🏪 ManGo Shop"));
     const privateRows = getPrivateMenuKeyboard().reply_markup.keyboard.flat();
     assert.ok(privateRows.includes(MENU_LABELS.WALLET));
     assert.ok(privateRows.includes(MENU_LABELS.REWARDS));
-    assert.ok(privateRows.includes(MENU_LABELS.SHOP));
+    assert.ok(!privateRows.includes(MENU_LABELS.SHOP));
+    assert.ok(labelsOf(getPrivateProfileMenuExtra()).includes("🏪 ManGo Shop"));
+    assert.ok(labelsOf(getGroupProfileMenuExtra(mockCtx())).includes("🏪 ManGo Shop"));
   });
 
   await runTest("20-22. Help beginner loop; /start to /menu; no /launch", () => {
-    assert.ok(HELP_MESSAGE.includes("Register your wallet"));
+    assert.ok(HELP_MESSAGE.includes("Connect your wallet"));
     assert.ok(HELP_MESSAGE.includes("Open /menu"));
     assert.ok(HELP_MESSAGE.includes("Check Daily Quest"));
     assert.ok(HELP_MESSAGE.includes("Activity Streak"));
-    assert.ok(HELP_MESSAGE.includes("Builder Points"));
+    assert.ok(HELP_MESSAGE.includes("Community Builder"));
     assert.ok(HELP_MESSAGE.includes("ManGo Loot"));
+    assert.ok(HELP_MESSAGE.includes("Mystery Gifts"));
     assert.ok(!HELP_MESSAGE.includes("/launch"));
     assert.ok(!HELP_MESSAGE.includes("/tictactoe"));
+    assert.ok(!HELP_MESSAGE.includes("Register your wallet"));
     const help = mockCtx();
     handleHelp(help);
     assert.strictEqual(help.replies[0].text, HELP_MESSAGE);
@@ -295,6 +326,123 @@ function runTest(name, fn) {
     handleDailyQuest(ctx, files);
     assert.ok(ctx.replies[0].text.includes("Connect your wallet first"));
     assert.ok(!ctx.replies[0].text.includes("⚡ XP TODAY"));
+  });
+
+  await runTest("25. Daily Quest unlocked next-actions include Games and Shop", () => {
+    const ctx = mockCtx();
+    handleDailyQuest(ctx, files);
+    const names = labelsOf(ctx.replies[0].extra);
+    assert.deepStrictEqual(names, [
+      "🔄 Refresh",
+      "🎮 Games",
+      "🏪 ManGo Shop",
+      "👛 Wallet",
+      "⬅️ Back",
+    ]);
+  });
+
+  await runTest("26. Mystery Gifts empty explainer is truthful", () => {
+    const ctx = mockCtx({ userId: USER });
+    handleRewards(ctx, files);
+    const text = ctx.replies[0].text;
+    assert.ok(text.includes("🎁 Mystery Gifts"));
+    assert.ok(text.includes("If you are selected, ManGoBot will tell you what happens next."));
+    assert.ok(text.includes("No Mystery Gifts yet."));
+    assert.ok(text.includes("📊 Your Activity"));
+    assert.ok(!text.toLowerCase().includes("x raid"));
+    assert.ok(!text.toLowerCase().includes("automatic delivery"));
+    assert.ok(!text.toLowerCase().includes("highest xp"));
+    assert.ok(!text.toLowerCase().includes("automatically"));
+    assert.ok(!text.toLowerCase().includes("tap to claim"));
+    assert.ok(!/\bclaim\b/i.test(text));
+    const names = labelsOf(ctx.replies[0].extra);
+    assert.deepStrictEqual(names, ["⬅️ Back"]);
+    assert.ok(EMPTY_REWARDS_TEXT.includes("No Mystery Gifts yet."));
+  });
+
+  await runTest("27. rewards deep-link payload still opens Mystery Gifts", () => {
+    const ctx = mockCtx();
+    ctx.startPayload = "rewards";
+    handleStart(ctx, files);
+    assert.ok(ctx.replies[0].text.includes("🎁 Mystery Gifts"));
+    assert.ok(ctx.replies[0].text.includes("No Mystery Gifts yet."));
+  });
+
+  await runTest("28. existing gift history still renders under explainer", () => {
+    const text = formatOwnRewards(
+      [
+        {
+          type: "mystery-gift",
+          status: "pending",
+          createdAt: Date.UTC(2026, 8, 1),
+        },
+        {
+          type: "mystery-gift",
+          status: "sent",
+          createdAt: Date.UTC(2026, 7, 1),
+          txSignature: "Sig11111111111111111111111111111111111111111",
+        },
+      ],
+      { userId: USER, ...files }
+    );
+    assert.ok(text.includes("If you are selected"));
+    assert.ok(text.includes("🎁 Your Gifts"));
+    assert.ok(text.includes("Pending:"));
+    assert.ok(text.includes("Sent:"));
+    assert.ok(text.includes("Mystery Gift"));
+    assert.ok(!text.includes("No Mystery Gifts yet."));
+  });
+
+  await runTest("29. Weekly Winners is weekly XP, not Mystery Gifts", () => {
+    const empty = formatWeeklyWinnersMessage({ winners: [] });
+    assert.ok(empty.includes("Last week's top 3 by weekly XP."));
+    assert.ok(empty.includes("This is not the Mystery Gift list."));
+    const filled = formatWeeklyWinnersMessage({
+      week: "2026-08-03",
+      winners: [{ telegramUserId: "1", name: "Ada", weeklyPoints: 12 }],
+    });
+    assert.ok(filled.includes("12 XP"));
+    assert.ok(filled.includes("not the Mystery Gift list"));
+  });
+
+  await runTest("30. Wallet hub hides Presale; /presale still works", () => {
+    const ctx = mockCtx();
+    handleWallet(ctx, files);
+    const names = labelsOf(ctx.replies[0].extra);
+    assert.ok(!names.includes("Presale"));
+    assert.ok(!names.includes(WALLET_HUB_CALLBACK.PRESALE));
+    const presale = mockCtx();
+    handlePresale(presale, files);
+    assert.ok(presale.replies[0].text.includes("ManGo Presale"));
+  });
+
+  await runTest("31. Shop still reachable from Daily Quest and Profile; games from Games", () => {
+    const quest = mockCtx();
+    handleDailyQuest(quest, files);
+    assert.ok(labelsOf(quest.replies[0].extra).includes("🏪 ManGo Shop"));
+    const shop = mockCtx();
+    handleShop(shop, files);
+    assert.ok(shop.replies[0].text.includes("🏪 ManGo Shop"));
+    assert.ok(labelsOf(getPrivateProfileMenuExtra()).includes("🏪 ManGo Shop"));
+    assert.ok(PRIVATE_GAMES_TEXT.includes("Play Snake and Bounch here"));
+    assert.ok(PRIVATE_GAMES_TEXT.includes("Games topic"));
+  });
+
+  await runTest("32. Builder BP amounts/conditions unchanged", () => {
+    assert.strictEqual(JOIN_BUILDER_POINTS, 1);
+    assert.strictEqual(WALLET_BUILDER_POINTS, 1);
+    assert.strictEqual(ACTIVE_BUILDER_POINTS, 2);
+    assert.strictEqual(ACTIVE_LIFETIME_XP, 5);
+    assert.strictEqual(FIRST_WELCOME_POINTS, 1);
+  });
+
+  await runTest("33. group Rewards bounce still uses rewards payload", () => {
+    const ctx = mockCtx({ chatType: "supergroup" });
+    handleRewards(ctx, files);
+    assert.strictEqual(ctx.replies[0].text, GROUP_REWARDS_TEXT);
+    assert.ok(GROUP_REWARDS_TEXT.includes("Mystery Gifts"));
+    const url = ctx.replies[0].extra.reply_markup.inline_keyboard[0][0].url;
+    assert.ok(url.includes("start=rewards"));
   });
 
   fs.rmSync(tempDir, { recursive: true, force: true });

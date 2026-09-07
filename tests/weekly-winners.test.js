@@ -174,6 +174,8 @@ async function main() {
     assert.strictEqual(rankWeeklyStandings({}).length, 0);
     const emptyMsg = formatWeeklyWinnersMessage({ winners: [] });
     assert.ok(emptyMsg.includes("No qualifying players"));
+    assert.ok(emptyMsg.includes("weekly XP"));
+    assert.ok(emptyMsg.includes("not the Mystery Gift list"));
   });
 
   await runTest("tie sort matches /weekly (weeklyPoints desc only, stable)", async () => {
@@ -445,7 +447,7 @@ async function main() {
     const flat = JSON.stringify(rankings);
     assert.ok(flat.includes("Weekly Winners"));
     assert.ok(flat.includes(GROUP_MENU_CALLBACK.WEEKLY_WINNERS));
-    assert.ok(HELP_MESSAGE.includes("Rankings"));
+    assert.ok(HELP_MESSAGE.includes("Mystery Gifts"));
 
     const wf = winnersFile();
     writeWinnersState(
@@ -562,6 +564,8 @@ async function main() {
       winners: [{ telegramUserId: "1", name: "Alice", weeklyPoints: 1 }],
     });
     assert.ok(msg.includes("Week 32"));
+    assert.ok(msg.includes("weekly XP"));
+    assert.ok(msg.includes("not the Mystery Gift list"));
   });
 
   await runTest("test process never resolves to production weekly-winners path", async () => {

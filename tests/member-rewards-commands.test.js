@@ -192,8 +192,8 @@ runTest("18. user cannot inspect someone else", () => {
   });
   handleRewards(ctx, { rewardsFile });
   assert.ok(!ctx.replies[0].text.includes("Reward ID"));
-  assert.ok(ctx.replies[0].text.includes("No rewards yet"));
-  assert.ok(ctx.replies[0].text.includes("ManGo Rewards"));
+  assert.ok(ctx.replies[0].text.includes("No Mystery Gifts yet"));
+  assert.ok(ctx.replies[0].text.includes("🎁 Mystery Gifts"));
 });
 
 runTest("group /rewards has no personal dump", () => {
@@ -264,13 +264,13 @@ runTest("/start rewards private", () => {
     startPayload: "rewards",
   });
   handleStart(ctx, { rewardsFile, pointsFile });
-  assert.ok(ctx.replies[0].text.includes("ManGo Rewards"));
-  assert.ok(ctx.replies[0].text.includes("No rewards yet"));
+  assert.ok(ctx.replies[0].text.includes("🎁 Mystery Gifts"));
+  assert.ok(ctx.replies[0].text.includes("No Mystery Gifts yet"));
 });
 
 runTest("help lists /rewards /presale not admin reward internals", () => {
   handleHelp(createMockCtx());
-  assert.ok(HELP_MESSAGE.includes("Rewards"));
+  assert.ok(HELP_MESSAGE.includes("Mystery Gifts"));
   assert.ok(!HELP_MESSAGE.includes("/launch"));
   assert.ok(!HELP_MESSAGE.includes("/membercheck"));
   assert.ok(!HELP_MESSAGE.includes("/memberrewards"));

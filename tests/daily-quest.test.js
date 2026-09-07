@@ -343,7 +343,7 @@ async function main() {
     link(files);
     const kb = getPrivateMenuKeyboard({ from: { id: Number(USER) } });
     assert.ok(kb.reply_markup.keyboard.flat().includes(MENU_LABELS.DAILY_QUEST));
-    assert.ok(kb.reply_markup.keyboard.flat().includes(MENU_LABELS.SHOP));
+    assert.ok(!kb.reply_markup.keyboard.flat().includes(MENU_LABELS.SHOP));
     const menu = mockPrivate();
     handleMenu(menu);
     assert.ok(menu.replies[0].extra.reply_markup.keyboard.flat().includes(MENU_LABELS.DAILY_QUEST));

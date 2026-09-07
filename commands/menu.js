@@ -460,6 +460,13 @@ module.exports = (bot) => {
     return handleRewards(ctx);
   });
 
+  bot.hears("🎁 Rewards", (ctx) => {
+    if (!isPrivateChat(ctx)) {
+      return;
+    }
+    return handleRewards(ctx);
+  });
+
   bot.hears(MENU_LABELS.PRESALE, (ctx) => {
     if (!isPrivateChat(ctx)) {
       return;

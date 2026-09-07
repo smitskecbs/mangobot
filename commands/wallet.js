@@ -182,8 +182,7 @@ function buildRegisteredHubExtra(url) {
 function buildVerifiedHubExtra() {
   return Markup.inlineKeyboard([
     [Markup.button.callback("Manage Wallet", WALLET_HUB_CALLBACK.MANAGE)],
-    [Markup.button.callback("Rewards", WALLET_HUB_CALLBACK.REWARDS)],
-    [Markup.button.callback("Presale", WALLET_HUB_CALLBACK.PRESALE)],
+    [Markup.button.callback("🎁 Mystery Gifts", WALLET_HUB_CALLBACK.REWARDS)],
     [Markup.button.callback("⬅️ Back", WALLET_HUB_CALLBACK.BACK)],
   ]);
 }

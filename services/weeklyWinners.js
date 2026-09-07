@@ -318,6 +318,9 @@ function formatWeeklyWinnersMessage(latest) {
   if (!latest || !Array.isArray(latest.winners) || latest.winners.length === 0) {
     return `🏆 ManGo Weekly Winners
 
+Last week's top 3 by weekly XP.
+This is not the Mystery Gift list.
+
 No qualifying players in the previous week.`;
   }
 
@@ -336,6 +339,9 @@ No qualifying players in the previous week.`;
   });
 
   return `🏆 ManGo Weekly Winners
+
+Last week's top 3 by weekly XP.
+This is not the Mystery Gift list.
 
 ${weekLine}
 

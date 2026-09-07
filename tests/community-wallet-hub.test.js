@@ -209,7 +209,7 @@ runTest("2. Rewards grote hoofdmenu-knop", () => {
   const ctx = createMockCtx({ chatType: "supergroup" });
   handleMenu(ctx);
   const labels = buttons(ctx.replies[0]).map((b) => b.text);
-  assert.ok(labels.includes("🎁 Rewards"));
+  assert.ok(labels.includes("🎁 Mystery Gifts"));
 });
 
 runTest("3. My Profile naam", () => {
@@ -279,8 +279,7 @@ runTest("6. verified wallet view", () => {
   assert.ok(!ctx.replies[0].text.includes(wallet.address));
   assert.deepStrictEqual(buttons(ctx.replies[0]).map((b) => b.text), [
     "Manage Wallet",
-    "Rewards",
-    "Presale",
+    "🎁 Mystery Gifts",
     "⬅️ Back",
   ]);
 });
@@ -381,8 +380,10 @@ runTest("16. no rewards", () => {
   const { rewardsFile } = files();
   const ctx = createMockCtx({ userId: 16, text: "/rewards" });
   handleRewards(ctx, { rewardsFile });
-  assert.strictEqual(ctx.replies[0].text, EMPTY_REWARDS_TEXT);
-  assert.ok(ctx.replies[0].text.includes("No rewards yet"));
+  assert.ok(ctx.replies[0].text.includes("🎁 Mystery Gifts"));
+  assert.ok(ctx.replies[0].text.includes("No Mystery Gifts yet"));
+  assert.ok(ctx.replies[0].text.includes("If you are selected"));
+  assert.ok(EMPTY_REWARDS_TEXT.includes("No Mystery Gifts yet"));
 });
 
 runTest("17. pending mystery gift", () => {
@@ -437,7 +438,8 @@ runTest("19. user alleen eigen rewards", () => {
   createReward({ telegramUserId: 191, walletFile, rewardsFile, now: 3 });
   const other = createMockCtx({ userId: 192 });
   handleRewards(other, { rewardsFile });
-  assert.strictEqual(other.replies[0].text, EMPTY_REWARDS_TEXT);
+  assert.ok(other.replies[0].text.includes("No Mystery Gifts yet"));
+  assert.ok(!other.replies[0].text.includes("Pending:"));
   const own = createMockCtx({ userId: 191 });
   handleRewards(own, { rewardsFile });
   assert.ok(own.replies[0].text.includes("Mystery Gift"));
@@ -600,7 +602,7 @@ runTest("group rewards/presale privacy + help commands", () => {
   handleHelp(createMockCtx());
   assert.ok(HELP_MESSAGE.includes("/menu"));
   assert.ok(HELP_MESSAGE.includes("Daily Quest"));
-  assert.ok(HELP_MESSAGE.includes("Wallet"));
+  assert.ok(HELP_MESSAGE.includes("Connect your wallet"));
   assert.ok(!HELP_MESSAGE.includes("/launch"));
   assert.ok(
     !HELP_MESSAGE.split("\n").some((line) => line.trim() === "/reward")

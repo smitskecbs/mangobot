@@ -389,9 +389,7 @@ runTest("menu bevat private opties zonder PvP", async () => {
     [MENU_LABELS.WALLET, MENU_LABELS.DAILY_QUEST],
     [MENU_LABELS.MY_PROFILE, MENU_LABELS.GAMES],
     [MENU_LABELS.RANKINGS, MENU_LABELS.REWARDS],
-    [MENU_LABELS.SHOP, MENU_LABELS.COMMUNITY_BUILDER],
-    [MENU_LABELS.HELP],
-    [MENU_LABELS.SNAKE, MENU_LABELS.BOUNCH],
+    [MENU_LABELS.COMMUNITY_BUILDER, MENU_LABELS.HELP],
   ]);
   assert.ok(rows.every((row) => row.length <= 2));
   assert.strictEqual(kb.reply_markup.resize_keyboard, true);
@@ -633,7 +631,7 @@ runTest("/menu group toont Wallet en Rewards op hoofdmenu", async () => {
   assert.strictEqual(ctx.replies[0].text, formatGroupMenuText("Kevin"));
   assert.ok(ctx.replies[0].text.startsWith("🥭 ManGo Menu — Kevin"));
   const rows = getInlineRows(ctx.replies[0].extra);
-  assert.strictEqual(rows.length, 5);
+  assert.strictEqual(rows.length, 4);
   assert.ok(rows.every((row) => row.length <= 2));
   const labels = rows.flat().map((b) => b.text);
   assert.deepStrictEqual(labels, [
@@ -642,8 +640,7 @@ runTest("/menu group toont Wallet en Rewards op hoofdmenu", async () => {
     "👤 My Profile",
     "🎮 Games",
     "🏆 Rankings",
-    "🎁 Rewards",
-    "🏪 ManGo Shop",
+    "🎁 Mystery Gifts",
     "🤝 Community Builder",
     "ℹ️ Help",
   ]);
@@ -729,7 +726,7 @@ runTest("My Profile submenu deep-links", async () => {
     rows.map((row) => row.map((b) => b.text)),
     [
       ["🎯 Daily Quest", "👛 Wallet"],
-      ["🏆 Rankings"],
+      ["🏆 Rankings", "🏪 ManGo Shop"],
       ["⬅️ Back"],
     ]
   );
@@ -739,7 +736,7 @@ runTest("My Profile submenu deep-links", async () => {
     ),
     [
       ["🎯 Daily Quest", "👛 Wallet"],
-      ["🏆 Rankings"],
+      ["🏆 Rankings", "🏪 ManGo Shop"],
       ["⬅️ Back"],
     ]
   );
@@ -755,9 +752,7 @@ runTest("/menu private toont reply-keyboard hint", async () => {
     [MENU_LABELS.WALLET, MENU_LABELS.DAILY_QUEST],
     [MENU_LABELS.MY_PROFILE, MENU_LABELS.GAMES],
     [MENU_LABELS.RANKINGS, MENU_LABELS.REWARDS],
-    [MENU_LABELS.SHOP, MENU_LABELS.COMMUNITY_BUILDER],
-    [MENU_LABELS.HELP],
-    [MENU_LABELS.SNAKE, MENU_LABELS.BOUNCH],
+    [MENU_LABELS.COMMUNITY_BUILDER, MENU_LABELS.HELP],
   ]);
   assert.ok(rows.every((row) => row.length <= 2));
 });
@@ -941,8 +936,7 @@ runTest("Rankings / Games / Profile / Back navigation edits menu", async () => {
       "👤 My Profile",
       "🎮 Games",
       "🏆 Rankings",
-      "🎁 Rewards",
-      "🏪 ManGo Shop",
+      "🎁 Mystery Gifts",
       "🤝 Community Builder",
       "ℹ️ Help",
     ]
@@ -1503,7 +1497,7 @@ runTest("private My Profile submenu layout and Back", async () => {
     rows.map((row) => row.map((b) => b.text)),
     [
       ["🎯 Daily Quest", "👛 Wallet"],
-      ["🏆 Rankings"],
+      ["🏆 Rankings", "🏪 ManGo Shop"],
       ["⬅️ Back"],
     ]
   );

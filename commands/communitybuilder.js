@@ -127,15 +127,20 @@ function builderHomeText(summary) {
   return [
     "🤝 Community Builder",
     "",
-    "Help ManGo grow.",
+    "🤝 Builder Points",
     "",
-    "XP = chatting, playing and taking part in the community.",
-    "Builder Points (BP) = helping ManGo grow. BP is not XP.",
+    "Builder Points are different from XP.",
     "",
-    "Genuine referrals can earn BP.",
-    "Useful contributions may also receive BP.",
+    "Invite real people with your personal link.",
     "",
-    "Check your invite link and referral status below.",
+    "You can earn BP when:",
+    "• someone joins through your link",
+    "• they connect a wallet",
+    "• they become active in ManGo",
+    "",
+    "Useful community contributions can also receive BP.",
+    "",
+    "Do not spam invites — real participation matters.",
     "",
     `Builder Points: ${summary.builderPoints}`,
     `Community Title: ${summary.activeTitleLabel || "None"}`,
@@ -249,20 +254,25 @@ function inviteSuccessText(inviteUrl, reused) {
     "",
     inviteUrl,
     "",
-    "Share this link. You earn Builder Points when real members join through it.",
+    "Share this personal link.",
+    "You earn Builder Points when a real member joins through it — more when they connect a wallet and take part.",
   ].join("\n");
 }
 
 function referralsText(pageData) {
+  const legend =
+    "Joined +1 BP · Wallet +1 BP · Active (5 XP) +2 BP";
   if (!pageData.total) {
     return [
       "👥 Your Referrals",
+      "",
+      legend,
       "",
       "No valid referrals yet.",
       "Share your personal invite link to start building.",
     ].join("\n");
   }
-  const lines = ["👥 Your Referrals", ""];
+  const lines = ["👥 Your Referrals", "", legend, ""];
   for (const row of pageData.rows) {
     lines.push(`${milestoneIcon(row)} ${row.displayName}`);
     lines.push(`   Joined ${mark(row.joined)}`);

@@ -219,19 +219,19 @@ async function runTest(name, fn) {
 }
 
 async function main() {
-  await runTest("33. normal member main menu shows ManGo Shop", () => {
+  await runTest("33. normal member main menu does not show Shop first-level", () => {
     const kb = getPrivateMenuKeyboard({ from: { id: Number(USER) } });
     const labels = kb.reply_markup.keyboard.flat();
-    assert.ok(labels.includes(MENU_LABELS.SHOP));
+    assert.ok(!labels.includes(MENU_LABELS.SHOP));
     const ctx = mockCtx({ userId: USER, chatType: "private" });
     handleMenu(ctx);
-    assert.ok(ctx.replies[0].extra.reply_markup.keyboard.flat().includes(MENU_LABELS.SHOP));
+    assert.ok(!ctx.replies[0].extra.reply_markup.keyboard.flat().includes(MENU_LABELS.SHOP));
   });
 
-  await runTest("34. admin menu also shows shop", () => {
+  await runTest("34. admin menu also omits first-level shop", () => {
     const kb = getPrivateMenuKeyboard({ from: { id: Number(ADMIN_ID) } });
     const labels = kb.reply_markup.keyboard.flat();
-    assert.ok(labels.includes(MENU_LABELS.SHOP));
+    assert.ok(!labels.includes(MENU_LABELS.SHOP));
     assert.ok(labels.includes(MENU_LABELS.ADMIN));
     assert.ok(!labels.includes(MENU_LABELS.PHASE2));
   });

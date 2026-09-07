@@ -190,8 +190,7 @@ runTest("3. /wallet private verified hub", async () => {
   const labels = getButtons(ctx.replies[0]).map((b) => b.text);
   assert.deepStrictEqual(labels, [
     "Manage Wallet",
-    "Rewards",
-    "Presale",
+    "🎁 Mystery Gifts",
     "⬅️ Back",
   ]);
   assert.ok(!labels.includes("Replace Wallet"));
@@ -383,7 +382,7 @@ runTest("menu Wallet Status deep-link", async () => {
     rows.map((row) => row.map((b) => b.text)),
     [
       ["🎯 Daily Quest", "👛 Wallet"],
-      ["🏆 Rankings"],
+      ["🏆 Rankings", "🏪 ManGo Shop"],
       ["⬅️ Back"],
     ]
   );
@@ -397,7 +396,7 @@ runTest("help lists /wallet /mywallet /presale", async () => {
   const ctx = createMockCtx();
   handleHelp(ctx);
   assert.ok(HELP_MESSAGE.includes("/menu"));
-  assert.ok(HELP_MESSAGE.includes("Wallet"));
+  assert.ok(HELP_MESSAGE.includes("Connect your wallet"));
   assert.ok(!HELP_MESSAGE.includes("/launch"));
   assert.strictEqual(ctx.replies[0].text, HELP_MESSAGE);
 });

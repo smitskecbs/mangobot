@@ -8,7 +8,7 @@ const { isAdmin } = require("../services/points");
 const MENU_LABELS = Object.freeze({
   MY_PROFILE: "👤 My Profile",
   WALLET: "👛 Wallet",
-  REWARDS: "🎁 Rewards",
+  REWARDS: "🎁 Mystery Gifts",
   HELP: "ℹ️ Help",
   COMMUNITY_BUILDER: "🤝 Community Builder",
   SHOP: "🏪 ManGo Shop",
@@ -26,11 +26,13 @@ const MENU_LABELS = Object.freeze({
   WEEKLY: "📅 Weekly",
 });
 
+/** Cached Telegram keyboards may still send the previous Rewards label. */
+const LEGACY_MENU_LABELS = Object.freeze(["🎁 Rewards"]);
+
 const MENU_LABEL_LIST = Object.freeze(Object.values(MENU_LABELS));
 
 const GROUP_MENU_TITLE = "🥭 ManGo Menu";
-const GROUP_MENU_BODY =
-  "Your ManGo hub.\nNew here? Start with Wallet, then check Daily Quest.";
+const GROUP_MENU_BODY = "New here? Connect your wallet, then open Daily Quest.";
 const GROUP_RANKINGS_TITLE = "🏆 Rankings";
 const GROUP_RANKINGS_BODY =
   "See how you compare on XP, weekly score, and Activity Streak.";
@@ -42,13 +44,10 @@ const GROUP_PROFILE_BODY = "Your ManGo progress at a glance.";
 const MAIN_MENU_BUTTON_LABEL = "🥭 Main Menu";
 const PRIVATE_GAMES_TEXT = `🎮 Games
 
-Play Snake and Bounch here with your profile.
+Play Snake and Bounch here.
+Snake has 4 difficulties: Classic, Walls, Center, Danger Zone. Harder = more points. One leaderboard. No unlocking.
 
-Snake has 4 difficulties on the game page: Classic, Walls, Center, Danger Zone. Harder = more points. One leaderboard. No unlocking.
-
-Tic-Tac-Toe, Connect Four, Checkers, Trivia, ManGo Bomb and Blackjack are played in the ManGo group, in the Games topic.
-
-Open /menu → Games there to start them.`;
+Tic-Tac-Toe, Connect Four, Checkers, Trivia, ManGo Bomb and Blackjack are played in the ManGo group Games topic.`;
 
 const GROUP_MENU_TEXT = `${GROUP_MENU_TITLE}\n\n${GROUP_MENU_BODY}`;
 
@@ -126,7 +125,10 @@ function isGroupChat(ctx) {
 }
 
 function isPrivateMenuLabel(text) {
-  return typeof text === "string" && MENU_LABEL_LIST.includes(text);
+  return (
+    typeof text === "string" &&
+    (MENU_LABEL_LIST.includes(text) || LEGACY_MENU_LABELS.includes(text))
+  );
 }
 
 /**
@@ -289,9 +291,7 @@ function getPrivateMenuKeyboard(ctxOrUserId) {
     [MENU_LABELS.WALLET, MENU_LABELS.DAILY_QUEST],
     [MENU_LABELS.MY_PROFILE, MENU_LABELS.GAMES],
     [MENU_LABELS.RANKINGS, MENU_LABELS.REWARDS],
-    [MENU_LABELS.SHOP, MENU_LABELS.COMMUNITY_BUILDER],
-    [MENU_LABELS.HELP],
-    [MENU_LABELS.SNAKE, MENU_LABELS.BOUNCH],
+    [MENU_LABELS.COMMUNITY_BUILDER, MENU_LABELS.HELP],
   ];
   if (isAdmin(keyboardUserId(ctxOrUserId))) {
     rows.push([MENU_LABELS.ADMIN]);
@@ -361,23 +361,22 @@ function getGroupMenuExtra(ctx) {
     ],
     [
       Markup.button.callback("🏆 Rankings", GROUP_MENU_CALLBACK.RANKINGS),
-      privateDeepLinkButton(ctx, "🎁 Rewards", "rewards", GROUP_MENU_CALLBACK.REWARDS),
-    ],
-    [
       privateDeepLinkButton(
         ctx,
-        "🏪 ManGo Shop",
-        "shop",
-        GROUP_MENU_CALLBACK.SHOP
+        "🎁 Mystery Gifts",
+        "rewards",
+        GROUP_MENU_CALLBACK.REWARDS
       ),
+    ],
+    [
       privateDeepLinkButton(
         ctx,
         "🤝 Community Builder",
         "builder",
         GROUP_MENU_CALLBACK.BUILDER
       ),
+      Markup.button.callback("ℹ️ Help", GROUP_MENU_CALLBACK.HELP),
     ],
-    [Markup.button.callback("ℹ️ Help", GROUP_MENU_CALLBACK.HELP)],
   ]);
 }
 
@@ -565,9 +564,18 @@ function getGroupProfileMenuExtra(ctx, backCallback = GROUP_MENU_CALLBACK.BACK) 
     );
   }
   rows.push(first);
-  rows.push([
+  const shopUrl = buildPrivateDeepLink(username, "shop");
+  const second = [
     Markup.button.callback("🏆 Rankings", GROUP_MENU_CALLBACK.RANKINGS),
-  ]);
+  ];
+  if (shopUrl) {
+    second.push(Markup.button.url("🏪 ManGo Shop", shopUrl));
+  } else {
+    second.push(
+      Markup.button.callback("🏪 ManGo Shop", GROUP_MENU_CALLBACK.SHOP)
+    );
+  }
+  rows.push(second);
   rows.push([Markup.button.callback("⬅️ Back", backCallback)]);
 
   return Markup.inlineKeyboard(rows);
@@ -583,7 +591,10 @@ function getPrivateProfileMenuExtra() {
       Markup.button.callback("🎯 Daily Quest", PRIVATE_HUB_CALLBACK.DAILY_QUEST),
       Markup.button.callback("👛 Wallet", PRIVATE_HUB_CALLBACK.WALLET_STATUS),
     ],
-    [Markup.button.callback("🏆 Rankings", PRIVATE_HUB_CALLBACK.RANKINGS)],
+    [
+      Markup.button.callback("🏆 Rankings", PRIVATE_HUB_CALLBACK.RANKINGS),
+      Markup.button.callback("🏪 ManGo Shop", "shop:home"),
+    ],
     [Markup.button.callback("⬅️ Back", PRIVATE_HUB_CALLBACK.PROFILE_BACK)],
   ]);
 }
@@ -648,6 +659,7 @@ function isGroupMenuCallback(data) {
 
 module.exports = {
   MENU_LABELS,
+  LEGACY_MENU_LABELS,
   MENU_LABEL_LIST,
   GROUP_MENU_TEXT,
   GROUP_RANKINGS_TEXT,
