@@ -72,6 +72,34 @@ function winnersFile() {
   return path.join(tempDir, `winners-${n}.json`);
 }
 
+/** Repo-root default used by loadPoints() when pointsFile is omitted. Never read contents. */
+const REPO_DEFAULT_POINTS_FILE = path.resolve(__dirname, "..", "points.json");
+
+function isolatedEmptyPointsFile() {
+  const pf = pointsFile();
+  savePoints({ users: {} }, pf);
+  return pf;
+}
+
+function snapshotPathMeta(filePath) {
+  try {
+    const st = fs.statSync(filePath);
+    return { exists: true, mtimeMs: st.mtimeMs, size: st.size };
+  } catch (err) {
+    if (err && err.code === "ENOENT") {
+      return { exists: false, mtimeMs: null, size: null };
+    }
+    throw err;
+  }
+}
+
+function assertPathUnchanged(filePath, before) {
+  const after = snapshotPathMeta(filePath);
+  assert.strictEqual(after.exists, before.exists);
+  assert.strictEqual(after.mtimeMs, before.mtimeMs);
+  assert.strictEqual(after.size, before.size);
+}
+
 function restoreEnv() {
   if (originalAdmin === undefined) delete process.env.ADMIN_USER_ID;
   else process.env.ADMIN_USER_ID = originalAdmin;
@@ -388,7 +416,10 @@ async function main() {
   await runTest("/weeklywinners public text; empty / filled", async () => {
     const wf = winnersFile();
     const ctx = mockCtx();
-    await handleWeeklyWinners(ctx, { winnersFile: wf, pointsFile: pointsFile() });
+    await handleWeeklyWinners(ctx, {
+      winnersFile: wf,
+      pointsFile: isolatedEmptyPointsFile(),
+    });
     assert.ok(ctx.replies[0].text.includes("No qualifying players"));
 
     writeWinnersState(
@@ -410,7 +441,11 @@ async function main() {
     );
     const displayNow = new Date(Date.UTC(2026, 7, 12, 12, 0, 0));
     const ctx2 = mockCtx();
-    await handleWeeklyWinners(ctx2, { winnersFile: wf, now: displayNow });
+    await handleWeeklyWinners(ctx2, {
+      winnersFile: wf,
+      pointsFile: isolatedEmptyPointsFile(),
+      now: displayNow,
+    });
     assert.ok(ctx2.replies[0].text.includes("ManGo Weekly Winners"));
     assert.ok(ctx2.replies[0].text.includes("Alice — 42 XP"));
     assert.ok(ctx2.replies[0].text.includes("Bob — 31 XP"));
@@ -450,6 +485,8 @@ async function main() {
     assert.ok(HELP_MESSAGE.includes("Mystery Gifts"));
 
     const wf = winnersFile();
+    const pf = isolatedEmptyPointsFile();
+    const displayNow = new Date(Date.UTC(2026, 8, 7, 12, 0, 0));
     writeWinnersState(
       {
         version: 1,
@@ -460,16 +497,131 @@ async function main() {
           announced: true,
           winners: [{ telegramUserId: "1", name: "Alice", weeklyPoints: 9 }],
         },
-        current: { week: getWeekId(), standings: {}, updatedAt: 1 },
+        current: { week: getWeekId(displayNow), standings: {}, updatedAt: 1 },
       },
       wf
     );
     const ctx = mockCtx();
     ctx.callbackQuery = { data: GROUP_MENU_CALLBACK.WEEKLY_WINNERS };
     bindGroupMenuOwnerFromCtx(ctx);
-    await handleGroupMenuCallback(ctx, { winnersFile: wf });
+    await handleGroupMenuCallback(ctx, {
+      winnersFile: wf,
+      pointsFile: pf,
+      now: displayNow,
+    });
     assert.ok(ctx.replies.some((r) => r.text.includes("Alice — 9 XP")));
   });
+
+  await runTest(
+    "handleWeeklyWinners isolation: decoy leftover points cannot replace Alice — 9 XP",
+    async () => {
+      const now = new Date(Date.UTC(2026, 8, 7, 12, 0, 0));
+      const currentWeek = getWeekId(now);
+      const previousWeek = getPreviousWeekId(currentWeek);
+      assert.strictEqual(currentWeek, "2026-09-07");
+      assert.strictEqual(previousWeek, "2026-08-31");
+
+      function seedAliceFixture(wf) {
+        writeWinnersState(
+          {
+            version: 1,
+            lastFinalizedWeek: "2026-08-03",
+            latest: {
+              week: "2026-08-03",
+              finalizedAt: 1,
+              announced: true,
+              winners: [
+                { telegramUserId: "1", name: "Alice", weeklyPoints: 9 },
+              ],
+            },
+            current: { week: currentWeek, standings: {}, updatedAt: 1 },
+          },
+          wf
+        );
+      }
+
+      const wf = winnersFile();
+      seedAliceFixture(wf);
+      const fixturePoints = isolatedEmptyPointsFile();
+      const decoyPoints = pointsFile();
+      seedUsers(
+        decoyPoints,
+        [
+          { id: 777001, name: "ProdGhost", weeklyPoints: 9999, points: 9999 },
+          { id: 777002, name: "DecoyWinner", weeklyPoints: 8888, points: 8888 },
+          { id: 777003, name: "TrapScore", weeklyPoints: 7777, points: 7777 },
+        ],
+        previousWeek
+      );
+
+      assert.notStrictEqual(path.resolve(wf), path.resolve(DEFAULT_WINNERS_FILE));
+      assert.notStrictEqual(
+        path.resolve(fixturePoints),
+        path.resolve(REPO_DEFAULT_POINTS_FILE)
+      );
+      assert.notStrictEqual(
+        path.resolve(decoyPoints),
+        path.resolve(REPO_DEFAULT_POINTS_FILE)
+      );
+      assert.strictEqual(loadPoints(fixturePoints).users["777001"], undefined);
+      assert.strictEqual(
+        loadPoints(decoyPoints).users["777001"].weeklyPoints,
+        9999
+      );
+      assert.strictEqual(readWinnersState(wf).latest.winners[0].name, "Alice");
+      assert.strictEqual(
+        readWinnersState(wf).latest.winners[0].weeklyPoints,
+        9
+      );
+
+      const defaultPointsBefore = snapshotPathMeta(REPO_DEFAULT_POINTS_FILE);
+      const defaultWinnersBefore = snapshotPathMeta(DEFAULT_WINNERS_FILE);
+
+      const contaminated = mockCtx();
+      await handleWeeklyWinners(contaminated, {
+        winnersFile: wf,
+        pointsFile: decoyPoints,
+        now,
+      });
+      assert.ok(contaminated.replies[0].text.includes("ProdGhost — 9999 XP"));
+      assert.ok(!contaminated.replies[0].text.includes("Alice — 9 XP"));
+
+      seedAliceFixture(wf);
+      const isolated = mockCtx();
+      await handleWeeklyWinners(isolated, {
+        winnersFile: wf,
+        pointsFile: fixturePoints,
+        now,
+      });
+      assert.ok(isolated.replies[0].text.includes("Alice — 9 XP"));
+      assert.ok(!isolated.replies[0].text.includes("ProdGhost"));
+      assert.ok(!isolated.replies[0].text.includes("9999"));
+      assert.strictEqual(readWinnersState(wf).latest.winners[0].name, "Alice");
+      assert.strictEqual(
+        readWinnersState(wf).latest.winners[0].weeklyPoints,
+        9
+      );
+      assert.strictEqual(
+        loadPoints(decoyPoints).users["777001"].weeklyPoints,
+        9999
+      );
+      assert.strictEqual(loadPoints(fixturePoints).users["777001"], undefined);
+
+      const menuCtx = mockCtx();
+      menuCtx.callbackQuery = { data: GROUP_MENU_CALLBACK.WEEKLY_WINNERS };
+      bindGroupMenuOwnerFromCtx(menuCtx);
+      await handleGroupMenuCallback(menuCtx, {
+        winnersFile: wf,
+        pointsFile: fixturePoints,
+        now,
+      });
+      assert.ok(menuCtx.replies.some((r) => r.text.includes("Alice — 9 XP")));
+      assert.ok(!menuCtx.replies.some((r) => r.text && r.text.includes("ProdGhost")));
+
+      assertPathUnchanged(REPO_DEFAULT_POINTS_FILE, defaultPointsBefore);
+      assertPathUnchanged(DEFAULT_WINNERS_FILE, defaultWinnersBefore);
+    }
+  );
 
   await runTest("legacy/missing/corrupt winners file safe", async () => {
     const missing = path.join(tempDir, "no-such-winners.json");
@@ -533,7 +685,7 @@ async function main() {
     const posts = [];
     const r1 = await processWeeklyWinnersBoundary({
       winnersFile: wf,
-      pointsFile: pointsFile(),
+      pointsFile: isolatedEmptyPointsFile(),
       now: new Date(Date.UTC(2026, 7, 10, 4, 0, 0)),
       chatId: COMMUNITY_CHAT,
       sendMessageFn: async (_c, t) => {
@@ -545,7 +697,7 @@ async function main() {
     assert.strictEqual(markWeeklyWinnersAnnounced("2026-08-03", wf), true);
     const r2 = await processWeeklyWinnersBoundary({
       winnersFile: wf,
-      pointsFile: pointsFile(),
+      pointsFile: isolatedEmptyPointsFile(),
       now: new Date(Date.UTC(2026, 7, 10, 4, 0, 0)),
       chatId: COMMUNITY_CHAT,
       sendMessageFn: async (_c, t) => {
@@ -838,7 +990,11 @@ async function main() {
       const wf = winnersFile();
       seedAliceLatest(wf, "2026-08-03");
       const ctx = mockCtx();
-      await handleWeeklyWinners(ctx, { winnersFile: wf, now: sundayUtc });
+      await handleWeeklyWinners(ctx, {
+        winnersFile: wf,
+        pointsFile: isolatedEmptyPointsFile(),
+        now: sundayUtc,
+      });
       assert.ok(ctx.replies[0].text.includes("Alice — 42 XP"));
       assert.strictEqual(readWinnersState(wf).latest.week, "2026-08-03");
     });
@@ -850,12 +1006,17 @@ async function main() {
       seedAliceLatest(wf, "2026-08-10");
       const result = syncAndFinalizeWeeklyWinners({
         winnersFile: wf,
+        pointsFile: isolatedEmptyPointsFile(),
         now: mondayMidnightUtc,
       });
       assert.strictEqual(getWeekId(mondayMidnightUtc), "2026-08-10");
       assert.strictEqual(result.finalized, false);
       const ctx = mockCtx();
-      await handleWeeklyWinners(ctx, { winnersFile: wf, now: mondayMidnightUtc });
+      await handleWeeklyWinners(ctx, {
+        winnersFile: wf,
+        pointsFile: isolatedEmptyPointsFile(),
+        now: mondayMidnightUtc,
+      });
       assert.ok(ctx.replies[0].text.includes("Alice — 42 XP"));
     });
   }
@@ -865,7 +1026,11 @@ async function main() {
       const wf = winnersFile();
       seedAliceLatest(wf, "2026-08-10");
       const ctx = mockCtx();
-      await handleWeeklyWinners(ctx, { winnersFile: wf, now: mondayDayUtc });
+      await handleWeeklyWinners(ctx, {
+        winnersFile: wf,
+        pointsFile: isolatedEmptyPointsFile(),
+        now: mondayDayUtc,
+      });
       assert.ok(ctx.replies[0].text.includes("Alice — 42 XP"));
       assert.ok(ctx.replies[0].text.includes("Bob — 31 XP"));
     });
@@ -876,6 +1041,7 @@ async function main() {
     fs.writeFileSync(wf, "{not-json", "utf8");
     const result = syncAndFinalizeWeeklyWinners({
       winnersFile: wf,
+      pointsFile: isolatedEmptyPointsFile(),
       now: mondayDayUtc,
     });
     assert.strictEqual(result.finalized, false);
