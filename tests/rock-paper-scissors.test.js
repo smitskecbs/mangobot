@@ -39,6 +39,7 @@ const { createPvpMatchReservation } = require("../services/pvpMatchReservation")
 const {
   handlePvpCallback,
   finalizeWinXp,
+  registerPvpCallbacks,
 } = require("../events/pvp-callbacks");
 const { handleRps, PRIVATE_RPS_TEXT } = require("../commands/rps");
 const { handleStart, WELCOME_MESSAGE } = require("../commands/start");
@@ -67,7 +68,13 @@ const {
 const { GAME_SOURCES } = require("../services/dailyQuest");
 const { PVP_MATCH_GAMES } = require("../services/pvpProgress");
 const { ACTION_REGISTRY } = require("../services/communityActivityEngine");
-const { GAME_TYPE } = require("../utils/gameCleanup");
+const {
+  GAME_TYPE,
+  scheduleGameMessageCleanup,
+  getPendingGameMessageCleanupCount,
+  getScheduledGameCleanupIds,
+  clearAllGameMessageCleanups,
+} = require("../utils/gameCleanup");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-rps-"));
 let testCounter = 0;
@@ -129,6 +136,7 @@ function createFakeTimers() {
 
 function createService(overrides = {}) {
   const timers = createFakeTimers();
+  let nextSessionSeq = 1;
   const manager =
     overrides.manager ||
     createPvpSessionManager({
@@ -137,6 +145,13 @@ function createService(overrides = {}) {
       clearTimeoutFn: timers.clearTimeout,
       pairCooldownMs:
         overrides.pairCooldownMs != null ? overrides.pairCooldownMs : 30 * 60 * 1000,
+      randomIdFn:
+        overrides.randomIdFn ||
+        (() => {
+          const id = `aa${nextSessionSeq.toString(16).replace(/1/g, "e").padStart(10, "a")}`;
+          nextSessionSeq += 1;
+          return id;
+        }),
     });
   const reservation = overrides.reservation || createPvpMatchReservation();
   const questGames = [];
@@ -1359,6 +1374,516 @@ async function main() {
     assert.ok(!cbSrc.includes("sendPrivatePrompts"));
     const { service } = createService();
     assert.strictEqual(typeof service.getPrivateView, "undefined");
+  });
+
+  await runTest("lifecycle A-B. bot Finish releases state; immediate /rps succeeds", async () => {
+    const { service, reservation, manager } = createService({
+      randomMoveFn: () => "scissors",
+    });
+    const started = startBot(service);
+    await lock(service, started.session.id, USER_A, "rock");
+    assert.strictEqual(reservation.has(USER_A), false);
+    assert.strictEqual(service.isOpen(), false);
+    const finished = service.finish({
+      sessionId: started.session.id,
+      userId: USER_A,
+      round: 1,
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(finished.ok, true);
+    assert.strictEqual(service.getSession(started.session.id), null);
+    assert.strictEqual(reservation.has(USER_A), false);
+    assert.strictEqual(manager.getSession(started.session.id), null);
+    const ctx = createMockCtx({
+      userId: USER_A,
+      firstName: "Kevin",
+      messageThreadId: Number(GAMES_TOPIC_ID),
+    });
+    await handleRps(ctx, {
+      startChallengeFn: (p) => service.startChallenge(p),
+      setMessageIdFn: (id, mid) => service.setMessageId(id, mid),
+      isBusyFn: () => false,
+      getBusyReasonFn: () => null,
+    });
+    assert.ok(ctx.replies[0].text.includes("How do you want to play"));
+    assert.strictEqual(reservation.has(USER_A), true);
+    const fresh = service.manager.listSessions()[0];
+    assert.ok(fresh);
+    assert.notStrictEqual(fresh.id, started.session.id);
+    assert.strictEqual(fresh.status, STATUS.WAITING);
+  });
+
+  await runTest("lifecycle C-E. bot Play Again is a fresh round with one timer", async () => {
+    const { service, reservation, timers, manager } = createService({
+      randomMoveFn: () => "scissors",
+    });
+    const started = startBot(service);
+    await lock(service, started.session.id, USER_A, "rock");
+    const liveBefore = manager.getSession(started.session.id);
+    assert.strictEqual(liveBefore.timers.turnTimeoutId, null);
+    const replay = service.replay({
+      sessionId: started.session.id,
+      userId: USER_A,
+      round: 1,
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(replay.ok, true);
+    assert.strictEqual(replay.session.round, 2);
+    assert.strictEqual(replay.session.status, STATUS.ACTIVE);
+    assert.strictEqual(replay.session.choices.p1, null);
+    assert.strictEqual(replay.session.choices.p2, null);
+    assert.strictEqual(reservation.has(USER_A), true);
+    const live = manager.getSession(started.session.id);
+    assert.ok(live.timers.turnTimeoutId);
+    assert.strictEqual(live.timers.joinTimeoutId, null);
+    assert.strictEqual(live.timers.countdownTimeoutId, null);
+    assert.strictEqual(live.timers.botTimeoutId, null);
+    const replay2 = service.replay({
+      sessionId: started.session.id,
+      userId: USER_A,
+      round: 1,
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(replay2.ok, false);
+    assert.strictEqual(service.getSession(started.session.id).round, 2);
+    timers.advance(1_000);
+    assert.strictEqual(service.getSession(started.session.id).status, STATUS.ACTIVE);
+  });
+
+  await runTest("lifecycle F. rapid double Play Again creates only one next round", async () => {
+    const { service, manager } = createService({ randomMoveFn: () => "scissors" });
+    const started = startBot(service);
+    await lock(service, started.session.id, USER_A, "rock");
+    const first = createMockCtx({
+      callbackData: buildReplayCallbackData(started.session.id, 1),
+    });
+    const second = createMockCtx({
+      callbackData: buildReplayCallbackData(started.session.id, 1),
+    });
+    await Promise.all([
+      handlePvpCallback(first, {
+        runtime: service,
+        parseCallbackData: parsePvpCallbackData,
+        awardPvpWinXpFn: () => ({ awarded: false, pointsToAdd: 0 }),
+      }),
+      handlePvpCallback(second, {
+        runtime: service,
+        parseCallbackData: parsePvpCallbackData,
+        awardPvpWinXpFn: () => ({ awarded: false, pointsToAdd: 0 }),
+      }),
+    ]);
+    const live = manager.getSession(started.session.id);
+    assert.strictEqual(live.round, 2);
+    assert.strictEqual(live.status, STATUS.ACTIVE);
+    assert.ok(live.timers.turnTimeoutId);
+    assert.strictEqual(live.timers.countdownTimeoutId, null);
+  });
+
+  await runTest("lifecycle G. old bot-round callback cannot mutate replay round", async () => {
+    const { service } = createService({ randomMoveFn: () => "paper" });
+    const started = startBot(service);
+    await lock(service, started.session.id, USER_A, "rock");
+    service.replay({
+      sessionId: started.session.id,
+      userId: USER_A,
+      round: 1,
+      chatId: COMMUNITY_CHAT,
+    });
+    const stale = await lock(service, started.session.id, USER_A, "scissors", 1);
+    assert.strictEqual(stale.ok, false);
+    assert.strictEqual(stale.reason, "stale-round");
+    assert.strictEqual(service.getSession(started.session.id).choices.p1, null);
+    assert.strictEqual(service.getSession(started.session.id).round, 2);
+  });
+
+  await runTest("lifecycle H-J. human Finish releases both; each can start /rps immediately", async () => {
+    const { service, reservation } = createService();
+    const lobby = startLobby(service);
+    joinP2(service, lobby.session.id);
+    await lock(service, lobby.session.id, USER_A, "rock");
+    await lock(service, lobby.session.id, USER_B, "scissors");
+    const finished = service.finish({
+      sessionId: lobby.session.id,
+      userId: USER_A,
+      round: 1,
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(finished.ok, true);
+    assert.strictEqual(service.getSession(lobby.session.id), null);
+    assert.strictEqual(reservation.has(USER_A), false);
+    assert.strictEqual(reservation.has(USER_B), false);
+    const a = service.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_A, displayName: "Kevin", isBot: false },
+    });
+    const b = service.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_B, displayName: "Alice", isBot: false },
+    });
+    assert.strictEqual(a.ok, true);
+    assert.strictEqual(b.ok, true);
+    assert.notStrictEqual(a.session.id, lobby.session.id);
+    assert.notStrictEqual(b.session.id, lobby.session.id);
+  });
+
+  await runTest("lifecycle K. completed result is not reserved for 5 minutes", async () => {
+    const { service, reservation, timers } = createService({
+      randomMoveFn: () => "scissors",
+    });
+    const started = startBot(service);
+    await lock(service, started.session.id, USER_A, "rock");
+    assert.strictEqual(reservation.has(USER_A), false);
+    timers.advance(5 * 60 * 1000);
+    assert.strictEqual(reservation.has(USER_A), false);
+    assert.strictEqual(service.isOpen(), false);
+    const fresh = service.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_A, displayName: "Kevin", isBot: false },
+    });
+    assert.strictEqual(fresh.ok, true);
+  });
+
+  await runTest("lifecycle L. lobby Cancel releases reservations", async () => {
+    const { service, reservation } = createService();
+    const lobby = startLobby(service);
+    assert.strictEqual(reservation.has(USER_A), true);
+    const cancelled = service.chooseMode({
+      sessionId: lobby.session.id,
+      userId: USER_A,
+      mode: "cancel",
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(cancelled.ok, true);
+    assert.strictEqual(reservation.has(USER_A), false);
+    assert.strictEqual(service.getSession(lobby.session.id), null);
+    const fresh = service.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_A, displayName: "Kevin", isBot: false },
+    });
+    assert.strictEqual(fresh.ok, true);
+  });
+
+  await runTest("lifecycle M. lobby timeout releases reservations", async () => {
+    const { service, reservation, timers } = createService();
+    const lobby = startLobby(service);
+    timers.advance(JOIN_TIMEOUT_MS);
+    assert.strictEqual(service.getSession(lobby.session.id).endReason, "join-timeout");
+    assert.strictEqual(reservation.has(USER_A), false);
+    const fresh = service.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_A, displayName: "Kevin", isBot: false },
+    });
+    assert.strictEqual(fresh.ok, true);
+  });
+
+  await runTest("lifecycle N. choice timeout releases both players", async () => {
+    const { service, reservation, timers } = createService();
+    const lobby = startLobby(service);
+    joinP2(service, lobby.session.id);
+    timers.advance(CHOICE_TIMEOUT_MS);
+    assert.strictEqual(service.getSession(lobby.session.id).endReason, "choice-timeout");
+    assert.strictEqual(reservation.has(USER_A), false);
+    assert.strictEqual(reservation.has(USER_B), false);
+  });
+
+  await runTest("lifecycle O. bot abandonment timeout releases state", async () => {
+    const { service, reservation, timers } = createService({
+      randomMoveFn: () => "scissors",
+    });
+    const started = startBot(service);
+    assert.strictEqual(reservation.has(USER_A), true);
+    timers.advance(CHOICE_TIMEOUT_MS);
+    assert.strictEqual(service.getSession(started.session.id).endReason, "choice-timeout");
+    assert.strictEqual(reservation.has(USER_A), false);
+    const fresh = service.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_A, displayName: "Kevin", isBot: false },
+    });
+    assert.strictEqual(fresh.ok, true);
+  });
+
+  await runTest("lifecycle P. old timeout cannot terminate newly started RPS", async () => {
+    const { service, timers, manager } = createService({
+      randomMoveFn: () => "scissors",
+    });
+    const started = startBot(service);
+    timers.advance(20_000);
+    await lock(service, started.session.id, USER_A, "rock");
+    const replay = service.replay({
+      sessionId: started.session.id,
+      userId: USER_A,
+      round: 1,
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(replay.ok, true);
+    timers.advance(26_000);
+    assert.strictEqual(service.getSession(started.session.id).status, STATUS.ACTIVE);
+    assert.strictEqual(service.getSession(started.session.id).round, 2);
+    const fresh = service.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_C, displayName: "Eve", isBot: false },
+    });
+    assert.strictEqual(fresh.ok, true);
+    timers.advance(CHOICE_TIMEOUT_MS);
+    assert.strictEqual(service.getSession(started.session.id).status, STATUS.EXPIRED);
+    assert.strictEqual(manager.getSession(fresh.session.id).status, STATUS.WAITING);
+  });
+
+  await runTest("lifecycle Q. delayed old message cleanup cannot affect new RPS", async () => {
+    clearAllGameMessageCleanups();
+    const { service } = createService({ randomMoveFn: () => "scissors" });
+    const started = startBot(service);
+    service.setMessageId(started.session.id, 5001);
+    await lock(service, started.session.id, USER_A, "rock");
+    service.finish({
+      sessionId: started.session.id,
+      userId: USER_A,
+      round: 1,
+      chatId: COMMUNITY_CHAT,
+    });
+    const deleted = [];
+    const queued = [];
+    scheduleGameMessageCleanup({
+      gameType: GAME_TYPE.RPS,
+      sessionId: started.session.id,
+      chatId: COMMUNITY_CHAT,
+      messageIds: [5001],
+      delayMs: 100,
+      setTimeoutFn: (fn) => {
+        queued.push(fn);
+        return 1;
+      },
+      clearTimeoutFn: () => {},
+      deleteMessageFn: (chat, mid) => {
+        deleted.push({ chat, mid });
+        return Promise.resolve();
+      },
+    });
+    const fresh = service.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_A, displayName: "Kevin", isBot: false },
+    });
+    service.setMessageId(fresh.session.id, 6002);
+    assert.strictEqual(queued.length, 1);
+    queued[0]();
+    assert.deepStrictEqual(deleted, [{ chat: COMMUNITY_CHAT, mid: 5001 }]);
+    assert.strictEqual(service.getSession(fresh.session.id).status, STATUS.WAITING);
+    assert.strictEqual(service.getSession(fresh.session.id).messageId, 6002);
+    clearAllGameMessageCleanups();
+  });
+
+  await runTest("lifecycle R-S. 30-minute XP cooldown does not block rematch", async () => {
+    const { service } = createService();
+    const file = pointsFile();
+    const lobby = startLobby(service);
+    joinP2(service, lobby.session.id);
+    await lock(service, lobby.session.id, USER_A, "rock");
+    await lock(service, lobby.session.id, USER_B, "scissors");
+    const fin1 = await finalizeWinXp(service, lobby.session.id, (uid, name) =>
+      awardPvpWinXp(uid, name, file)
+    );
+    assert.strictEqual(fin1.xpResult.awarded, true);
+    const replay = service.replay({
+      sessionId: lobby.session.id,
+      userId: USER_A,
+      round: 1,
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(replay.ok, true);
+    assert.strictEqual(replay.session.rewardEligible, false);
+    await lock(service, lobby.session.id, USER_A, "rock", 2);
+    await lock(service, lobby.session.id, USER_B, "scissors", 2);
+    const fin2 = await finalizeWinXp(service, lobby.session.id, (uid, name) =>
+      awardPvpWinXp(uid, name, file)
+    );
+    assert.strictEqual(fin2.claim.shouldAward, false);
+    assert.strictEqual(fin2.claim.reason, "rematch-cooldown");
+    assert.strictEqual(loadPoints(file).users[String(USER_A)].points, PVP_WIN_XP);
+    service.finish({
+      sessionId: lobby.session.id,
+      userId: USER_A,
+      round: 2,
+      chatId: COMMUNITY_CHAT,
+    });
+    const again = startLobby(service);
+    const joined = joinP2(service, again.session.id);
+    assert.strictEqual(joined.ok, true);
+    assert.strictEqual(joined.session.rewardEligible, false);
+  });
+
+  await runTest("lifecycle T. stale callback cannot block fresh session", async () => {
+    const { service } = createService({ randomMoveFn: () => "scissors" });
+    const started = startBot(service);
+    await lock(service, started.session.id, USER_A, "rock");
+    const fresh = service.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_A, displayName: "Kevin", isBot: false },
+    });
+    assert.strictEqual(fresh.ok, true);
+    const stale = createMockCtx({
+      callbackData: buildReplayCallbackData(started.session.id, 1),
+    });
+    await handlePvpCallback(stale, {
+      runtime: service,
+      parseCallbackData: parsePvpCallbackData,
+      awardPvpWinXpFn: () => ({ awarded: false, pointsToAdd: 0 }),
+    });
+    assert.ok(stale.cbAnswers.length >= 1);
+    assert.strictEqual(service.getSession(fresh.session.id).status, STATUS.WAITING);
+    assert.strictEqual(service.getSession(started.session.id), null);
+  });
+
+  await runTest("lifecycle U. stale RPS cannot release a reservation belonging to another game", async () => {
+    const { service, reservation, manager } = createService({
+      randomMoveFn: () => "scissors",
+    });
+    const started = startBot(service);
+    await lock(service, started.session.id, USER_A, "rock");
+    service.finish({
+      sessionId: started.session.id,
+      userId: USER_A,
+      round: 1,
+      chatId: COMMUNITY_CHAT,
+    });
+    const ttt = createTicTacToeService({
+      manager,
+      reservation,
+      botThinkMinMs: 0,
+      botThinkMaxMs: 0,
+    });
+    const board = ttt.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_A, displayName: "Kevin", isBot: false },
+    });
+    assert.strictEqual(board.ok, true);
+    assert.strictEqual(reservation.get(USER_A).game, "tictactoe");
+    const stale = createMockCtx({
+      callbackData: buildFinishCallbackData(started.session.id, 1),
+    });
+    await handlePvpCallback(stale, {
+      runtime: service,
+      parseCallbackData: parsePvpCallbackData,
+      awardPvpWinXpFn: () => ({ awarded: false, pointsToAdd: 0 }),
+    });
+    assert.strictEqual(reservation.has(USER_A), true);
+    assert.strictEqual(reservation.get(USER_A).game, "tictactoe");
+    assert.strictEqual(reservation.get(USER_A).matchId, board.session.id);
+  });
+
+  await runTest("lifecycle V-W. outsider protected; first human choice stays secret", async () => {
+    const { service } = createService();
+    const lobby = startLobby(service);
+    joinP2(service, lobby.session.id);
+    const outsider = createMockCtx({
+      userId: USER_C,
+      firstName: "Eve",
+      callbackData: buildChoiceCallbackData(lobby.session.id, 1, "rock"),
+    });
+    await handlePvpCallback(outsider, {
+      runtime: service,
+      parseCallbackData: parsePvpCallbackData,
+      awardPvpWinXpFn: () => ({ awarded: false, pointsToAdd: 0 }),
+    });
+    assert.ok(outsider.cbAnswers.includes("This game belongs to two other players."));
+    const first = await lock(service, lobby.session.id, USER_A, "rock");
+    assert.ok(first.rendered.text.includes("Kevin: ✅ Ready"));
+    assert.ok(!first.rendered.text.includes("Kevin: ✊ Rock"));
+    assert.strictEqual(
+      publicTextHasSecret(first.rendered.text, service.getSession(lobby.session.id)),
+      false
+    );
+  });
+
+  await runTest("lifecycle X. Daily Quest BOT_GAME_1 / PVP_GAME_1 semantics remain", async () => {
+    const bot = createService({ randomMoveFn: () => "scissors" });
+    const started = startBot(bot.service);
+    await lock(bot.service, started.session.id, USER_A, "rock");
+    assert.deepStrictEqual(bot.questGames, [{ uid: String(USER_A), game: "rps" }]);
+    assert.strictEqual(bot.questPvp.length, 0);
+    const human = createService({ pairCooldownMs: 0 });
+    const lobby = startLobby(human.service);
+    joinP2(human.service, lobby.session.id);
+    await lock(human.service, lobby.session.id, USER_A, "rock");
+    await lock(human.service, lobby.session.id, USER_B, "scissors");
+    assert.strictEqual(human.questGames.length, 0);
+    assert.ok(human.questPvp.every((q) => q.payload.game === "rps"));
+    assert.ok(human.questPvp.length >= 1);
+  });
+
+  await runTest("lifecycle. mode-select /rps is not stuck; second /rps replaces idle menu", async () => {
+    const { service, reservation } = createService();
+    const first = service.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_A, displayName: "Kevin", isBot: false },
+    });
+    const second = service.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_A, displayName: "Kevin", isBot: false },
+    });
+    assert.strictEqual(second.ok, true);
+    assert.notStrictEqual(second.session.id, first.session.id);
+    assert.strictEqual(service.getSession(first.session.id), null);
+    assert.strictEqual(reservation.has(USER_A), true);
+    assert.strictEqual(reservation.get(USER_A).matchId, second.session.id);
+  });
+
+  await runTest("lifecycle. Play Again then late result cleanup cannot delete live round", async () => {
+    clearAllGameMessageCleanups();
+    const { service: svc, reservation: res } = createService({
+      randomMoveFn: () => "scissors",
+    });
+    const started = startBot(svc);
+    const bot = {
+      telegram: {
+        editMessageText() {
+          return new Promise(() => {});
+        },
+        deleteMessage() {
+          return Promise.resolve();
+        },
+      },
+      action() {},
+    };
+    registerPvpCallbacks(bot, {
+      rockPaperScissorsRuntime: svc,
+      awardPvpWinXpFn: () => ({ awarded: false, pointsToAdd: 0 }),
+    });
+    const choiceCtx = createMockCtx({
+      callbackData: buildChoiceCallbackData(started.session.id, 1, "rock"),
+    });
+    let releaseEdit;
+    choiceCtx.telegram.editMessageText = () =>
+      new Promise((resolve) => {
+        releaseEdit = resolve;
+      });
+    const choicePromise = handlePvpCallback(choiceCtx, {
+      runtime: svc,
+      parseCallbackData: parsePvpCallbackData,
+      awardPvpWinXpFn: () => ({ awarded: false, pointsToAdd: 0 }),
+    });
+    await new Promise((r) => setImmediate(r));
+    const replayCtx = createMockCtx({
+      callbackData: buildReplayCallbackData(started.session.id, 1),
+    });
+    await handlePvpCallback(replayCtx, {
+      runtime: svc,
+      parseCallbackData: parsePvpCallbackData,
+      awardPvpWinXpFn: () => ({ awarded: false, pointsToAdd: 0 }),
+    });
+    assert.strictEqual(svc.getSession(started.session.id).status, STATUS.ACTIVE);
+    assert.strictEqual(svc.getSession(started.session.id).round, 2);
+    if (typeof releaseEdit === "function") {
+      releaseEdit();
+    }
+    await choicePromise;
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    assert.strictEqual(svc.getSession(started.session.id).status, STATUS.ACTIVE);
+    assert.strictEqual(svc.getSession(started.session.id).round, 2);
+    assert.strictEqual(res.has(USER_A), true);
+    assert.strictEqual(getPendingGameMessageCleanupCount(), 0);
+    assert.deepStrictEqual(getScheduledGameCleanupIds(GAME_TYPE.RPS, started.session.id), []);
+    clearAllGameMessageCleanups();
   });
 
   restoreEnv();

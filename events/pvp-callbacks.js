@@ -54,6 +54,30 @@ function isPvpTerminalStatus(status) {
   return status === "won" || status === "draw" || status === "expired";
 }
 
+function isRpsReplayableIntermission(session) {
+  if (!session || session.game !== "rps") {
+    return false;
+  }
+  if (session.status === "won" || session.status === "draw") {
+    return true;
+  }
+  return (
+    session.status === "expired" &&
+    (session.endReason === "choice-timeout" || session.endReason === "join-timeout")
+  );
+}
+
+function shouldSchedulePvpMessageCleanup(runtime, session) {
+  if (!session || !isPvpTerminalStatus(session.status)) {
+    return false;
+  }
+  const gameId = session.game || (runtime && runtime.GAME_ID);
+  if (gameId === "rps" && isRpsReplayableIntermission(session)) {
+    return false;
+  }
+  return true;
+}
+
 function pvpSnapshotStillCurrent(runtime, sessionSnap) {
   if (!sessionSnap || !runtime || typeof runtime.getSession !== "function") {
     return true;
@@ -82,8 +106,8 @@ function pvpSnapshotStillCurrent(runtime, sessionSnap) {
   return true;
 }
 
-function schedulePvpSessionCleanup(session, telegram, gameType) {
-  if (!session || !isPvpTerminalStatus(session.status)) {
+function schedulePvpSessionCleanup(session, telegram, gameType, runtime) {
+  if (!shouldSchedulePvpMessageCleanup(runtime, session)) {
     return;
   }
   if (session.messageId == null || session.chatId == null) {
@@ -346,10 +370,15 @@ function wireTimeoutMessageEdits(runtime, telegram, awardXpFn) {
         await editSessionMessage(result.session, rendered);
       }
     }
+    const live =
+      typeof runtime.getSession === "function"
+        ? runtime.getSession(result.session.id)
+        : result.session;
     schedulePvpSessionCleanup(
-      result.session,
+      live,
       telegram,
-      pvpCleanupGameType(runtime, result.session)
+      pvpCleanupGameType(runtime, live || result.session),
+      runtime
     );
   };
 
@@ -458,7 +487,9 @@ async function handlePvpCallbackBody(ctx, options = {}) {
         await cbAnswer(ctx, "This challenge is already full.");
       } else if (result.reason === "player-busy") {
         await cbAnswer(ctx, PLAYER_BUSY_TEXT);
-      } else if (result.reason === "bot") {
+      } else if (result.reason === "busy") {
+        await cbAnswer(ctx);
+        return;
         await cbAnswer(ctx, "Bots cannot play.");
       } else if (result.reason === "invalid-session" || result.reason === "not-waiting") {
         await rejectStalePvp(ctx, runtime, parsed);
@@ -493,6 +524,9 @@ async function handlePvpCallbackBody(ctx, options = {}) {
         await cbAnswer(ctx, "Only the player who started this can choose.");
       } else if (result.reason === "player-busy") {
         await cbAnswer(ctx, PLAYER_BUSY_TEXT);
+      } else if (result.reason === "busy") {
+        await cbAnswer(ctx);
+        return;
       } else if (
         result.reason === "invalid-session" ||
         result.reason === "not-waiting" ||
@@ -574,7 +608,8 @@ async function handlePvpCallbackBody(ctx, options = {}) {
       schedulePvpSessionCleanup(
         result.session,
         ctx.telegram,
-        pvpGameType(parsed)
+        pvpGameType(parsed),
+        runtime
       );
     }
     return;
@@ -598,6 +633,9 @@ async function handlePvpCallbackBody(ctx, options = {}) {
         await cbAnswer(ctx, "This round already ended.");
       } else if (result.reason === "player-busy") {
         await cbAnswer(ctx, PLAYER_BUSY_TEXT);
+      } else if (result.reason === "busy") {
+        await cbAnswer(ctx);
+        return;
       } else if (result.reason === "wrong-chat") {
         await cbAnswer(ctx, "Wrong chat.");
       } else if (
@@ -652,7 +690,8 @@ async function handlePvpCallbackBody(ctx, options = {}) {
     schedulePvpSessionCleanup(
       result.session,
       ctx.telegram,
-      pvpGameType(parsed)
+      pvpGameType(parsed),
+      runtime
     );
     return;
   }
@@ -672,6 +711,9 @@ async function handlePvpCallbackBody(ctx, options = {}) {
         await cbAnswer(ctx, "Only the player who started this can choose.");
       } else if (result.reason === "player-busy") {
         await cbAnswer(ctx, PLAYER_BUSY_TEXT);
+      } else if (result.reason === "busy") {
+        await cbAnswer(ctx);
+        return;
       } else if (result.reason === "wrong-chat") {
         await cbAnswer(ctx, "Wrong chat.");
       } else if (
@@ -749,7 +791,8 @@ async function handlePvpCallbackBody(ctx, options = {}) {
       schedulePvpSessionCleanup(
         result.session,
         ctx.telegram,
-        pvpGameType(parsed)
+        pvpGameType(parsed),
+        runtime
       );
       return;
     }
@@ -834,7 +877,8 @@ async function handlePvpCallbackBody(ctx, options = {}) {
     schedulePvpSessionCleanup(
       result.session,
       ctx.telegram,
-      pvpGameType(parsed)
+      pvpGameType(parsed),
+      runtime
     );
   }
 }

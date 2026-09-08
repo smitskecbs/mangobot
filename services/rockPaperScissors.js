@@ -356,6 +356,8 @@ function createRockPaperScissorsService(options = {}) {
       randomIdFn: options.randomIdFn,
     });
   const reservation = options.reservation || createPvpMatchReservation();
+  /** @type {Map<string, string>} userId → last RPS sessionId (in-memory, O(1)) */
+  const lastByUser = new Map();
 
   let renderHandler =
     typeof options.onRender === "function" ? options.onRender : null;
@@ -406,6 +408,95 @@ function createRockPaperScissorsService(options = {}) {
     manager.clearTimers(session);
     manager.clearActiveIndex(session);
     reservation.releaseMatch(session.id);
+  }
+
+  function rememberLast(session) {
+    if (!session) return;
+    for (const seat of ["p1", "p2"]) {
+      const player = session.players && session.players[seat];
+      if (!player || isBotPlayer(player) || player.userId == null) {
+        continue;
+      }
+      lastByUser.set(String(player.userId), session.id);
+    }
+  }
+
+  function forgetLast(session) {
+    if (!session) return;
+    for (const seat of ["p1", "p2"]) {
+      const player = session.players && session.players[seat];
+      if (!player || player.userId == null) {
+        continue;
+      }
+      const uid = String(player.userId);
+      if (lastByUser.get(uid) === session.id) {
+        lastByUser.delete(uid);
+      }
+    }
+  }
+
+  function destroySession(session) {
+    if (!session) return;
+    finishOpen(session);
+    forgetLast(session);
+    manager.removeSession(session.id);
+  }
+
+  function isChoosing(session) {
+    return Boolean(
+      session &&
+        session.status === STATUS.ACTIVE &&
+        session.phase === PHASE.CHOOSING
+    );
+  }
+
+  function expireIdleSession(session, endReason) {
+    if (!session) return null;
+    session.status = STATUS.EXPIRED;
+    session.endReason = endReason;
+    const rendered = renderMessage(session);
+    const snap = snapshot(session);
+    destroySession(session);
+    return { session: snap, rendered };
+  }
+
+  function retireIdleOwnSession(userId) {
+    const uid = userId == null ? null : String(userId);
+    if (!uid) {
+      return { ok: true };
+    }
+    const held = reservation.get(uid);
+    if (held && held.game !== GAME_ID) {
+      return { ok: false, reason: "player-busy" };
+    }
+    if (held && held.game === GAME_ID && !manager.getSession(held.matchId)) {
+      reservation.release(uid, held.matchId);
+    }
+    const lastId = lastByUser.get(uid);
+    if (!lastId) {
+      return { ok: true };
+    }
+    const existing = manager.getSession(lastId);
+    if (!existing) {
+      lastByUser.delete(uid);
+      if (held && held.game === GAME_ID && held.matchId === lastId) {
+        reservation.release(uid, lastId);
+      }
+      return { ok: true, repaired: true };
+    }
+    if (isChoosing(existing)) {
+      return { ok: false, reason: "player-busy" };
+    }
+    const retired = expireIdleSession(existing, "superseded");
+    if (retired) {
+      notifyRender({
+        ok: true,
+        cancelled: true,
+        session: retired.session,
+        rendered: retired.rendered,
+      });
+    }
+    return { ok: true, superseded: true };
   }
 
   function starterUserId(session) {
@@ -608,6 +699,10 @@ function createRockPaperScissorsService(options = {}) {
       return { ok: false, reason: starter && starter.isBot ? "bot" : "no-starter" };
     }
     const id = manager.generateSessionId();
+    const idle = retireIdleOwnSession(starter.userId);
+    if (!idle.ok) {
+      return { ok: false, reason: idle.reason || "player-busy" };
+    }
     const reserved = reservation.tryReserve(starter.userId, GAME_ID, id);
     if (!reserved.ok) {
       return { ok: false, reason: "player-busy" };
@@ -649,6 +744,10 @@ function createRockPaperScissorsService(options = {}) {
       },
     };
     manager.registerSession(session);
+    rememberLast(session);
+    manager.schedule(session, "join", joinTimeoutMs, () => {
+      expireMode(session.id);
+    });
     log("[pvp] match started game=rps mode=choice");
     const rendered = renderMessage(session);
     return {
@@ -698,8 +797,32 @@ function createRockPaperScissorsService(options = {}) {
     session.status = STATUS.EXPIRED;
     session.endReason = endReason;
     session.phase = PHASE.START_CHOICE;
-    finishOpen(session);
     logGameCleanup(GAME_TYPE.RPS, FINAL_STATE.CANCELLED);
+  }
+
+  function expireMode(sessionId) {
+    const locked = manager.withSessionLock(sessionId, () => {
+      const session = manager.getSession(sessionId);
+      if (
+        !session ||
+        session.status !== STATUS.WAITING ||
+        session.phase !== PHASE.START_CHOICE
+      ) {
+        return { ok: false, reason: "not-waiting" };
+      }
+      cancelSession(session, "mode-timeout");
+      const rendered = renderMessage(session);
+      const snap = snapshot(session);
+      destroySession(session);
+      return {
+        ok: true,
+        cancelled: true,
+        session: snap,
+        rendered,
+      };
+    });
+    notifyRender(locked);
+    return locked;
   }
 
   function chooseMode({ sessionId, userId, mode, chatId } = {}) {
@@ -723,11 +846,14 @@ function createRockPaperScissorsService(options = {}) {
       }
       if (mode === "cancel") {
         cancelSession(session, "cancelled");
+        const rendered = renderMessage(session);
+        const snap = snapshot(session);
+        destroySession(session);
         return {
           ok: true,
           cancelled: true,
-          session: snapshot(session),
-          rendered: renderMessage(session),
+          session: snap,
+          rendered,
         };
       }
       if (mode === "pvp") {
@@ -830,6 +956,7 @@ function createRockPaperScissorsService(options = {}) {
         isBot: false,
       };
       activateHumanMatch(session);
+      rememberLast(session);
       return {
         ok: true,
         session: snapshot(session),
@@ -921,7 +1048,17 @@ function createRockPaperScissorsService(options = {}) {
         reservation.release(p1.userId, session.id);
         return { ok: false, reason: "player-busy" };
       }
+      if (session.opponentType === "human" && !isBotPlayer(p2)) {
+        session.rewardEligible = !manager.isPairOnCooldown(
+          p1.userId,
+          p2.userId,
+          GAME_ID
+        );
+      } else {
+        session.rewardEligible = false;
+      }
       manager.registerSession(session);
+      rememberLast(session);
       session.round += 1;
       beginChoosing(session);
       return {
@@ -953,12 +1090,16 @@ function createRockPaperScissorsService(options = {}) {
         return { ok: false, reason: "not-waiting" };
       }
       session.status = STATUS.EXPIRED;
-      if (!session.endReason) session.endReason = "finished";
-      finishOpen(session);
+      if (!session.endReason || session.endReason === "win" || session.endReason === "draw") {
+        session.endReason = "finished";
+      }
+      const rendered = { text: buildCancelledText(), extra: emptyInlineKeyboardExtra() };
+      const snap = snapshot(session);
+      destroySession(session);
       return {
         ok: true,
-        session: snapshot(session),
-        rendered: { text: buildCancelledText(), extra: emptyInlineKeyboardExtra() },
+        session: snap,
+        rendered,
       };
     });
     notifyRender(locked);
@@ -989,6 +1130,7 @@ function createRockPaperScissorsService(options = {}) {
       session.questNoted = false;
       session.endReason = null;
       manager.registerSession(session);
+      rememberLast(session);
       beginPvpLobby(session);
       return {
         ok: true,
@@ -1057,6 +1199,7 @@ function createRockPaperScissorsService(options = {}) {
   function reset() {
     manager.resetAll();
     reservation.reset();
+    lastByUser.clear();
   }
 
   return {
@@ -1073,6 +1216,7 @@ function createRockPaperScissorsService(options = {}) {
     retry,
     expireJoin,
     expireChoice,
+    expireMode,
     tickLobbyCountdown,
     tickChoiceCountdown,
     claimXpAward,
