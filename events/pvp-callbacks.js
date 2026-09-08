@@ -1,6 +1,6 @@
 /**
- * PvP inline callbacks — Tic-Tac-Toe, Connect Four, and Checkers.
- * Callback data: pvp:ttt:... | pvp:c4:... | pvp:chk:...  (opaque session ids, never uids)
+ * PvP inline callbacks — Tic-Tac-Toe, Connect Four, Checkers, and Rock Paper Scissors.
+ * Callback data: pvp:ttt:... | pvp:c4:... | pvp:chk:... | pvp:rps:...  (opaque session ids, never uids)
  */
 
 const { log, error: logError, formatErrorForLog } = require("../utils/logger");
@@ -25,10 +25,15 @@ const {
   NO_MOVES_TOAST,
 } = require("../services/checkers");
 const {
+  parsePvpCallbackData: parseRpsCallbackData,
+  getRockPaperScissorsRuntime,
+} = require("../services/rockPaperScissors");
+const {
   GAME_OVER_TOAST,
   GAME_TYPE,
   stripStaleCallbackButtons,
   scheduleGameMessageCleanup,
+  clearGameMessageCleanup,
 } = require("../utils/gameCleanup");
 
 function pvpCleanupGameType(runtime, session) {
@@ -38,6 +43,9 @@ function pvpCleanupGameType(runtime, session) {
   }
   if (id === "checkers") {
     return GAME_TYPE.CHECKERS;
+  }
+  if (id === "rps") {
+    return GAME_TYPE.RPS;
   }
   return GAME_TYPE.TICTACTOE;
 }
@@ -102,7 +110,63 @@ function pvpGameType(parsed) {
   if (parsed && parsed.game === "checkers") {
     return GAME_TYPE.CHECKERS;
   }
+  if (parsed && parsed.game === "rps") {
+    return GAME_TYPE.RPS;
+  }
   return GAME_TYPE.TICTACTOE;
+}
+
+function isPrivateCtx(ctx) {
+  return Boolean(ctx && ctx.chat && ctx.chat.type === "private");
+}
+
+async function sendPrivatePrompts(ctx, prompts) {
+  const telegram = ctx && ctx.telegram;
+  if (!telegram || typeof telegram.sendMessage !== "function" || !Array.isArray(prompts)) {
+    return;
+  }
+  for (const prompt of prompts) {
+    if (!prompt || prompt.userId == null || !prompt.text) {
+      continue;
+    }
+    try {
+      await telegram.sendMessage(
+        prompt.userId,
+        prompt.text,
+        prompt.extra || undefined
+      );
+    } catch (_err) {
+      /* Player has not started the bot privately. Public deep-link covers this. */
+    }
+  }
+}
+
+async function editPublicSessionMessage(ctx, session, rendered) {
+  if (!session || session.messageId == null || !rendered || !rendered.text) {
+    return false;
+  }
+  const telegram = ctx && ctx.telegram;
+  if (telegram && typeof telegram.editMessageText === "function") {
+    try {
+      await telegram.editMessageText(
+        session.chatId,
+        session.messageId,
+        undefined,
+        rendered.text,
+        rendered.extra || undefined
+      );
+      return true;
+    } catch (err) {
+      logError(
+        "[pvp] public edit failed:",
+        err && err.message ? err.message : err
+      );
+    }
+  }
+  if (!isPrivateCtx(ctx)) {
+    return safeEdit(ctx, rendered.text, rendered.extra);
+  }
+  return false;
 }
 
 function cbAnswer(ctx, text) {
@@ -431,6 +495,7 @@ async function handlePvpCallbackBody(ctx, options = {}) {
     if (result.rendered) {
       await safeEdit(ctx, result.rendered.text, result.rendered.extra);
     }
+    await sendPrivatePrompts(ctx, result.privatePrompts);
     return;
   }
 
@@ -467,6 +532,191 @@ async function handlePvpCallbackBody(ctx, options = {}) {
       }
       return;
     }
+    await cbAnswer(ctx);
+    await applyRenderedEdit(ctx, runtime, parsed, result.rendered);
+    await sendPrivatePrompts(ctx, result.privatePrompts);
+    return;
+  }
+
+  if (parsed.action === "choice") {
+    if (typeof runtime.choose !== "function") {
+      await cbAnswer(ctx, "Invalid move.");
+      return;
+    }
+    const result = await runtime.choose({
+      sessionId: parsed.sessionId,
+      userId,
+      move: parsed.move,
+      round: parsed.round,
+      chatId,
+      source: isPrivateCtx(ctx) ? "private" : undefined,
+    });
+
+    if (!result.ok) {
+      if (result.reason === "already-chosen") {
+        await cbAnswer(ctx, "Choice already locked.");
+        if (result.privateEdit && isPrivateCtx(ctx)) {
+          await safeEdit(ctx, result.privateEdit.text, result.privateEdit.extra);
+        }
+        return;
+      }
+      if (result.reason === "stale-round") {
+        await cbAnswer(ctx, "This round already ended.");
+        return;
+      }
+      if (result.reason === "outsider") {
+        await cbAnswer(ctx, "This game belongs to two other players.");
+        return;
+      }
+      if (result.reason === "wrong-chat") {
+        await cbAnswer(ctx, "Wrong chat.");
+        return;
+      }
+      if (
+        result.reason === "not-active" ||
+        result.reason === "invalid-session" ||
+        result.reason === "already-ended"
+      ) {
+        if (isPrivateCtx(ctx)) {
+          await cbAnswer(ctx, GAME_OVER_TOAST);
+          return;
+        }
+        await rejectStalePvp(ctx, runtime, parsed);
+        return;
+      }
+      await cbAnswer(ctx, "Could not lock that choice.");
+      return;
+    }
+
+    await cbAnswer(ctx);
+    if (result.privateEdit && isPrivateCtx(ctx)) {
+      await safeEdit(ctx, result.privateEdit.text, result.privateEdit.extra);
+    }
+    let rendered = result.rendered;
+    if (result.needsXp) {
+      const fin = await finalizeWinXp(runtime, parsed.sessionId, awardXpFn);
+      if (fin.rendered) {
+        rendered = fin.rendered;
+      }
+    }
+    await editPublicSessionMessage(ctx, result.session, rendered);
+    if (result.resolved) {
+      schedulePvpSessionCleanup(
+        result.session,
+        ctx.telegram,
+        pvpGameType(parsed)
+      );
+    }
+    return;
+  }
+
+  if (parsed.action === "replay") {
+    if (typeof runtime.replay !== "function") {
+      await cbAnswer(ctx, "Invalid move.");
+      return;
+    }
+    const result = runtime.replay({
+      sessionId: parsed.sessionId,
+      userId,
+      round: parsed.round,
+      chatId,
+    });
+    if (!result.ok) {
+      if (result.reason === "outsider") {
+        await cbAnswer(ctx, "This game belongs to two other players.");
+      } else if (result.reason === "stale-round") {
+        await cbAnswer(ctx, "This round already ended.");
+      } else if (result.reason === "player-busy") {
+        await cbAnswer(ctx, PLAYER_BUSY_TEXT);
+      } else if (result.reason === "wrong-chat") {
+        await cbAnswer(ctx, "Wrong chat.");
+      } else if (
+        result.reason === "invalid-session" ||
+        result.reason === "not-active"
+      ) {
+        await rejectStalePvp(ctx, runtime, parsed);
+        return;
+      } else {
+        await cbAnswer(ctx, "Could not start the next round.");
+      }
+      return;
+    }
+    clearGameMessageCleanup(pvpGameType(parsed), parsed.sessionId);
+    await cbAnswer(ctx);
+    await applyRenderedEdit(ctx, runtime, parsed, result.rendered);
+    await sendPrivatePrompts(ctx, result.privatePrompts);
+    return;
+  }
+
+  if (parsed.action === "finish") {
+    if (typeof runtime.finish !== "function") {
+      await cbAnswer(ctx, "Invalid move.");
+      return;
+    }
+    const result = runtime.finish({
+      sessionId: parsed.sessionId,
+      userId,
+      round: parsed.round,
+      chatId,
+    });
+    if (!result.ok) {
+      if (result.reason === "outsider") {
+        await cbAnswer(ctx, "This game belongs to two other players.");
+      } else if (result.reason === "stale-round") {
+        await cbAnswer(ctx, "This round already ended.");
+      } else if (result.reason === "wrong-chat") {
+        await cbAnswer(ctx, "Wrong chat.");
+      } else if (
+        result.reason === "invalid-session" ||
+        result.reason === "not-waiting" ||
+        result.reason === "not-active"
+      ) {
+        await rejectStalePvp(ctx, runtime, parsed);
+        return;
+      } else {
+        await cbAnswer(ctx, "Could not finish.");
+      }
+      return;
+    }
+    await cbAnswer(ctx);
+    await applyRenderedEdit(ctx, runtime, parsed, result.rendered);
+    schedulePvpSessionCleanup(
+      result.session,
+      ctx.telegram,
+      pvpGameType(parsed)
+    );
+    return;
+  }
+
+  if (parsed.action === "retry") {
+    if (typeof runtime.retry !== "function") {
+      await cbAnswer(ctx, "Invalid move.");
+      return;
+    }
+    const result = runtime.retry({
+      sessionId: parsed.sessionId,
+      userId,
+      chatId,
+    });
+    if (!result.ok) {
+      if (result.reason === "not-starter") {
+        await cbAnswer(ctx, "Only the player who started this can choose.");
+      } else if (result.reason === "player-busy") {
+        await cbAnswer(ctx, PLAYER_BUSY_TEXT);
+      } else if (result.reason === "wrong-chat") {
+        await cbAnswer(ctx, "Wrong chat.");
+      } else if (
+        result.reason === "invalid-session" ||
+        result.reason === "not-waiting"
+      ) {
+        await rejectStalePvp(ctx, runtime, parsed);
+        return;
+      } else {
+        await cbAnswer(ctx, "Could not retry.");
+      }
+      return;
+    }
+    clearGameMessageCleanup(pvpGameType(parsed), parsed.sessionId);
     await cbAnswer(ctx);
     await applyRenderedEdit(ctx, runtime, parsed, result.rendered);
     return;
@@ -636,6 +886,11 @@ function registerPvpCallbacks(bot, options = {}) {
     (typeof options.getCheckersRuntimeFn === "function"
       ? options.getCheckersRuntimeFn()
       : getCheckersRuntime());
+  const rpsRuntime =
+    options.rockPaperScissorsRuntime ||
+    (typeof options.getRockPaperScissorsRuntimeFn === "function"
+      ? options.getRockPaperScissorsRuntimeFn()
+      : getRockPaperScissorsRuntime());
 
   const awardXpFn =
     typeof options.awardPvpWinXpFn === "function"
@@ -649,6 +904,14 @@ function registerPvpCallbacks(bot, options = {}) {
     }
     if (chkRuntime && chkRuntime !== tttRuntime && chkRuntime !== c4Runtime) {
       wireTimeoutMessageEdits(chkRuntime, bot.telegram, awardXpFn);
+    }
+    if (
+      rpsRuntime &&
+      rpsRuntime !== tttRuntime &&
+      rpsRuntime !== c4Runtime &&
+      rpsRuntime !== chkRuntime
+    ) {
+      wireTimeoutMessageEdits(rpsRuntime, bot.telegram, awardXpFn);
     }
   }
 
@@ -671,6 +934,13 @@ function registerPvpCallbacks(bot, options = {}) {
       ...options,
       runtime: chkRuntime,
       parseCallbackData: parseChkCallbackData,
+    })
+  );
+  bot.action(/^pvp:rps:(join|mode|choice|replay|finish|retry):/, (ctx) =>
+    handlePvpCallback(ctx, {
+      ...options,
+      runtime: rpsRuntime,
+      parseCallbackData: parseRpsCallbackData,
     })
   );
 }

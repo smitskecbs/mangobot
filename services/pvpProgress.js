@@ -11,6 +11,7 @@ const PVP_MATCH_GAMES = Object.freeze([
   "connect4",
   "checkers",
   "blackjack",
+  "rps",
 ]);
 const BOT_IDS = Object.freeze(["bot"]);
 

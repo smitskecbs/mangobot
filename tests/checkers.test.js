@@ -48,6 +48,9 @@ const { ACTION_REGISTRY } = require("../services/communityActivityEngine");
 const {
   getDailyQuestSnapshot,
   GAME_SOURCES,
+  QUEST_IDS,
+  findUtcDateForSelection,
+  noteDailyQuestGame,
 } = require("../services/dailyQuest");
 const { PVP_MATCH_GAMES, noteHumanPvpMatch } = require("../services/pvpProgress");
 const { GAME_TYPE } = require("../utils/gameCleanup");
@@ -756,12 +759,39 @@ async function main() {
     const files = questFiles();
     linkQuestUser(files, USER_A);
     linkQuestUser(files, USER_B);
-    const { service } = createService(files);
+    const botGameDay = findUtcDateForSelection({ game: QUEST_IDS.BOT_GAME_1 });
+    const questOpts = {
+      shopFile: files.shopFile,
+      walletFile: files.walletFile,
+      now: botGameDay.now,
+      date: botGameDay.date,
+    };
+    let remainingPvpNotes = 2;
+    let settleQuest;
+    const questSettled = new Promise((resolve) => {
+      settleQuest = resolve;
+    });
+    const { service } = createService({
+      ...files,
+      noteDailyQuestGameFn(uid, game) {
+        return noteDailyQuestGame(uid, game, questOpts);
+      },
+      async noteHumanPvpMatchFn(uid, payload, pointsFile) {
+        const result = await noteHumanPvpMatch(uid, payload, pointsFile);
+        remainingPvpNotes -= 1;
+        if (remainingPvpNotes <= 0) {
+          settleQuest();
+        }
+        return result;
+      },
+    });
     const started = startOpen(service);
     joinBoth(service, started.session.id);
-    await playCaptureWin(service, started.session.id);
-    const snapA = getDailyQuestSnapshot(USER_A, files);
-    const snapB = getDailyQuestSnapshot(USER_B, files);
+    const win = await playCaptureWin(service, started.session.id);
+    assert.ok(Array.isArray(win.questUsers) && win.questUsers.length === 2);
+    await questSettled;
+    const snapA = getDailyQuestSnapshot(USER_A, questOpts);
+    const snapB = getDailyQuestSnapshot(USER_B, questOpts);
     assertPvpFillsGameQuest(snapA);
     assertPvpFillsGameQuest(snapB);
     assert.strictEqual(

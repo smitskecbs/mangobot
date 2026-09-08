@@ -12,6 +12,7 @@ const { handlePresale } = require("./presale");
 const { handleCommunityBuilder } = require("./communitybuilder");
 const { handleShop } = require("./shop");
 const { handleDailyQuest } = require("./dailyquest");
+const { handleRpsPrivateStart } = require("./rps");
 const {
   isPrivateChat,
   getPrivateMenuKeyboard,
@@ -60,6 +61,9 @@ function handleStart(ctx, options = {}) {
     }
     if (payload === "dailyquest") {
       return handleDailyQuest(ctx, options);
+    }
+    if (payload === "rps" || payload.startsWith("rps_")) {
+      return handleRpsPrivateStart(ctx, payload, options);
     }
 
     return ctx.reply(WELCOME_MESSAGE, getPrivateMenuKeyboard(ctx));

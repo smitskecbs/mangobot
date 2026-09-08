@@ -31,6 +31,7 @@ const GAME_TYPE = Object.freeze({
   CHECKERS: "checkers",
   CHATFIGHT: "chatfight",
   BLACKJACK: "blackjack",
+  RPS: "rps",
 });
 
 function isMessageNotModifiedError(err) {
@@ -63,6 +64,9 @@ function titleFor(gameType) {
   }
   if (gameType === GAME_TYPE.BLACKJACK) {
     return "🃏 Blackjack cancelled";
+  }
+  if (gameType === GAME_TYPE.RPS) {
+    return "✊✋✌️ Rock Paper Scissors cancelled";
   }
   return "🎮 Game cancelled";
 }

@@ -1,7 +1,7 @@
 /**
  * Shared community exclusive busy flag (ChatFight + community Trivia + ManGo Bomb).
  * Personal Trivia hub sessions do not occupy the group.
- * Parallel PvP (Tic-Tac-Toe, Connect Four, Checkers, Blackjack) does not occupy the group.
+ * Parallel PvP (Tic-Tac-Toe, Connect Four, Checkers, Blackjack, Rock Paper Scissors) does not occupy the group.
  * Lazy requires avoid circular init issues.
  */
 

@@ -7,6 +7,7 @@ const assert = require("assert");
 const { createTicTacToeService } = require("../services/ticTacToe");
 const { createConnectFourService } = require("../services/connectFour");
 const { createBlackjackService } = require("../services/blackjack");
+const { createRockPaperScissorsService } = require("../services/rockPaperScissors");
 const { createPvpSessionManager } = require("../services/pvpSessionManager");
 const {
   createPvpMatchReservation,
@@ -87,6 +88,7 @@ function createBundle() {
     reservation,
     ttt: createTicTacToeService(shared),
     c4: createConnectFourService(shared),
+    rps: createRockPaperScissorsService(shared),
     bj: createBlackjackService({
       reservation,
       now: timers.now,
@@ -252,6 +254,23 @@ async function main() {
     assert.strictEqual(stale.ok, false);
     assert.strictEqual(reservation.has(USER_C), false);
     assert.strictEqual(reservation.has(BOT_USER_ID), false);
+  });
+
+  await runTest("same user cannot start TTT then RPS", () => {
+    const { ttt, rps } = createBundle();
+    assert.strictEqual(
+      ttt.startChallenge({
+        chatId: COMMUNITY_CHAT,
+        starter: starter(USER_A, "Kevin"),
+      }).ok,
+      true
+    );
+    const blocked = rps.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: starter(USER_A, "Kevin"),
+    });
+    assert.strictEqual(blocked.ok, false);
+    assert.strictEqual(blocked.reason, "player-busy");
   });
 
   restoreEnv();
