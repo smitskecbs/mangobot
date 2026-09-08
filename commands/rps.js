@@ -124,25 +124,9 @@ async function handleRps(ctx, options = {}) {
   return sent;
 }
 
-async function handleRpsPrivateStart(ctx, payload, options = {}) {
-  const runtime =
-    options.runtime ||
-    (typeof options.getRuntimeFn === "function"
-      ? options.getRuntimeFn()
-      : getRockPaperScissorsRuntime());
-  const raw = String(payload || "");
-  const sessionId = raw.startsWith("rps_") ? raw.slice(4) : null;
-  const view = runtime.getPrivateView(ctx.from && ctx.from.id, sessionId);
-  if (!view.ok) {
-    return ctx.reply(PRIVATE_RPS_TEXT);
-  }
-  return ctx.reply(view.text, view.extra);
-}
-
 module.exports = (bot) => {
   bot.command("rps", (ctx) => handleRps(ctx));
 };
 
 module.exports.handleRps = handleRps;
-module.exports.handleRpsPrivateStart = handleRpsPrivateStart;
 module.exports.PRIVATE_RPS_TEXT = PRIVATE_RPS_TEXT;

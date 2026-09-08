@@ -1,5 +1,5 @@
 /**
- * Rock Paper Scissors PvP — private choices, XP, quest, stale callbacks.
+ * Rock Paper Scissors — group-topic buttons, secret locks, XP, quest, stale callbacks.
  * Run: node tests/rock-paper-scissors.test.js
  */
 
@@ -29,6 +29,7 @@ const {
   BOT_DISPLAY_NAME,
   pickBotMove,
   msUntilNextCountdownMark,
+  ALREADY_LOCKED_TOAST,
 } = require("../services/rockPaperScissors");
 const { createTicTacToeService } = require("../services/ticTacToe");
 const {
@@ -40,7 +41,7 @@ const {
   finalizeWinXp,
 } = require("../events/pvp-callbacks");
 const { handleRps, PRIVATE_RPS_TEXT } = require("../commands/rps");
-const { handleStart } = require("../commands/start");
+const { handleStart, WELCOME_MESSAGE } = require("../commands/start");
 const {
   handleGroupMenuCallback,
   handlePrivateHubCallback,
@@ -219,8 +220,21 @@ async function lock(service, sessionId, userId, move, round = 1) {
     userId,
     move,
     round,
-    source: "private",
+    chatId: COMMUNITY_CHAT,
   });
+}
+
+function assertGroupChoiceButtons(extra, sessionId, round) {
+  const blob = JSON.stringify(extra);
+  assert.ok(blob.includes("✊ Rock"));
+  assert.ok(blob.includes("✋ Paper"));
+  assert.ok(blob.includes("✌️ Scissors"));
+  assert.ok(blob.includes(buildChoiceCallbackData(sessionId, round, "rock")));
+  assert.ok(blob.includes(buildChoiceCallbackData(sessionId, round, "paper")));
+  assert.ok(blob.includes(buildChoiceCallbackData(sessionId, round, "scissors")));
+  assert.ok(!blob.includes("Choose privately"));
+  assert.ok(!blob.includes("t.me/"));
+  assert.ok(!blob.includes("url"));
 }
 
 function createMockCtx({
@@ -342,8 +356,11 @@ async function main() {
     const joined = joinP2(service, lobby.session.id);
     assert.strictEqual(joined.session.players.p2.userId, String(USER_B));
     assert.ok(joined.rendered.text.includes("Kevin vs Alice"));
-    assert.ok(joined.rendered.text.includes("choose your move privately"));
-    assert.strictEqual(joined.privatePrompts.length, 2);
+    assert.ok(joined.rendered.text.includes("Kevin: ⏳ Choosing"));
+    assert.ok(joined.rendered.text.includes("Alice: ⏳ Choosing"));
+    assert.ok(!joined.rendered.text.includes("privately"));
+    assert.strictEqual(joined.privatePrompts, undefined);
+    assertGroupChoiceButtons(joined.rendered.extra, lobby.session.id, 1);
   });
 
   await runTest("C. outsider cannot hijack match", async () => {
@@ -376,23 +393,15 @@ async function main() {
     assert.strictEqual(self.reason, "already-joined");
   });
 
-  await runTest("E-F. private choice screens for P1 and P2", async () => {
+  await runTest("E-F. PvP uses the same public Rock/Paper/Scissors buttons", async () => {
     const { service } = createService();
     const lobby = startLobby(service);
-    joinP2(service, lobby.session.id);
-    const v1 = service.getPrivateView(USER_A, lobby.session.id);
-    const v2 = service.getPrivateView(USER_B, lobby.session.id);
-    assert.strictEqual(v1.ok, true);
-    assert.strictEqual(v2.ok, true);
-    assert.ok(v1.text.includes("Choose your move"));
-    assert.ok(v2.text.includes("Choose your move"));
-    const kb = JSON.stringify(v1.extra);
-    assert.ok(kb.includes("✊ Rock"));
-    assert.ok(kb.includes("✋ Paper"));
-    assert.ok(kb.includes("✌️ Scissors"));
+    const joined = joinP2(service, lobby.session.id);
+    assertGroupChoiceButtons(joined.rendered.extra, lobby.session.id, 1);
     const parsed = parsePvpCallbackData(buildChoiceCallbackData(lobby.session.id, 1, "rock"));
     assert.strictEqual(parsed.move, "rock");
     assert.ok(!buildChoiceCallbackData(lobby.session.id, 1, "rock").includes(String(USER_A)));
+    assert.strictEqual(typeof service.getPrivateView, "undefined");
   });
 
   await runTest("G. choice remains secret before both choose", async () => {
@@ -402,12 +411,14 @@ async function main() {
     const locked = await lock(service, lobby.session.id, USER_A, "rock");
     assert.strictEqual(locked.ok, true);
     assert.strictEqual(locked.resolved, false);
-    assert.ok(locked.privateEdit.text.includes("Choice locked: ✊ Rock"));
-    assert.ok(locked.privateEdit.text.includes("Waiting for your opponent"));
+    assert.strictEqual(locked.toast, "✊ Rock locked!");
+    assert.strictEqual(locked.privateEdit, undefined);
     assert.strictEqual(publicTextHasSecret(locked.rendered.text, locked.session), false);
     assert.ok(locked.rendered.text.includes("Kevin: ✅ Ready"));
     assert.ok(locked.rendered.text.includes("Alice: ⏳ Choosing"));
     assert.ok(!locked.rendered.text.includes("Kevin: ✊ Rock"));
+    assert.ok(!locked.rendered.text.includes("✊ Rock"));
+    assertGroupChoiceButtons(locked.rendered.extra, lobby.session.id, 1);
   });
 
   await runTest("H. Rock beats Scissors", async () => {
@@ -508,7 +519,11 @@ async function main() {
     const again = await lock(service, lobby.session.id, USER_A, "paper");
     assert.strictEqual(again.ok, false);
     assert.strictEqual(again.reason, "already-chosen");
+    assert.strictEqual(again.toast, ALREADY_LOCKED_TOAST);
     assert.strictEqual(service.getSession(lobby.session.id).choices.p1, "rock");
+    const same = await lock(service, lobby.session.id, USER_A, "rock");
+    assert.strictEqual(same.ok, false);
+    assert.strictEqual(same.reason, "already-chosen");
   });
 
   await runTest("P. duplicate result callback cannot duplicate XP", async () => {
@@ -518,8 +533,6 @@ async function main() {
     joinP2(service, lobby.session.id);
     await lock(service, lobby.session.id, USER_A, "rock");
     const ctx = createMockCtx({
-      chatType: "private",
-      chatId: USER_B,
       userId: USER_B,
       firstName: "Alice",
       callbackData: buildChoiceCallbackData(lobby.session.id, 1, "scissors"),
@@ -557,7 +570,7 @@ async function main() {
       userId: USER_A,
       move: "scissors",
       round: 1,
-      source: "private",
+      chatId: COMMUNITY_CHAT,
     });
     assert.strictEqual(stale.ok, false);
     assert.strictEqual(stale.reason, "stale-round");
@@ -833,7 +846,7 @@ async function main() {
     assert.strictEqual(questPvp.length, 2);
   });
 
-  await runTest("AD. private join DMs + /rps command + /start deep-link", async () => {
+  await runTest("AD. join sends no private DMs; /rps works; /start rps_* is unused", async () => {
     const { service } = createService();
     const lobby = startLobby(service);
     const ctx = createMockCtx({
@@ -846,8 +859,9 @@ async function main() {
       parseCallbackData: parsePvpCallbackData,
       awardPvpWinXpFn: () => ({ awarded: false, pointsToAdd: 0 }),
     });
-    assert.strictEqual(ctx.dms.length, 2);
-    assert.ok(ctx.dms.every((d) => d.text.includes("Choose your move")));
+    assert.strictEqual(ctx.dms.length, 0);
+    assert.ok(ctx.edited.some((e) => e.text.includes("Kevin vs Alice")));
+    assertGroupChoiceButtons(ctx.edited[0].extra, lobby.session.id, 1);
     const cmd = createMockCtx({
       userId: USER_C,
       firstName: "Eve",
@@ -868,11 +882,8 @@ async function main() {
       startPayload: `rps_${lobby.session.id}`,
     });
     await handleStart(startCtx, { runtime: service });
-    assert.ok(
-      startCtx.replies.some((r) =>
-        String(r.text).includes("Choose your move") || String(r.text).includes("Choice locked")
-      )
-    );
+    assert.strictEqual(startCtx.replies[0].text, WELCOME_MESSAGE);
+    assert.ok(!startCtx.replies.some((r) => String(r.text).includes("Choose your move")));
   });
 
   await runTest("stale cancel cannot destroy newer round", async () => {
@@ -938,10 +949,11 @@ async function main() {
     assert.ok(!JSON.stringify(bot.rendered.extra).includes("JOIN GAME"));
     assert.ok(!bot.rendered.text.includes("Waiting for an opponent"));
     assert.ok(!bot.rendered.text.includes("⏱️"));
-    assert.strictEqual(bot.privatePrompts.length, 1);
-    assert.strictEqual(String(bot.privatePrompts[0].userId), String(USER_A));
-    assert.ok(bot.privatePrompts[0].text.includes("Choose your move"));
-    assert.ok(!bot.privatePrompts[0].text.includes("⏱️"));
+    assert.ok(bot.rendered.text.includes("Kevin vs ManGoBot"));
+    assert.ok(bot.rendered.text.includes("Choose your move:"));
+    assert.ok(!bot.rendered.text.includes("privately"));
+    assert.strictEqual(bot.privatePrompts, undefined);
+    assertGroupChoiceButtons(bot.rendered.extra, started.session.id, 1);
   });
 
   await runTest("bot D-H. immediate fair resolve vs ManGoBot", async () => {
@@ -1004,7 +1016,8 @@ async function main() {
     assert.strictEqual(replay.session.opponentType, "bot");
     assert.strictEqual(replay.session.status, STATUS.ACTIVE);
     assert.strictEqual(replay.session.choices.p1, null);
-    assert.strictEqual(replay.privatePrompts.length, 1);
+    assert.strictEqual(replay.privatePrompts, undefined);
+    assertGroupChoiceButtons(replay.rendered.extra, started.session.id, 2);
     const stale = await lock(service, started.session.id, USER_A, "paper", 1);
     assert.strictEqual(stale.ok, false);
     assert.strictEqual(stale.reason, "stale-round");
@@ -1077,8 +1090,10 @@ async function main() {
     const joined = joinP2(service, lobby.session.id);
     assert.ok(joined.rendered.text.includes("⏱️"));
     assert.ok(joined.rendered.text.includes("remaining"));
-    assert.ok(joined.privatePrompts[0].text.includes("⏱️"));
     assert.ok(joined.rendered.text.includes("Kevin: ⏳ Choosing"));
+    assert.ok(joined.rendered.text.includes("Alice: ⏳ Choosing"));
+    assert.strictEqual(joined.privatePrompts, undefined);
+    assertGroupChoiceButtons(joined.rendered.extra, lobby.session.id, 1);
   });
 
   await runTest("bot S. timeout cleanup unchanged", async () => {
@@ -1094,6 +1109,256 @@ async function main() {
     const choiceExpired = service.getSession(pvp.session.id);
     assert.strictEqual(choiceExpired.status, STATUS.EXPIRED);
     assert.strictEqual(choiceExpired.endReason, "choice-timeout");
+  });
+
+  await runTest("UX A. vs Bot uses group Rock/Paper/Scissors buttons", async () => {
+    const { service } = createService({ randomMoveFn: () => "scissors" });
+    const started = startBot(service);
+    assertGroupChoiceButtons(started.rendered.extra, started.session.id, 1);
+    assert.ok(started.rendered.text.includes("Choose your move:"));
+  });
+
+  await runTest("UX B-C. PvP uses group buttons and sends no private choice DM", async () => {
+    const { service } = createService();
+    const lobby = startLobby(service);
+    const ctx = createMockCtx({
+      userId: USER_B,
+      firstName: "Alice",
+      callbackData: buildJoinCallbackData(lobby.session.id),
+    });
+    await handlePvpCallback(ctx, {
+      runtime: service,
+      parseCallbackData: parsePvpCallbackData,
+      awardPvpWinXpFn: () => ({ awarded: false, pointsToAdd: 0 }),
+    });
+    assert.strictEqual(ctx.dms.length, 0);
+    assertGroupChoiceButtons(ctx.edited[0].extra, lobby.session.id, 1);
+  });
+
+  await runTest("UX D-H. first move stays secret until both lock, then both reveal", async () => {
+    const { service } = createService();
+    const lobby = startLobby(service);
+    joinP2(service, lobby.session.id);
+    const kevinCtx = createMockCtx({
+      userId: USER_A,
+      firstName: "Kevin",
+      callbackData: buildChoiceCallbackData(lobby.session.id, 1, "rock"),
+    });
+    await handlePvpCallback(kevinCtx, {
+      runtime: service,
+      parseCallbackData: parsePvpCallbackData,
+      awardPvpWinXpFn: () => ({ awarded: false, pointsToAdd: 0 }),
+    });
+    assert.deepStrictEqual(kevinCtx.cbAnswers, ["✊ Rock locked!"]);
+    assert.strictEqual(kevinCtx.dms.length, 0);
+    const publicAfterFirst = kevinCtx.publicEdits[0] || kevinCtx.edited[0];
+    assert.ok(publicAfterFirst.text.includes("Kevin: ✅ Ready"));
+    assert.ok(publicAfterFirst.text.includes("Alice: ⏳ Choosing"));
+    assert.ok(!publicAfterFirst.text.includes("Kevin: ✊ Rock"));
+    assert.strictEqual(publicTextHasSecret(publicAfterFirst.text, service.getSession(lobby.session.id)), false);
+
+    const aliceCtx = createMockCtx({
+      userId: USER_B,
+      firstName: "Alice",
+      callbackData: buildChoiceCallbackData(lobby.session.id, 1, "scissors"),
+    });
+    await handlePvpCallback(aliceCtx, {
+      runtime: service,
+      parseCallbackData: parsePvpCallbackData,
+      awardPvpWinXpFn: () => ({ awarded: false, pointsToAdd: 0 }),
+    });
+    assert.deepStrictEqual(aliceCtx.cbAnswers, ["✌️ Scissors locked!"]);
+    assert.ok(!aliceCtx.cbAnswers.includes("✊ Rock locked!"));
+    const publicAfterBoth = aliceCtx.publicEdits[0] || aliceCtx.edited[0];
+    assert.ok(publicAfterBoth.text.includes("Kevin: ✊ Rock"));
+    assert.ok(publicAfterBoth.text.includes("Alice: ✌️ Scissors"));
+    assert.ok(publicAfterBoth.text.includes("🏆 Kevin wins!"));
+  });
+
+  await runTest("UX I-J. first choice is final; rapid double tap cannot resolve twice", async () => {
+    const { service } = createService();
+    const lobby = startLobby(service);
+    joinP2(service, lobby.session.id);
+    const rockCtx = createMockCtx({
+      callbackData: buildChoiceCallbackData(lobby.session.id, 1, "rock"),
+    });
+    const paperCtx = createMockCtx({
+      callbackData: buildChoiceCallbackData(lobby.session.id, 1, "paper"),
+    });
+    await Promise.all([
+      handlePvpCallback(rockCtx, {
+        runtime: service,
+        parseCallbackData: parsePvpCallbackData,
+        awardPvpWinXpFn: () => ({ awarded: false, pointsToAdd: 0 }),
+      }),
+      handlePvpCallback(paperCtx, {
+        runtime: service,
+        parseCallbackData: parsePvpCallbackData,
+        awardPvpWinXpFn: () => ({ awarded: false, pointsToAdd: 0 }),
+      }),
+    ]);
+    const session = service.getSession(lobby.session.id);
+    assert.ok(session.choices.p1 === "rock" || session.choices.p1 === "paper");
+    assert.strictEqual(session.status, STATUS.ACTIVE);
+    const answers = [...rockCtx.cbAnswers, ...paperCtx.cbAnswers];
+    assert.strictEqual(answers.filter((a) => a.endsWith("locked!")).length, 1);
+    assert.strictEqual(answers.filter((a) => a === ALREADY_LOCKED_TOAST).length, 1);
+    const third = createMockCtx({
+      callbackData: buildChoiceCallbackData(lobby.session.id, 1, "scissors"),
+    });
+    await handlePvpCallback(third, {
+      runtime: service,
+      parseCallbackData: parsePvpCallbackData,
+      awardPvpWinXpFn: () => ({ awarded: false, pointsToAdd: 0 }),
+    });
+    assert.ok(third.cbAnswers.includes(ALREADY_LOCKED_TOAST));
+    assert.strictEqual(service.getSession(lobby.session.id).choices.p1, session.choices.p1);
+  });
+
+  await runTest("UX K. non-participant cannot choose", async () => {
+    const { service } = createService();
+    const lobby = startLobby(service);
+    joinP2(service, lobby.session.id);
+    const outsider = createMockCtx({
+      userId: USER_C,
+      firstName: "Eve",
+      callbackData: buildChoiceCallbackData(lobby.session.id, 1, "rock"),
+    });
+    await handlePvpCallback(outsider, {
+      runtime: service,
+      parseCallbackData: parsePvpCallbackData,
+      awardPvpWinXpFn: () => ({ awarded: false, pointsToAdd: 0 }),
+    });
+    assert.ok(outsider.cbAnswers.includes("This game belongs to two other players."));
+    const session = service.getSession(lobby.session.id);
+    assert.strictEqual(session.choices.p1, null);
+    assert.strictEqual(session.choices.p2, null);
+    assert.strictEqual(session.status, STATUS.ACTIVE);
+    assert.strictEqual(outsider.publicEdits.length, 0);
+  });
+
+  await runTest("UX L-O. Play Again gives clean group buttons; stale previous-round move ignored", async () => {
+    const { service } = createService();
+    const lobby = startLobby(service);
+    joinP2(service, lobby.session.id);
+    await lock(service, lobby.session.id, USER_A, "rock");
+    await lock(service, lobby.session.id, USER_B, "paper");
+    const replayCtx = createMockCtx({
+      callbackData: buildReplayCallbackData(lobby.session.id, 1),
+    });
+    await handlePvpCallback(replayCtx, {
+      runtime: service,
+      parseCallbackData: parsePvpCallbackData,
+      awardPvpWinXpFn: () => ({ awarded: false, pointsToAdd: 0 }),
+    });
+    assert.strictEqual(replayCtx.dms.length, 0);
+    const replayed = replayCtx.edited[0] || replayCtx.publicEdits[0];
+    assert.ok(replayed.text.includes("Kevin: ⏳ Choosing"));
+    assert.ok(replayed.text.includes("Alice: ⏳ Choosing"));
+    assertGroupChoiceButtons(replayed.extra, lobby.session.id, 2);
+    const stale = createMockCtx({
+      callbackData: buildChoiceCallbackData(lobby.session.id, 1, "scissors"),
+    });
+    await handlePvpCallback(stale, {
+      runtime: service,
+      parseCallbackData: parsePvpCallbackData,
+      awardPvpWinXpFn: () => ({ awarded: false, pointsToAdd: 0 }),
+    });
+    assert.ok(stale.cbAnswers.includes("This round already ended."));
+    assert.strictEqual(service.getSession(lobby.session.id).choices.p1, null);
+    assert.strictEqual(service.getSession(lobby.session.id).round, 2);
+  });
+
+  await runTest("UX M-N. timeout and coarse choice timer still work without revealing moves", async () => {
+    const { service, timers } = createService();
+    const lobby = startLobby(service);
+    joinP2(service, lobby.session.id);
+    const first = await lock(service, lobby.session.id, USER_A, "rock");
+    assert.ok(first.rendered.text.includes("⏱️"));
+    assert.ok(!first.rendered.text.includes("Kevin: ✊ Rock"));
+    const ticks = [];
+    service.setRenderHandler((r) => {
+      if (r && r.ok && r.rendered && /⏱️/.test(r.rendered.text)) {
+        ticks.push(r.rendered.text);
+      }
+    });
+    timers.advance(15_000);
+    assert.ok(ticks.some((t) => t.includes("30s remaining")));
+    assert.ok(ticks.every((t) => !t.includes("Kevin: ✊ Rock")));
+    timers.advance(CHOICE_TIMEOUT_MS);
+    const expired = service.getSession(lobby.session.id);
+    assert.strictEqual(expired.status, STATUS.EXPIRED);
+    assert.strictEqual(expired.endReason, "choice-timeout");
+    const afterTimeout = createMockCtx({
+      callbackData: buildChoiceCallbackData(lobby.session.id, 1, "paper"),
+    });
+    await handlePvpCallback(afterTimeout, {
+      runtime: service,
+      parseCallbackData: parsePvpCallbackData,
+      awardPvpWinXpFn: () => ({ awarded: false, pointsToAdd: 0 }),
+    });
+    assert.ok(
+      afterTimeout.cbAnswers.some(
+        (a) => a.includes("over") || a.includes("ended") || a.includes("already")
+      )
+    );
+    assert.strictEqual(service.getSession(lobby.session.id).status, STATUS.EXPIRED);
+    assert.strictEqual(service.getSession(lobby.session.id).choices.p1, "rock");
+  });
+
+  await runTest("UX P-Q. bot RNG independent; XP/quest split unchanged", async () => {
+    const calls = [];
+    const { service, questGames, questPvp } = createService({
+      randomMoveFn: (...args) => {
+        calls.push(args);
+        return "scissors";
+      },
+      pairCooldownMs: 0,
+    });
+    const bot = startBot(service);
+    const botResult = await lock(service, bot.session.id, USER_A, "rock");
+    assert.deepStrictEqual(calls[0], []);
+    assert.strictEqual(botResult.needsXp, false);
+    assert.deepStrictEqual(questGames, [{ uid: String(USER_A), game: "rps" }]);
+    assert.strictEqual(questPvp.length, 0);
+
+    const human = createService({ pairCooldownMs: 0 });
+    const lobby = startLobby(human.service);
+    joinP2(human.service, lobby.session.id);
+    await lock(human.service, lobby.session.id, USER_A, "rock");
+    await lock(human.service, lobby.session.id, USER_B, "scissors");
+    assert.strictEqual(human.questGames.length, 0);
+    assert.strictEqual(human.questPvp.length, 2);
+  });
+
+  await runTest("UX R. no RPS deep-link or private chooser remains", async () => {
+    const src = require("fs").readFileSync(
+      path.join(__dirname, "..", "services", "rockPaperScissors.js"),
+      "utf8"
+    );
+    const startSrc = require("fs").readFileSync(
+      path.join(__dirname, "..", "commands", "start.js"),
+      "utf8"
+    );
+    const cmdSrc = require("fs").readFileSync(
+      path.join(__dirname, "..", "commands", "rps.js"),
+      "utf8"
+    );
+    const cbSrc = require("fs").readFileSync(
+      path.join(__dirname, "..", "events", "pvp-callbacks.js"),
+      "utf8"
+    );
+    assert.ok(!src.includes("buildPrivateDeepLink"));
+    assert.ok(!src.includes("getPrivateView"));
+    assert.ok(!src.includes("privatePrompts"));
+    assert.ok(!src.includes("Choose privately"));
+    assert.ok(!startSrc.includes("handleRpsPrivateStart"));
+    assert.ok(!startSrc.includes("rps_"));
+    assert.ok(!cmdSrc.includes("handleRpsPrivateStart"));
+    assert.ok(!cmdSrc.includes("getPrivateView"));
+    assert.ok(!cbSrc.includes("sendPrivatePrompts"));
+    const { service } = createService();
+    assert.strictEqual(typeof service.getPrivateView, "undefined");
   });
 
   restoreEnv();

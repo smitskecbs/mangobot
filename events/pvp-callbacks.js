@@ -120,27 +120,6 @@ function isPrivateCtx(ctx) {
   return Boolean(ctx && ctx.chat && ctx.chat.type === "private");
 }
 
-async function sendPrivatePrompts(ctx, prompts) {
-  const telegram = ctx && ctx.telegram;
-  if (!telegram || typeof telegram.sendMessage !== "function" || !Array.isArray(prompts)) {
-    return;
-  }
-  for (const prompt of prompts) {
-    if (!prompt || prompt.userId == null || !prompt.text) {
-      continue;
-    }
-    try {
-      await telegram.sendMessage(
-        prompt.userId,
-        prompt.text,
-        prompt.extra || undefined
-      );
-    } catch (_err) {
-      /* Player has not started the bot privately. Public deep-link covers this. */
-    }
-  }
-}
-
 async function editPublicSessionMessage(ctx, session, rendered) {
   if (!session || session.messageId == null || !rendered || !rendered.text) {
     return false;
@@ -495,7 +474,6 @@ async function handlePvpCallbackBody(ctx, options = {}) {
     if (result.rendered) {
       await safeEdit(ctx, result.rendered.text, result.rendered.extra);
     }
-    await sendPrivatePrompts(ctx, result.privatePrompts);
     return;
   }
 
@@ -534,7 +512,6 @@ async function handlePvpCallbackBody(ctx, options = {}) {
     }
     await cbAnswer(ctx);
     await applyRenderedEdit(ctx, runtime, parsed, result.rendered);
-    await sendPrivatePrompts(ctx, result.privatePrompts);
     return;
   }
 
@@ -549,15 +526,11 @@ async function handlePvpCallbackBody(ctx, options = {}) {
       move: parsed.move,
       round: parsed.round,
       chatId,
-      source: isPrivateCtx(ctx) ? "private" : undefined,
     });
 
     if (!result.ok) {
       if (result.reason === "already-chosen") {
-        await cbAnswer(ctx, "Choice already locked.");
-        if (result.privateEdit && isPrivateCtx(ctx)) {
-          await safeEdit(ctx, result.privateEdit.text, result.privateEdit.extra);
-        }
+        await cbAnswer(ctx, result.toast || "✅ Your move is already locked.");
         return;
       }
       if (result.reason === "stale-round") {
@@ -588,10 +561,7 @@ async function handlePvpCallbackBody(ctx, options = {}) {
       return;
     }
 
-    await cbAnswer(ctx);
-    if (result.privateEdit && isPrivateCtx(ctx)) {
-      await safeEdit(ctx, result.privateEdit.text, result.privateEdit.extra);
-    }
+    await cbAnswer(ctx, result.toast || "");
     let rendered = result.rendered;
     if (result.needsXp) {
       const fin = await finalizeWinXp(runtime, parsed.sessionId, awardXpFn);
@@ -644,7 +614,6 @@ async function handlePvpCallbackBody(ctx, options = {}) {
     clearGameMessageCleanup(pvpGameType(parsed), parsed.sessionId);
     await cbAnswer(ctx);
     await applyRenderedEdit(ctx, runtime, parsed, result.rendered);
-    await sendPrivatePrompts(ctx, result.privatePrompts);
     return;
   }
 

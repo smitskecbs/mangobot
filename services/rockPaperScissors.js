@@ -1,6 +1,6 @@
 /**
- * Rock Paper Scissors — human PvP or vs ManGoBot.
- * Private choices; public message shows ready/choosing status until both lock.
+ * Rock Paper Scissors — human PvP or vs ManGoBot in the Games topic.
+ * Group inline buttons; public text hides moves until both players lock.
  */
 
 const crypto = require("crypto");
@@ -29,7 +29,6 @@ const {
   logGameCleanup,
 } = require("../utils/gameCleanup");
 const { emptyInlineKeyboardExtra } = require("../utils/expiredMessageCleanup");
-const { buildPrivateDeepLink, resolveBotUsername } = require("../utils/botMenu");
 
 const GAME_ID = "rps";
 const JOIN_TIMEOUT_MS = 60 * 1000;
@@ -65,6 +64,12 @@ const BEATS = Object.freeze({
   paper: "rock",
   scissors: "paper",
 });
+
+const ALREADY_LOCKED_TOAST = "✅ Your move is already locked.";
+
+function lockedToast(move) {
+  return `${MOVE_LABEL[move]} locked!`;
+}
 
 function isMove(value) {
   return MOVES.includes(value);
@@ -250,17 +255,16 @@ Waiting for an opponent...${timer}`;
 
 function readyLine(player, choice) {
   const name = player && player.displayName ? player.displayName : "Player";
-  return choice ? `${name}: ✅ Ready` : `${name}: ⏳ Choosing...`;
+  return choice ? `${name}: ✅ Ready` : `${name}: ⏳ Choosing`;
 }
 
-function buildChoosingText(session, botUsername, now) {
-  const linkLine = `\n🔒 Open ManGoBot privately to choose your move.`;
+function buildChoosingText(session, now) {
   if (session.opponentType === "bot") {
     return `✊✋✌️ Rock Paper Scissors
 
 ${p1Name(session)} vs ${BOT_DISPLAY_NAME}
 
-Choose your move privately.${linkLine}`;
+Choose your move:`;
   }
   const timer = session.choiceEndsAt
     ? `\n\n${formatRemainingLine(session.choiceEndsAt, now)}`
@@ -269,38 +273,8 @@ Choose your move privately.${linkLine}`;
 
 ${p1Name(session)} vs ${p2Name(session)}
 
-Both players: choose your move privately.
-
 ${readyLine(session.players.p1, session.choices.p1)}
-${readyLine(session.players.p2, session.choices.p2)}${linkLine}${timer}`;
-}
-
-function buildChoosingExtra(session, botUsername) {
-  const url = buildPrivateDeepLink(botUsername, `rps_${session.id}`);
-  if (!url) {
-    return emptyInlineKeyboardExtra();
-  }
-  return Markup.inlineKeyboard([
-    [Markup.button.url("🔒 Choose privately", url)],
-  ]);
-}
-
-function buildPrivateChoiceText(session, now) {
-  const timer =
-    session &&
-    session.opponentType !== "bot" &&
-    session.choiceEndsAt
-      ? `\n\n${formatRemainingLine(session.choiceEndsAt, now)}`
-      : "";
-  return `✊✋✌️ Rock Paper Scissors
-
-Choose your move.${timer}`;
-}
-
-function buildLockedPrivateText(move) {
-  return `✅ Choice locked: ${MOVE_LABEL[move]}
-
-Waiting for your opponent...`;
+${readyLine(session.players.p2, session.choices.p2)}${timer}`;
 }
 
 function buildRevealText(session, xpResult) {
@@ -369,8 +343,6 @@ function createRockPaperScissorsService(options = {}) {
     typeof options.pairCooldownMs === "number"
       ? options.pairCooldownMs
       : PAIR_COOLDOWN_MS;
-  const botUsername =
-    typeof options.botUsername === "string" ? options.botUsername : null;
   const randomMoveFn =
     typeof options.randomMoveFn === "function" ? options.randomMoveFn : defaultRandomMove;
 
@@ -399,11 +371,6 @@ function createRockPaperScissorsService(options = {}) {
     } catch (_err) {
       /* ignore */
     }
-  }
-
-  function resolveUsername(ctx) {
-    if (botUsername) return botUsername;
-    return resolveBotUsername(ctx) || null;
   }
 
   function snapshot(session) {
@@ -454,8 +421,7 @@ function createRockPaperScissorsService(options = {}) {
     return null;
   }
 
-  function renderMessage(session, xpResult, ctx) {
-    const username = resolveUsername(ctx);
+  function renderMessage(session, xpResult) {
     const now = manager.now();
     if (session.status === STATUS.WAITING && session.phase === PHASE.START_CHOICE) {
       return { text: buildStartText(), extra: buildStartKeyboard(session.id) };
@@ -465,8 +431,8 @@ function createRockPaperScissorsService(options = {}) {
     }
     if (session.status === STATUS.ACTIVE && session.phase === PHASE.CHOOSING) {
       return {
-        text: buildChoosingText(session, username, now),
-        extra: buildChoosingExtra(session, username),
+        text: buildChoosingText(session, now),
+        extra: buildChoiceKeyboard(session.id, session.round),
       };
     }
     if (session.status === STATUS.WON || session.status === STATUS.DRAW) {
@@ -491,32 +457,6 @@ function createRockPaperScissorsService(options = {}) {
       return { text: buildCancelledText(), extra: emptyInlineKeyboardExtra() };
     }
     return { text: "✊✋✌️ Rock Paper Scissors", extra: emptyInlineKeyboardExtra() };
-  }
-
-  function privatePromptsFor(session) {
-    const round = session.round;
-    const now = manager.now();
-    const prompts = [];
-    for (const seat of ["p1", "p2"]) {
-      const player = session.players[seat];
-      if (!player || player.userId == null || isBotPlayer(player)) continue;
-      if (session.choices[seat]) {
-        prompts.push({
-          userId: player.userId,
-          text: buildLockedPrivateText(session.choices[seat]),
-          extra: emptyInlineKeyboardExtra(),
-          alreadyLocked: true,
-        });
-      } else {
-        prompts.push({
-          userId: player.userId,
-          text: buildPrivateChoiceText(session, now),
-          extra: buildChoiceKeyboard(session.id, round),
-          alreadyLocked: false,
-        });
-      }
-    }
-    return prompts;
   }
 
   function scheduleVisibleCountdown(session, endsAt, tickFn) {
@@ -812,7 +752,6 @@ function createRockPaperScissorsService(options = {}) {
           bot: true,
           session: snapshot(session),
           rendered: renderMessage(session),
-          privatePrompts: privatePromptsFor(session),
         };
       }
       return { ok: false, reason: "bad-mode" };
@@ -895,22 +834,17 @@ function createRockPaperScissorsService(options = {}) {
         ok: true,
         session: snapshot(session),
         rendered: renderMessage(session),
-        privatePrompts: privatePromptsFor(session),
       };
     });
     notifyRender(locked);
     return locked;
   }
 
-  function choose({ sessionId, userId, move, round, chatId, source } = {}) {
+  function choose({ sessionId, userId, move, round, chatId } = {}) {
     const locked = manager.withSessionLock(sessionId, () => {
       const session = manager.getSession(sessionId);
       if (!session) return { ok: false, reason: "invalid-session" };
-      if (
-        source !== "private" &&
-        chatId != null &&
-        String(chatId) !== String(session.chatId)
-      ) {
+      if (chatId != null && String(chatId) !== String(session.chatId)) {
         return { ok: false, reason: "wrong-chat" };
       }
       if (session.status !== STATUS.ACTIVE || session.phase !== PHASE.CHOOSING) {
@@ -926,11 +860,8 @@ function createRockPaperScissorsService(options = {}) {
         return {
           ok: false,
           reason: "already-chosen",
+          toast: ALREADY_LOCKED_TOAST,
           session: snapshot(session),
-          privateEdit: {
-            text: buildLockedPrivateText(session.choices[seat]),
-            extra: emptyInlineKeyboardExtra(),
-          },
         };
       }
       session.choices[seat] = move;
@@ -951,12 +882,7 @@ function createRockPaperScissorsService(options = {}) {
         ok: true,
         session: snapshot(session),
         rendered: renderMessage(session),
-        privateEdit: {
-          text: both
-            ? `✅ Choice locked: ${MOVE_LABEL[move]}`
-            : buildLockedPrivateText(move),
-          extra: emptyInlineKeyboardExtra(),
-        },
+        toast: lockedToast(move),
         needsXp: outcome.needsXp,
         questUsers,
         resolved: both,
@@ -1002,7 +928,6 @@ function createRockPaperScissorsService(options = {}) {
         ok: true,
         session: snapshot(session),
         rendered: renderMessage(session),
-        privatePrompts: privatePromptsFor(session),
       };
     });
     notifyRender(locked);
@@ -1129,44 +1054,6 @@ function createRockPaperScissorsService(options = {}) {
     return snapshot(manager.getSession(sessionId));
   }
 
-  function getPrivateView(userId, sessionId) {
-    const session = sessionId
-      ? manager.getSession(sessionId)
-      : null;
-    let live = session;
-    if (!live) {
-      const held = reservation.get(userId);
-      if (held && held.game === GAME_ID) {
-        live = manager.getSession(held.matchId);
-      }
-    }
-    if (!live) return { ok: false, reason: "no-session" };
-    const seat = seatForUser(live, userId);
-    if (!seat) return { ok: false, reason: "outsider" };
-    if (live.status !== STATUS.ACTIVE || live.phase !== PHASE.CHOOSING) {
-      if (live.choices[seat]) {
-        return {
-          ok: true,
-          text: `✅ Choice locked: ${MOVE_LABEL[live.choices[seat]]}`,
-          extra: emptyInlineKeyboardExtra(),
-        };
-      }
-      return { ok: false, reason: "not-active" };
-    }
-    if (live.choices[seat]) {
-      return {
-        ok: true,
-        text: buildLockedPrivateText(live.choices[seat]),
-        extra: emptyInlineKeyboardExtra(),
-      };
-    }
-    return {
-      ok: true,
-      text: buildPrivateChoiceText(live, manager.now()),
-      extra: buildChoiceKeyboard(live.id, live.round),
-    };
-  }
-
   function reset() {
     manager.resetAll();
     reservation.reset();
@@ -1191,7 +1078,6 @@ function createRockPaperScissorsService(options = {}) {
     claimXpAward,
     applyXpResultToRender,
     getSession,
-    getPrivateView,
     renderMessage,
     setRenderHandler,
     isOpen,
@@ -1231,6 +1117,7 @@ module.exports = {
   PLAYER_BUSY_TEXT,
   BOT_USER_ID,
   BOT_DISPLAY_NAME,
+  ALREADY_LOCKED_TOAST,
   parsePvpCallbackData,
   buildModeCallbackData,
   buildJoinCallbackData,
