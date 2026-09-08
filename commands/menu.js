@@ -67,6 +67,7 @@ const {
   getGroupMenuOwner,
   callbackMenuMessageId,
   formatMenuUnauthorizedToast,
+  stripGroupMenuKeyboard,
   MENU_EXPIRED_GENERIC,
 } = require("../utils/menuOwnership");
 
@@ -119,13 +120,12 @@ const PRIVATE_HUB_ACTION_RE = new RegExp(
 
 function attachSentMenuOwnership(ctx, result) {
   if (result && typeof result.then === "function") {
-    return result.then((sent) => {
-      rememberSentGroupMenu(ctx, sent);
+    return result.then(async (sent) => {
+      await rememberSentGroupMenu(ctx, sent);
       return sent;
     });
   }
-  rememberSentGroupMenu(ctx, result);
-  return result;
+  return Promise.resolve(rememberSentGroupMenu(ctx, result)).then(() => result);
 }
 
 /**
@@ -139,16 +139,13 @@ async function showMenuView(ctx, text, extra) {
     try {
       const edited = await ctx.editMessageText(text, extra);
       rememberCallbackGroupMenu(ctx);
-      if (edited && edited.message_id != null) {
-        rememberSentGroupMenu(ctx, edited);
-      }
       return edited;
     } catch (_err) {
       // Message not editable (e.g. too old) — reply instead.
     }
   }
   const sent = await ctx.reply(text, extra);
-  rememberSentGroupMenu(ctx, sent);
+  await rememberSentGroupMenu(ctx, sent);
   return sent;
 }
 
@@ -170,13 +167,19 @@ async function assertGroupMenuOwner(ctx) {
     );
     return { ok: true, record: refreshed || record };
   }
-  const toast = record
-    ? formatMenuUnauthorizedToast(record.displayName)
-    : MENU_EXPIRED_GENERIC;
-  if (ctx && typeof ctx.answerCbQuery === "function") {
-    await ctx.answerCbQuery(toast).catch(() => {});
+  if (record) {
+    if (ctx && typeof ctx.answerCbQuery === "function") {
+      await ctx
+        .answerCbQuery(formatMenuUnauthorizedToast(record.displayName))
+        .catch(() => {});
+    }
+    return { ok: false, reason: "unauthorized" };
   }
-  return { ok: false };
+  if (ctx && typeof ctx.answerCbQuery === "function") {
+    await ctx.answerCbQuery(MENU_EXPIRED_GENERIC).catch(() => {});
+  }
+  await stripGroupMenuKeyboard(ctx, chatId, messageId);
+  return { ok: false, reason: "expired" };
 }
 
 /**
