@@ -1,8 +1,9 @@
 /**
- * Rock Paper Scissors — human PvP only (no bot fallback).
+ * Rock Paper Scissors — human PvP or vs ManGoBot.
  * Private choices; public message shows ready/choosing status until both lock.
  */
 
+const crypto = require("crypto");
 const { Markup } = require("telegraf");
 const { log } = require("../utils/logger");
 const {
@@ -15,6 +16,7 @@ const {
   createPvpMatchReservation,
   getSharedPvpMatchReservation,
   PLAYER_BUSY_TEXT,
+  BOT_USER_ID,
 } = require("./pvpMatchReservation");
 const {
   takeResolvedQuestUsers,
@@ -33,6 +35,9 @@ const GAME_ID = "rps";
 const JOIN_TIMEOUT_MS = 60 * 1000;
 const CHOICE_TIMEOUT_MS = 45 * 1000;
 const PAIR_COOLDOWN_MS = DEFAULT_PAIR_COOLDOWN_MS;
+const BOT_DISPLAY_NAME = "ManGoBot";
+/** Coarse public countdown checkpoints (seconds). Never 1 edit/sec. */
+const COUNTDOWN_MARKS_SEC = Object.freeze([60, 45, 30, 15, 10, 5]);
 
 const STATUS = Object.freeze({
   WAITING: "waiting",
@@ -63,6 +68,54 @@ const BEATS = Object.freeze({
 
 function isMove(value) {
   return MOVES.includes(value);
+}
+
+function isBotPlayer(player) {
+  return Boolean(
+    player && (player.isBot || String(player.userId) === BOT_USER_ID)
+  );
+}
+
+function defaultRandomMove() {
+  return MOVES[crypto.randomInt(0, MOVES.length)];
+}
+
+function pickBotMove(randomMoveFn) {
+  const fn = typeof randomMoveFn === "function" ? randomMoveFn : defaultRandomMove;
+  const picked = fn();
+  return isMove(picked) ? picked : defaultRandomMove();
+}
+
+function remainingSeconds(endsAt, now) {
+  if (endsAt == null) return 0;
+  return Math.max(0, Math.ceil((Number(endsAt) - Number(now)) / 1000));
+}
+
+function formatRemainingLine(endsAt, now) {
+  return `⏱️ ${remainingSeconds(endsAt, now)}s remaining`;
+}
+
+function msUntilNextCountdownMark(endsAt, now, marksSec = COUNTDOWN_MARKS_SEC) {
+  const remaining = Number(endsAt) - Number(now);
+  if (!Number.isFinite(remaining) || remaining <= 0) {
+    return null;
+  }
+  let nextMarkMs = null;
+  for (const sec of marksSec) {
+    const mark = Number(sec) * 1000;
+    if (mark < remaining) {
+      nextMarkMs = mark;
+      break;
+    }
+  }
+  if (nextMarkMs == null) {
+    return null;
+  }
+  const wait = remaining - nextMarkMs;
+  if (wait <= 0 || Number(now) + wait >= Number(endsAt)) {
+    return null;
+  }
+  return Math.max(1, wait);
 }
 
 function buildModeCallbackData(sessionId, mode) {
@@ -109,7 +162,7 @@ function parsePvpCallbackData(data) {
   if (action === "mode") {
     if (parts.length !== 5) return null;
     const mode = parts[4];
-    if (mode !== "pvp" && mode !== "cancel") return null;
+    if (mode !== "pvp" && mode !== "bot" && mode !== "cancel") return null;
     return { action: "mode", sessionId, mode, game: GAME_ID };
   }
   if (action === "choice") {
@@ -135,7 +188,8 @@ function parsePvpCallbackData(data) {
 
 function buildStartKeyboard(sessionId) {
   return Markup.inlineKeyboard([
-    [Markup.button.callback("👥 Wait for Opponent", buildModeCallbackData(sessionId, "pvp"))],
+    [Markup.button.callback("🤖 Play vs ManGoBot", buildModeCallbackData(sessionId, "bot"))],
+    [Markup.button.callback("👥 Play vs Player", buildModeCallbackData(sessionId, "pvp"))],
     [Markup.button.callback("❌ Cancel", buildModeCallbackData(sessionId, "cancel"))],
   ]);
 }
@@ -174,7 +228,7 @@ function buildChoiceKeyboard(sessionId, round) {
 function buildStartText() {
   return `✊✋✌️ Rock Paper Scissors
 
-Challenge another ManGo member.`;
+How do you want to play?`;
 }
 
 function p1Name(session) {
@@ -185,12 +239,13 @@ function p2Name(session) {
   return (session.players.p2 && session.players.p2.displayName) || "Player";
 }
 
-function buildLobbyText(session) {
+function buildLobbyText(session, now) {
+  const timer = session.lobbyEndsAt
+    ? `\n\n${formatRemainingLine(session.lobbyEndsAt, now)}`
+    : "";
   return `✊✋✌️ Rock Paper Scissors
 
-${p1Name(session)} is looking for an opponent.
-
-Players: 1/2`;
+Waiting for an opponent...${timer}`;
 }
 
 function readyLine(player, choice) {
@@ -198,11 +253,18 @@ function readyLine(player, choice) {
   return choice ? `${name}: ✅ Ready` : `${name}: ⏳ Choosing...`;
 }
 
-function buildChoosingText(session, botUsername) {
-  const url = buildPrivateDeepLink(botUsername, `rps_${session.id}`);
-  const linkLine = url
-    ? `\n🔒 Open ManGoBot privately to choose your move.`
-    : `\n🔒 Open ManGoBot privately to choose your move.`;
+function buildChoosingText(session, botUsername, now) {
+  const linkLine = `\n🔒 Open ManGoBot privately to choose your move.`;
+  if (session.opponentType === "bot") {
+    return `✊✋✌️ Rock Paper Scissors
+
+${p1Name(session)} vs ${BOT_DISPLAY_NAME}
+
+Choose your move privately.${linkLine}`;
+  }
+  const timer = session.choiceEndsAt
+    ? `\n\n${formatRemainingLine(session.choiceEndsAt, now)}`
+    : "";
   return `✊✋✌️ Rock Paper Scissors
 
 ${p1Name(session)} vs ${p2Name(session)}
@@ -210,7 +272,7 @@ ${p1Name(session)} vs ${p2Name(session)}
 Both players: choose your move privately.
 
 ${readyLine(session.players.p1, session.choices.p1)}
-${readyLine(session.players.p2, session.choices.p2)}${linkLine}`;
+${readyLine(session.players.p2, session.choices.p2)}${linkLine}${timer}`;
 }
 
 function buildChoosingExtra(session, botUsername) {
@@ -223,10 +285,16 @@ function buildChoosingExtra(session, botUsername) {
   ]);
 }
 
-function buildPrivateChoiceText() {
+function buildPrivateChoiceText(session, now) {
+  const timer =
+    session &&
+    session.opponentType !== "bot" &&
+    session.choiceEndsAt
+      ? `\n\n${formatRemainingLine(session.choiceEndsAt, now)}`
+      : "";
   return `✊✋✌️ Rock Paper Scissors
 
-Choose your move.`;
+Choose your move.${timer}`;
 }
 
 function buildLockedPrivateText(move) {
@@ -249,7 +317,7 @@ function buildRevealText(session, xpResult) {
     outcome = `🏆 ${winnerName} wins!`;
   }
   let xpLine = "";
-  if (session.status === STATUS.WON) {
+  if (session.status === STATUS.WON && session.opponentType !== "bot") {
     if (xpResult && xpResult.awarded) {
       xpLine = `\n\n+${xpResult.pointsToAdd} PvP XP 🥭`;
     } else if (!session.rewardEligible) {
@@ -303,6 +371,8 @@ function createRockPaperScissorsService(options = {}) {
       : PAIR_COOLDOWN_MS;
   const botUsername =
     typeof options.botUsername === "string" ? options.botUsername : null;
+  const randomMoveFn =
+    typeof options.randomMoveFn === "function" ? options.randomMoveFn : defaultRandomMove;
 
   const manager =
     options.manager ||
@@ -386,15 +456,16 @@ function createRockPaperScissorsService(options = {}) {
 
   function renderMessage(session, xpResult, ctx) {
     const username = resolveUsername(ctx);
+    const now = manager.now();
     if (session.status === STATUS.WAITING && session.phase === PHASE.START_CHOICE) {
       return { text: buildStartText(), extra: buildStartKeyboard(session.id) };
     }
     if (session.status === STATUS.WAITING && session.phase === PHASE.LOBBY) {
-      return { text: buildLobbyText(session), extra: buildLobbyKeyboard(session.id) };
+      return { text: buildLobbyText(session, now), extra: buildLobbyKeyboard(session.id) };
     }
     if (session.status === STATUS.ACTIVE && session.phase === PHASE.CHOOSING) {
       return {
-        text: buildChoosingText(session, username),
+        text: buildChoosingText(session, username, now),
         extra: buildChoosingExtra(session, username),
       };
     }
@@ -424,10 +495,11 @@ function createRockPaperScissorsService(options = {}) {
 
   function privatePromptsFor(session) {
     const round = session.round;
+    const now = manager.now();
     const prompts = [];
     for (const seat of ["p1", "p2"]) {
       const player = session.players[seat];
-      if (!player || player.userId == null) continue;
+      if (!player || player.userId == null || isBotPlayer(player)) continue;
       if (session.choices[seat]) {
         prompts.push({
           userId: player.userId,
@@ -438,13 +510,66 @@ function createRockPaperScissorsService(options = {}) {
       } else {
         prompts.push({
           userId: player.userId,
-          text: buildPrivateChoiceText(),
+          text: buildPrivateChoiceText(session, now),
           extra: buildChoiceKeyboard(session.id, round),
           alreadyLocked: false,
         });
       }
     }
     return prompts;
+  }
+
+  function scheduleVisibleCountdown(session, endsAt, tickFn) {
+    manager.clearScheduled(session, "countdown");
+    if (!session || endsAt == null) {
+      return;
+    }
+    const wait = msUntilNextCountdownMark(endsAt, manager.now());
+    if (wait == null) {
+      return;
+    }
+    manager.schedule(session, "countdown", wait, () => {
+      tickFn(session.id);
+    });
+  }
+
+  function tickLobbyCountdown(sessionId) {
+    const locked = manager.withSessionLock(sessionId, () => {
+      const session = manager.getSession(sessionId);
+      if (!session || session.status !== STATUS.WAITING || session.phase !== PHASE.LOBBY) {
+        return { ok: false, reason: "not-waiting" };
+      }
+      scheduleVisibleCountdown(session, session.lobbyEndsAt, tickLobbyCountdown);
+      return {
+        ok: true,
+        session: snapshot(session),
+        rendered: renderMessage(session),
+      };
+    });
+    notifyRender(locked);
+    return locked;
+  }
+
+  function tickChoiceCountdown(sessionId) {
+    const locked = manager.withSessionLock(sessionId, () => {
+      const session = manager.getSession(sessionId);
+      if (
+        !session ||
+        session.status !== STATUS.ACTIVE ||
+        session.phase !== PHASE.CHOOSING ||
+        session.opponentType === "bot"
+      ) {
+        return { ok: false, reason: "not-active" };
+      }
+      scheduleVisibleCountdown(session, session.choiceEndsAt, tickChoiceCountdown);
+      return {
+        ok: true,
+        session: snapshot(session),
+        rendered: renderMessage(session),
+      };
+    });
+    notifyRender(locked);
+    return locked;
   }
 
   function beginChoosing(session) {
@@ -459,9 +584,13 @@ function createRockPaperScissorsService(options = {}) {
     session.questNoted = false;
     session.endReason = null;
     manager.clearScheduled(session, "join");
+    manager.clearScheduled(session, "countdown");
     manager.schedule(session, "turn", choiceTimeoutMs, () => {
       expireChoice(session.id);
     });
+    if (session.opponentType !== "bot") {
+      scheduleVisibleCountdown(session, session.choiceEndsAt, tickChoiceCountdown);
+    }
   }
 
   function activateHumanMatch(session) {
@@ -481,18 +610,24 @@ function createRockPaperScissorsService(options = {}) {
   }
 
   function takeQuestUsers(session) {
-    return takeResolvedQuestUsers(session, () => false);
+    return takeResolvedQuestUsers(session, isBotPlayer);
   }
 
   async function emitQuest(result) {
     if (!result || !result.ok || !result.questUsers) return;
+    const opponentType =
+      (result.session && result.session.opponentType) || "human";
+    const vsBot = opponentType === "bot";
     await emitResolvedPvpDailyQuest(result.questUsers, GAME_ID, {
-      opponentType: "human",
+      opponentType,
       matchId: result.session && result.session.id,
       shopFile: options.shopFile,
       walletFile: options.walletFile,
       pointsFile: options.pointsFile,
-      noteDailyQuestGameFn: options.noteDailyQuestGameFn,
+      // RPS-local: bot matches fill BOT_GAME_1; human PvP fills PVP_GAME_1 only.
+      noteDailyQuestGameFn: vsBot
+        ? options.noteDailyQuestGameFn
+        : () => ({ skipped: true, reason: "rps-human" }),
       noteHumanPvpMatchFn: options.noteHumanPvpMatchFn,
     });
   }
@@ -516,7 +651,9 @@ function createRockPaperScissorsService(options = {}) {
     session.winnerSeat = winnerSeat;
     session.winnerUserId = String(session.players[winnerSeat].userId);
     finishOpen(session);
-    return { draw: false, needsXp: true };
+    const needsXp =
+      session.opponentType === "human" && !isBotPlayer(session.players[winnerSeat]);
+    return { draw: false, needsXp };
   }
 
   function isOpen() {
@@ -592,11 +729,29 @@ function createRockPaperScissorsService(options = {}) {
   function beginPvpLobby(session) {
     session.phase = PHASE.LOBBY;
     session.status = STATUS.WAITING;
+    session.opponentType = "human";
     session.lobbyEndsAt = manager.now() + joinTimeoutMs;
+    manager.clearScheduled(session, "countdown");
     manager.schedule(session, "join", joinTimeoutMs, () => {
       expireJoin(session.id);
     });
+    scheduleVisibleCountdown(session, session.lobbyEndsAt, tickLobbyCountdown);
     log("[pvp] match started game=rps mode=lobby");
+  }
+
+  function beginBotMatch(session) {
+    session.players.p2 = {
+      userId: BOT_USER_ID,
+      displayName: BOT_DISPLAY_NAME,
+      isBot: true,
+    };
+    session.opponentType = "bot";
+    session.rewardEligible = false;
+    session.lobbyEndsAt = null;
+    manager.clearScheduled(session, "join");
+    manager.clearScheduled(session, "countdown");
+    beginChoosing(session);
+    log("[pvp] match started game=rps mode=bot");
   }
 
   function cancelSession(session, endReason) {
@@ -645,6 +800,19 @@ function createRockPaperScissorsService(options = {}) {
           waiting: true,
           session: snapshot(session),
           rendered: renderMessage(session),
+        };
+      }
+      if (mode === "bot") {
+        if (session.phase !== PHASE.START_CHOICE) {
+          return { ok: false, reason: "wrong-phase" };
+        }
+        beginBotMatch(session);
+        return {
+          ok: true,
+          bot: true,
+          session: snapshot(session),
+          rendered: renderMessage(session),
+          privatePrompts: privatePromptsFor(session),
         };
       }
       return { ok: false, reason: "bad-mode" };
@@ -766,6 +934,12 @@ function createRockPaperScissorsService(options = {}) {
         };
       }
       session.choices[seat] = move;
+      if (session.opponentType === "bot") {
+        const botSeat = seat === "p1" ? "p2" : "p1";
+        if (!session.choices[botSeat]) {
+          session.choices[botSeat] = pickBotMove(randomMoveFn);
+        }
+      }
       const both = Boolean(session.choices.p1 && session.choices.p2);
       let outcome = { draw: false, needsXp: false };
       let questUsers = null;
@@ -908,6 +1082,14 @@ function createRockPaperScissorsService(options = {}) {
       if (session.status !== STATUS.WON) {
         return { ok: false, reason: "not-won" };
       }
+      if (session.opponentType === "bot" || isBotPlayer(session.players[session.winnerSeat])) {
+        return {
+          ok: true,
+          shouldAward: false,
+          reason: "bot-match",
+          session: snapshot(session),
+        };
+      }
       if (!session.rewardEligible) {
         return {
           ok: true,
@@ -980,7 +1162,7 @@ function createRockPaperScissorsService(options = {}) {
     }
     return {
       ok: true,
-      text: buildPrivateChoiceText(),
+      text: buildPrivateChoiceText(live, manager.now()),
       extra: buildChoiceKeyboard(live.id, live.round),
     };
   }
@@ -1004,6 +1186,8 @@ function createRockPaperScissorsService(options = {}) {
     retry,
     expireJoin,
     expireChoice,
+    tickLobbyCountdown,
+    tickChoiceCountdown,
     claimXpAward,
     applyXpResultToRender,
     getSession,
@@ -1038,12 +1222,15 @@ module.exports = {
   GAME_ID,
   JOIN_TIMEOUT_MS,
   CHOICE_TIMEOUT_MS,
+  COUNTDOWN_MARKS_SEC,
   MOVES,
   MOVE_LABEL,
   BEATS,
   STATUS,
   PHASE,
   PLAYER_BUSY_TEXT,
+  BOT_USER_ID,
+  BOT_DISPLAY_NAME,
   parsePvpCallbackData,
   buildModeCallbackData,
   buildJoinCallbackData,
@@ -1051,6 +1238,8 @@ module.exports = {
   buildReplayCallbackData,
   buildFinishCallbackData,
   buildRetryCallbackData,
+  pickBotMove,
+  msUntilNextCountdownMark,
   publicTextHasSecret,
   createRockPaperScissorsService,
   startRockPaperScissorsChallenge,

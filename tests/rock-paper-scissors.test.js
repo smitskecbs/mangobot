@@ -20,10 +20,15 @@ const {
   publicTextHasSecret,
   JOIN_TIMEOUT_MS,
   CHOICE_TIMEOUT_MS,
+  COUNTDOWN_MARKS_SEC,
   MOVE_LABEL,
   STATUS,
   PHASE,
   PLAYER_BUSY_TEXT,
+  BOT_USER_ID,
+  BOT_DISPLAY_NAME,
+  pickBotMove,
+  msUntilNextCountdownMark,
 } = require("../services/rockPaperScissors");
 const { createTicTacToeService } = require("../services/ticTacToe");
 const {
@@ -147,6 +152,7 @@ function createService(overrides = {}) {
     pairCooldownMs:
       overrides.pairCooldownMs != null ? overrides.pairCooldownMs : 30 * 60 * 1000,
     botUsername: "ManGoBot",
+    randomMoveFn: overrides.randomMoveFn,
     noteDailyQuestGameFn: (uid, game) => {
       questGames.push({ uid: String(uid), game });
     },
@@ -174,6 +180,25 @@ function startLobby(service) {
   assert.strictEqual(lobby.ok, true);
   assert.strictEqual(lobby.session.phase, PHASE.LOBBY);
   return lobby;
+}
+
+function startBot(service) {
+  const started = service.startChallenge({
+    chatId: COMMUNITY_CHAT,
+    starter: { userId: USER_A, displayName: "Kevin", isBot: false },
+  });
+  assert.strictEqual(started.ok, true);
+  service.setMessageId(started.session.id, 5001);
+  const bot = service.chooseMode({
+    sessionId: started.session.id,
+    userId: USER_A,
+    mode: "bot",
+    chatId: COMMUNITY_CHAT,
+  });
+  assert.strictEqual(bot.ok, true);
+  assert.strictEqual(bot.session.opponentType, "bot");
+  assert.strictEqual(bot.session.phase, PHASE.CHOOSING);
+  return bot;
 }
 
 function joinP2(service, sessionId) {
@@ -282,7 +307,7 @@ async function runTest(name, fn) {
 async function main() {
   resetEnv();
 
-  await runTest("A. creator starts lobby", async () => {
+  await runTest("A. start screen offers vs Bot / vs Player / Cancel", async () => {
     const { service } = createService();
     const started = service.startChallenge({
       chatId: COMMUNITY_CHAT,
@@ -290,10 +315,12 @@ async function main() {
     });
     assert.strictEqual(started.ok, true);
     assert.ok(started.text.includes("Rock Paper Scissors"));
-    assert.ok(started.text.includes("Challenge another ManGo member."));
+    assert.ok(started.text.includes("How do you want to play?"));
     const blob = JSON.stringify(started.keyboard);
-    assert.ok(blob.includes("Wait for Opponent"));
+    assert.ok(blob.includes("Play vs ManGoBot"));
+    assert.ok(blob.includes("Play vs Player"));
     assert.ok(blob.includes("Cancel"));
+    assert.ok(!blob.includes("Wait for Opponent"));
     assert.ok(!blob.includes(String(USER_A)));
     service.setMessageId(started.session.id, 5001);
     const lobby = service.chooseMode({
@@ -303,7 +330,9 @@ async function main() {
       chatId: COMMUNITY_CHAT,
     });
     assert.strictEqual(lobby.ok, true);
-    assert.ok(lobby.rendered.text.includes("looking for an opponent"));
+    assert.ok(lobby.rendered.text.includes("Waiting for an opponent"));
+    assert.ok(lobby.rendered.text.includes("⏱️"));
+    assert.ok(lobby.rendered.text.includes("remaining"));
     assert.ok(JSON.stringify(lobby.rendered.extra).includes("JOIN GAME"));
   });
 
@@ -788,21 +817,19 @@ async function main() {
     joinP2(service, lobby.session.id);
     await lock(service, lobby.session.id, USER_A, "rock");
     await lock(service, lobby.session.id, USER_B, "scissors");
-    assert.deepStrictEqual(
-      questGames.map((q) => q.game).sort(),
-      ["rps", "rps"]
-    );
+    assert.deepStrictEqual(questGames, []);
     assert.strictEqual(questPvp.length, 2);
     assert.ok(questPvp.every((q) => q.payload.game === "rps"));
+    assert.ok(questPvp.every((q) => q.payload.opponentType === "human"));
   });
 
-  await runTest("AC2. draw still notes PvP game played, not win XP", async () => {
+  await runTest("AC2. draw still notes PvP game played, not bot-game quest", async () => {
     const { service, questGames, questPvp } = createService();
     const lobby = startLobby(service);
     joinP2(service, lobby.session.id);
     await lock(service, lobby.session.id, USER_A, "paper");
     await lock(service, lobby.session.id, USER_B, "paper");
-    assert.strictEqual(questGames.length, 2);
+    assert.strictEqual(questGames.length, 0);
     assert.strictEqual(questPvp.length, 2);
   });
 
@@ -890,6 +917,183 @@ async function main() {
     const ctx = createMockCtx({ chatType: "private", chatId: USER_A, userId: USER_A });
     await handleRps(ctx);
     assert.strictEqual(ctx.replies[0].text, PRIVATE_RPS_TEXT);
+  });
+
+  await runTest("bot A-C. vs ManGoBot starts without public lobby", async () => {
+    const { service } = createService();
+    const started = service.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_A, displayName: "Kevin", isBot: false },
+    });
+    const bot = service.chooseMode({
+      sessionId: started.session.id,
+      userId: USER_A,
+      mode: "bot",
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(bot.ok, true);
+    assert.strictEqual(bot.session.opponentType, "bot");
+    assert.strictEqual(bot.session.players.p2.userId, BOT_USER_ID);
+    assert.strictEqual(bot.session.players.p2.displayName, BOT_DISPLAY_NAME);
+    assert.ok(!JSON.stringify(bot.rendered.extra).includes("JOIN GAME"));
+    assert.ok(!bot.rendered.text.includes("Waiting for an opponent"));
+    assert.ok(!bot.rendered.text.includes("⏱️"));
+    assert.strictEqual(bot.privatePrompts.length, 1);
+    assert.strictEqual(String(bot.privatePrompts[0].userId), String(USER_A));
+    assert.ok(bot.privatePrompts[0].text.includes("Choose your move"));
+    assert.ok(!bot.privatePrompts[0].text.includes("⏱️"));
+  });
+
+  await runTest("bot D-H. immediate fair resolve vs ManGoBot", async () => {
+    async function play(userMove, botMove) {
+      const { service } = createService({ randomMoveFn: () => botMove });
+      const started = startBot(service);
+      const before = Date.now();
+      const result = await lock(service, started.session.id, USER_A, userMove);
+      const elapsed = Date.now() - before;
+      assert.ok(elapsed < 50, "bot must resolve immediately");
+      assert.strictEqual(result.resolved, true);
+      assert.strictEqual(result.session.choices.p2, botMove);
+      return result;
+    }
+    const rockWin = await play("rock", "scissors");
+    assert.strictEqual(rockWin.session.winnerUserId, String(USER_A));
+    assert.ok(rockWin.rendered.text.includes("Kevin: ✊ Rock"));
+    assert.ok(rockWin.rendered.text.includes("ManGoBot: ✌️ Scissors"));
+    assert.ok(rockWin.rendered.text.includes("Kevin wins"));
+    const sciWin = await play("scissors", "paper");
+    assert.strictEqual(sciWin.session.winnerUserId, String(USER_A));
+    const paperWin = await play("paper", "rock");
+    assert.strictEqual(paperWin.session.winnerUserId, String(USER_A));
+    const draw = await play("rock", "rock");
+    assert.strictEqual(draw.session.status, STATUS.DRAW);
+    assert.ok(draw.rendered.text.includes("Draw"));
+  });
+
+  await runTest("bot I-J. RNG injected and cannot see user choice", async () => {
+    const calls = [];
+    const { service } = createService({
+      randomMoveFn: (...args) => {
+        calls.push(args);
+        return "paper";
+      },
+    });
+    const started = startBot(service);
+    const result = await lock(service, started.session.id, USER_A, "rock");
+    assert.strictEqual(calls.length, 1);
+    assert.deepStrictEqual(calls[0], []);
+    assert.strictEqual(result.session.choices.p1, "rock");
+    assert.strictEqual(result.session.choices.p2, "paper");
+    assert.strictEqual(result.session.winnerUserId, BOT_USER_ID);
+    const independent = pickBotMove(() => "scissors");
+    assert.strictEqual(independent, "scissors");
+  });
+
+  await runTest("bot K-L. Play Again vs bot is a clean round; stale choice rejected", async () => {
+    const { service } = createService({ randomMoveFn: () => "scissors" });
+    const started = startBot(service);
+    await lock(service, started.session.id, USER_A, "rock");
+    const replay = service.replay({
+      sessionId: started.session.id,
+      userId: USER_A,
+      round: 1,
+      chatId: COMMUNITY_CHAT,
+    });
+    assert.strictEqual(replay.ok, true);
+    assert.strictEqual(replay.session.round, 2);
+    assert.strictEqual(replay.session.opponentType, "bot");
+    assert.strictEqual(replay.session.status, STATUS.ACTIVE);
+    assert.strictEqual(replay.session.choices.p1, null);
+    assert.strictEqual(replay.privatePrompts.length, 1);
+    const stale = await lock(service, started.session.id, USER_A, "paper", 1);
+    assert.strictEqual(stale.ok, false);
+    assert.strictEqual(stale.reason, "stale-round");
+    const fresh = await lock(service, started.session.id, USER_A, "paper", 2);
+    assert.strictEqual(fresh.ok, true);
+    assert.strictEqual(fresh.session.round, 2);
+  });
+
+  await runTest("bot M-N. bot mode notes BOT_GAME_1 only, not PVP_GAME_1 or PvP XP", async () => {
+    const { service, questGames, questPvp } = createService({
+      randomMoveFn: () => "scissors",
+    });
+    const file = pointsFile();
+    const started = startBot(service);
+    const result = await lock(service, started.session.id, USER_A, "rock");
+    assert.strictEqual(result.needsXp, false);
+    assert.deepStrictEqual(questGames, [{ uid: String(USER_A), game: "rps" }]);
+    assert.strictEqual(questPvp.length, 0);
+    const fin = await finalizeWinXp(service, started.session.id, (uid, name) =>
+      awardPvpWinXp(uid, name, file)
+    );
+    assert.strictEqual(fin.claim.shouldAward, false);
+    assert.strictEqual(fin.claim.reason, "bot-match");
+    assert.strictEqual(loadPoints(file).users[String(USER_A)], undefined);
+  });
+
+  await runTest("bot O. human PvP still uses existing +3 XP rules", async () => {
+    assert.strictEqual(PVP_WIN_XP, 3);
+    const { service } = createService({ pairCooldownMs: 0 });
+    const file = pointsFile();
+    const lobby = startLobby(service);
+    joinP2(service, lobby.session.id);
+    await lock(service, lobby.session.id, USER_A, "rock");
+    await lock(service, lobby.session.id, USER_B, "scissors");
+    const fin = await finalizeWinXp(service, lobby.session.id, (uid, name) =>
+      awardPvpWinXp(uid, name, file)
+    );
+    assert.strictEqual(fin.xpResult.awarded, true);
+    assert.strictEqual(fin.xpResult.pointsToAdd, 3);
+  });
+
+  await runTest("bot P-Q-T. PvP lobby countdown is coarse, not 1 edit/sec", async () => {
+    const { service, timers } = createService();
+    const lobby = startLobby(service);
+    const ticks = [];
+    service.setRenderHandler((r) => {
+      if (r && r.ok && r.rendered && /⏱️/.test(r.rendered.text)) {
+        ticks.push(r.rendered.text);
+      }
+    });
+    assert.ok(lobby.rendered.text.includes("⏱️ 60s remaining"));
+    assert.deepStrictEqual(COUNTDOWN_MARKS_SEC.slice(), [60, 45, 30, 15, 10, 5]);
+    assert.strictEqual(msUntilNextCountdownMark(JOIN_TIMEOUT_MS, 0), 15_000);
+    timers.advance(1000);
+    assert.strictEqual(ticks.length, 0);
+    const still = service.renderMessage(service.getSession(lobby.session.id));
+    assert.ok(still.text.includes("⏱️ 59s remaining"));
+    for (let i = 0; i < 58; i += 1) {
+      timers.advance(1000);
+    }
+    assert.ok(ticks.length <= 5);
+    assert.ok(ticks.length >= 4);
+    assert.ok(ticks.some((t) => t.includes("45s remaining")));
+    assert.ok(!ticks.some((t) => t.includes("44s remaining")));
+  });
+
+  await runTest("bot R. PvP choice timeout shows remaining time", async () => {
+    const { service } = createService();
+    const lobby = startLobby(service);
+    const joined = joinP2(service, lobby.session.id);
+    assert.ok(joined.rendered.text.includes("⏱️"));
+    assert.ok(joined.rendered.text.includes("remaining"));
+    assert.ok(joined.privatePrompts[0].text.includes("⏱️"));
+    assert.ok(joined.rendered.text.includes("Kevin: ⏳ Choosing"));
+  });
+
+  await runTest("bot S. timeout cleanup unchanged", async () => {
+    const { service, timers } = createService();
+    const lobby = startLobby(service);
+    timers.advance(JOIN_TIMEOUT_MS);
+    const expired = service.getSession(lobby.session.id);
+    assert.strictEqual(expired.status, STATUS.EXPIRED);
+    assert.strictEqual(expired.endReason, "join-timeout");
+    const pvp = startLobby(service);
+    joinP2(service, pvp.session.id);
+    timers.advance(CHOICE_TIMEOUT_MS);
+    const choiceExpired = service.getSession(pvp.session.id);
+    assert.strictEqual(choiceExpired.status, STATUS.EXPIRED);
+    assert.strictEqual(choiceExpired.endReason, "choice-timeout");
   });
 
   restoreEnv();
