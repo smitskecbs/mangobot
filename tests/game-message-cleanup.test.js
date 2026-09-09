@@ -133,13 +133,14 @@ function startAuto(service, id = 44) {
 }
 
 async function answerCorrect(service, sessionId) {
-  const snap = service.getSnapshot();
+  const snap = service.getSnapshot(sessionId);
   return service.tryAnswer({
     sessionId,
     userId: USER_A,
     answerIndex: snap.correctIndex,
     chatId: COMMUNITY_CHAT,
     displayName: "Alice",
+    questionGen: snap.questionGen,
   });
 }
 

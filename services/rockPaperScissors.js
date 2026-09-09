@@ -325,6 +325,23 @@ function buildCancelledText() {
 Challenge cancelled.`);
 }
 
+function buildTerminalFinishText(session) {
+  if (
+    session &&
+    (session.status === STATUS.WON || session.status === STATUS.DRAW) &&
+    session.choices &&
+    session.choices.p1 &&
+    session.choices.p2
+  ) {
+    return withGameCleanupFooter(
+      `${buildRevealText(session)}\n\nThis game is finished.`
+    );
+  }
+  return withGameCleanupFooter(`✊✋✌️ Rock Paper Scissors
+
+This game is finished.`);
+}
+
 function publicTextHasSecret(text, session) {
   if (!text || !session) return false;
   const secrets = [];
@@ -368,7 +385,7 @@ function createRockPaperScissorsService(options = {}) {
   }
 
   function notifyRender(result) {
-    if (!result || !result.ok || !renderHandler) return;
+    if (!result || !result.ok || result.skipNotify || !renderHandler) return;
     try {
       renderHandler(result);
     } catch (_err) {
@@ -1090,17 +1107,19 @@ function createRockPaperScissorsService(options = {}) {
       if (session.status === STATUS.WAITING || session.status === STATUS.ACTIVE) {
         return { ok: false, reason: "not-waiting" };
       }
+      const finishedText = buildTerminalFinishText(session);
       session.status = STATUS.EXPIRED;
       if (!session.endReason || session.endReason === "win" || session.endReason === "draw") {
         session.endReason = "finished";
       }
-      const rendered = { text: buildCancelledText(), extra: emptyInlineKeyboardExtra() };
+      const rendered = { text: finishedText, extra: emptyInlineKeyboardExtra() };
       const snap = snapshot(session);
       destroySession(session);
       return {
         ok: true,
         session: snap,
         rendered,
+        skipNotify: true,
       };
     });
     notifyRender(locked);

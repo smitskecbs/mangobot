@@ -1,6 +1,6 @@
 /**
- * Higher or Lower — lightweight single-player vs ManGoBot in the Games topic.
- * Streak milestones 3 and 5 can earn +1 XP, sharing a 2 XP daily cap with ManGo or Moon.
+ * ManGo or Moon — lightweight 50/50 vs ManGoBot in the Games topic.
+ * Streak milestones 3 and 5 can earn +1 XP, sharing a 2 XP daily cap with Higher or Lower.
  */
 
 const crypto = require("crypto");
@@ -24,12 +24,20 @@ const {
   clearGameMessageCleanup,
 } = require("../utils/gameCleanup");
 
-const GAME_ID = "hol";
-const MIN_NUMBER = 1;
-const MAX_NUMBER = 100;
+const GAME_ID = "mom";
 const IDLE_MS = 120 * 1000;
-const MAX_REROLLS = 32;
 const BOT_DISPLAY_NAME = "ManGoBot";
+const MOM_REWARD_PEER = "Higher or Lower";
+
+const SIDE = Object.freeze({
+  MANGO: "mango",
+  MOON: "moon",
+});
+
+const SIDE_LABEL = Object.freeze({
+  mango: "🥭 ManGo",
+  moon: "🌙 Moon",
+});
 
 const STATUS = Object.freeze({
   ACTIVE: "active",
@@ -39,57 +47,45 @@ const STATUS = Object.freeze({
 });
 
 function defaultRandomInt() {
-  return crypto.randomInt(MIN_NUMBER, MAX_NUMBER + 1);
+  return crypto.randomInt(0, 2);
 }
 
 function defaultRandomId() {
   return crypto.randomBytes(6).toString("hex");
 }
 
-function clampNumber(value) {
+function outcomeFromRoll(value) {
   const n = Number(value);
-  if (!Number.isInteger(n)) {
-    return null;
+  if (n === 1) {
+    return SIDE.MOON;
   }
-  if (n < MIN_NUMBER || n > MAX_NUMBER) {
-    return null;
-  }
-  return n;
+  return SIDE.MANGO;
 }
 
-function nextDistinctNumber(current, randomIntFn) {
-  const roll =
-    typeof randomIntFn === "function" ? randomIntFn : defaultRandomInt;
-  function one() {
-    const n = clampNumber(roll());
-    return n == null ? defaultRandomInt() : n;
+function sideFromAction(action) {
+  if (action === "m") {
+    return SIDE.MANGO;
   }
-  let next = one();
-  let guard = 0;
-  while (current != null && next === current && guard < MAX_REROLLS) {
-    next = one();
-    guard += 1;
+  if (action === "n") {
+    return SIDE.MOON;
   }
-  if (current != null && next === current) {
-    next = current >= MAX_NUMBER ? current - 1 : current + 1;
-  }
-  return next;
+  return null;
 }
 
 function buildPlayCallbackData(action, sessionId, round) {
-  return `hol:${action}:${sessionId}:${round}`;
+  return `mom:${action}:${sessionId}:${round}`;
 }
 
-function parseHolCallbackData(data) {
-  if (typeof data !== "string" || !data.startsWith("hol:")) {
+function parseMomCallbackData(data) {
+  if (typeof data !== "string" || !data.startsWith("mom:")) {
     return null;
   }
   const parts = data.split(":");
-  if (parts.length !== 4 || parts[0] !== "hol") {
+  if (parts.length !== 4 || parts[0] !== "mom") {
     return null;
   }
   const action = parts[1];
-  if (!["h", "l", "f", "a"].includes(action)) {
+  if (!["m", "n", "f", "a"].includes(action)) {
     return null;
   }
   const sessionId = parts[2];
@@ -106,8 +102,8 @@ function parseHolCallbackData(data) {
 function playKeyboard(sessionId, round) {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("⬆️ Higher", buildPlayCallbackData("h", sessionId, round)),
-      Markup.button.callback("⬇️ Lower", buildPlayCallbackData("l", sessionId, round)),
+      Markup.button.callback("🥭 ManGo", buildPlayCallbackData("m", sessionId, round)),
+      Markup.button.callback("🌙 Moon", buildPlayCallbackData("n", sessionId, round)),
     ],
     [Markup.button.callback("❌ Finish", buildPlayCallbackData("f", sessionId, round))],
   ]);
@@ -116,77 +112,66 @@ function playKeyboard(sessionId, round) {
 function resultKeyboard(sessionId, round) {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("🔁 Play Again", buildPlayCallbackData("a", sessionId, round)),
+      Markup.button.callback("🔄 Play Again", buildPlayCallbackData("a", sessionId, round)),
       Markup.button.callback("❌ Finish", buildPlayCallbackData("f", sessionId, round)),
     ],
   ]);
 }
 
-function numberRangeLine() {
-  return `Numbers: ${MIN_NUMBER}–${MAX_NUMBER}`;
-}
-
-const HOL_REWARD_PEER = "ManGo or Moon";
-
 function rewardBlock(session) {
   return formatLightweightRewardLines(
-    HOL_REWARD_PEER,
+    MOM_REWARD_PEER,
     session && session.rewardStatus
   );
 }
 
 function buildStartText(session) {
-  return `📈 Higher or Lower
+  return `🥭 ManGo or Moon 🌙
 
-Guess whether the next number will be higher or lower.
+Choose ManGo or Moon. One is picked at random.
 
 ${rewardBlock(session)}
 
-${numberRangeLine()}
-Current number: ${session.current}
-🔥 Streak: ${session.streak}
+Choose your side.
 
-Will the next number be higher or lower?`;
+🔥 Streak: ${session.streak}`;
 }
 
-function buildCorrectText(session, previous, next) {
-  return `📈 Higher or Lower
+function buildCorrectText(session, choice, outcome) {
+  return `🥭 ManGo or Moon 🌙
 
 ${rewardBlock(session)}
 
-${numberRangeLine()}
-Previous: ${previous}
-Next: ${next}
+You chose: ${SIDE_LABEL[choice]}
+Result: ${SIDE_LABEL[outcome]}
 
 ✅ Correct!
 🔥 Streak: ${session.streak}
 
-Current number: ${session.current}
-Will the next number be higher or lower?`;
+Choose your side.`;
 }
 
-function buildWrongText(session, previous, next) {
-  return `📈 Higher or Lower
+function buildWrongText(session, choice, outcome) {
+  return `🥭 ManGo or Moon 🌙
 
 ${rewardBlock(session)}
 
-${numberRangeLine()}
-Previous: ${previous}
-Next: ${next}
+You chose: ${SIDE_LABEL[choice]}
+Result: ${SIDE_LABEL[outcome]}
 
 ❌ Wrong!
 🔥 Final streak: ${session.streak}`;
 }
 
 function buildFinishedText(session) {
-  return withGameCleanupFooter(`📈 Higher or Lower
+  return withGameCleanupFooter(`🥭 ManGo or Moon 🌙
 
 ❌ Finished.
 🔥 Final streak: ${session.streak}`);
 }
 
 function buildExpiredText(session) {
-  return withGameCleanupFooter(`📈 Higher or Lower cancelled
+  return withGameCleanupFooter(`🥭 ManGo or Moon cancelled
 
 This game has ended.
 
@@ -196,7 +181,7 @@ This game has ended.
 function renderMessage(session) {
   if (!session) {
     return {
-      text: withGameCleanupFooter("📈 Higher or Lower\n\nThis game has ended."),
+      text: withGameCleanupFooter("🥭 ManGo or Moon 🌙\n\nThis game has ended."),
       extra: emptyGameKeyboardExtra(),
     };
   }
@@ -205,8 +190,8 @@ function renderMessage(session) {
       return {
         text: buildCorrectText(
           session,
-          session.lastReveal.previous,
-          session.lastReveal.next
+          session.lastReveal.choice,
+          session.lastReveal.outcome
         ),
         extra: playKeyboard(session.id, session.round),
       };
@@ -221,8 +206,8 @@ function renderMessage(session) {
       return {
         text: buildWrongText(
           session,
-          session.lastReveal.previous,
-          session.lastReveal.next
+          session.lastReveal.choice,
+          session.lastReveal.outcome
         ),
         extra: resultKeyboard(session.id, session.round),
       };
@@ -241,9 +226,9 @@ function renderMessage(session) {
   };
 }
 
-let holRuntime = null;
+let momRuntime = null;
 
-function createHigherOrLowerService(options = {}) {
+function createMangoOrMoonService(options = {}) {
   const now =
     typeof options.now === "function" ? options.now : () => Date.now();
   const setTimeoutFn =
@@ -314,7 +299,6 @@ function createHigherOrLowerService(options = {}) {
       threadId: session.threadId,
       messageId: session.messageId,
       status: session.status,
-      current: session.current,
       streak: session.streak,
       round: session.round,
       idleGeneration: session.idleGeneration,
@@ -403,9 +387,9 @@ function createHigherOrLowerService(options = {}) {
     if (!session || session.chatId == null || session.messageId == null) {
       return;
     }
-    logGameCleanup(GAME_TYPE.HOL, FINAL_STATE.FINISHED);
+    logGameCleanup(GAME_TYPE.MOM, FINAL_STATE.FINISHED);
     scheduleGameMessageCleanup({
-      gameType: GAME_TYPE.HOL,
+      gameType: GAME_TYPE.MOM,
       sessionId: session.id,
       chatId: session.chatId,
       messageIds: [session.messageId],
@@ -434,7 +418,7 @@ function createHigherOrLowerService(options = {}) {
       scheduleIdle(session);
       return;
     }
-    clearGameMessageCleanup(GAME_TYPE.HOL, session.id);
+    clearGameMessageCleanup(GAME_TYPE.MOM, session.id);
     scheduleCleanup(session);
   }
 
@@ -462,7 +446,7 @@ function createHigherOrLowerService(options = {}) {
     }
     if (session.status === STATUS.ENDED) {
       session.status = STATUS.EXPIRED;
-      clearGameMessageCleanup(GAME_TYPE.HOL, session.id);
+      clearGameMessageCleanup(GAME_TYPE.MOM, session.id);
       scheduleCleanup(session);
       return notifyRender({
         ok: true,
@@ -517,7 +501,6 @@ function createHigherOrLowerService(options = {}) {
     if (!reserved.ok) {
       return { ok: false, reason: "player-busy" };
     }
-    const current = nextDistinctNumber(null, randomIntFn);
     const session = {
       id,
       userId,
@@ -526,7 +509,6 @@ function createHigherOrLowerService(options = {}) {
       threadId: threadId != null ? threadId : null,
       messageId: null,
       status: STATUS.ACTIVE,
-      current,
       streak: 0,
       round: 1,
       idleGeneration: 0,
@@ -598,13 +580,15 @@ function createHigherOrLowerService(options = {}) {
     if (round != null && Number(round) !== Number(session.round)) {
       return { ok: false, reason: "stale-round", toast: "This round already ended." };
     }
-    const previous = session.current;
-    const next = nextDistinctNumber(previous, randomIntFn);
-    const higher = action === "h";
-    const correct = higher ? next > previous : next < previous;
-    session.lastReveal = { previous, next, correct };
+    const choice = sideFromAction(action);
+    if (!choice) {
+      return { ok: false, reason: "bad-action", toast: "Choose ManGo or Moon." };
+    }
+    const roll = randomIntFn();
+    const outcome = outcomeFromRoll(roll);
+    const correct = choice === outcome;
+    session.lastReveal = { choice, outcome, correct, roll };
     if (correct) {
-      session.current = next;
       session.streak += 1;
       session.round += 1;
       scheduleIdle(session);
@@ -681,7 +665,7 @@ function createHigherOrLowerService(options = {}) {
       return { ok: false, reason: "stale-round", toast: "This round already ended." };
     }
     clearIdle(previous.id);
-    clearGameMessageCleanup(GAME_TYPE.HOL, previous.id);
+    clearGameMessageCleanup(GAME_TYPE.MOM, previous.id);
     const chat = previous.chatId;
     const threadId = previous.threadId;
     const messageId = previous.messageId;
@@ -759,37 +743,37 @@ function createHigherOrLowerService(options = {}) {
   };
 }
 
-function getHigherOrLowerRuntime() {
-  if (!holRuntime) {
-    holRuntime = createHigherOrLowerService({
+function getMangoOrMoonRuntime() {
+  if (!momRuntime) {
+    momRuntime = createMangoOrMoonService({
       reservation: getSharedPvpMatchReservation(),
     });
   }
-  return holRuntime;
+  return momRuntime;
 }
 
-function startHigherOrLowerGame(params) {
-  return getHigherOrLowerRuntime().startGame(params);
+function startMangoOrMoonGame(params) {
+  return getMangoOrMoonRuntime().startGame(params);
 }
 
 module.exports = {
   GAME_ID,
-  MIN_NUMBER,
-  MAX_NUMBER,
   IDLE_MS,
   STATUS,
+  SIDE,
+  SIDE_LABEL,
   PLAYER_BUSY_TEXT,
   BOT_DISPLAY_NAME,
   GAME_ENDED_TOAST,
-  HOL_REWARD_PEER,
+  MOM_REWARD_PEER,
   defaultRandomInt,
-  nextDistinctNumber,
-  parseHolCallbackData,
+  outcomeFromRoll,
+  parseMomCallbackData,
   buildPlayCallbackData,
   playKeyboard,
   resultKeyboard,
   renderMessage,
-  createHigherOrLowerService,
-  getHigherOrLowerRuntime,
-  startHigherOrLowerGame,
+  createMangoOrMoonService,
+  getMangoOrMoonRuntime,
+  startMangoOrMoonGame,
 };

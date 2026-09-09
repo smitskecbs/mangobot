@@ -43,7 +43,9 @@ const {
   bindGroupMenuOwnerFromCtx,
   resetGroupMenuOwnersForTests,
 } = require("../utils/menuOwnership");
-const { loadPoints } = require("../services/points");
+const { setMangoShopFileForTests } = require("../services/mangoShopStore");
+const { loadPoints, LIGHTWEIGHT_DAILY_XP_CAP } = require("../services/points");
+require("../services/xpWalletGate").setXpWalletAutoLinkForTests(true);
 
 const COMMUNITY_CHAT = -1001234567890;
 const GAMES_TOPIC_ID = "999";
@@ -54,7 +56,9 @@ const originalChatId = process.env.TELEGRAM_CHAT_ID;
 const originalTopic = process.env.TELEGRAM_GAMES_TOPIC_ID;
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-hol-"));
 const pointsFile = path.join(tempDir, "points.json");
+const shopFile = path.join(tempDir, "shop.json");
 fs.writeFileSync(pointsFile, JSON.stringify({ users: {} }));
+setMangoShopFileForTests(shopFile);
 
 function resetEnv() {
   process.env.TELEGRAM_CHAT_ID = String(COMMUNITY_CHAT);
@@ -223,6 +227,9 @@ async function main() {
     assert.strictEqual(started, true);
     assert.ok(ctx.replies[0].text.includes("Current number:"));
     assert.ok(ctx.replies[0].text.includes(`Numbers: ${MIN_NUMBER}–${MAX_NUMBER}`));
+    assert.ok(ctx.replies[0].text.includes("🎯 Reward:"));
+    assert.ok(ctx.replies[0].text.includes("🏆 Daily limit:"));
+    assert.ok(ctx.replies[0].text.includes("ManGo or Moon"));
   });
 
   await runTest("B. wrong topic is rejected correctly", async () => {
@@ -486,7 +493,7 @@ async function main() {
     assert.strictEqual(service.getSession(started.session.id).status, STATUS.ACTIVE);
   });
 
-  await runTest("R. no XP/Loot/BP awarded", () => {
+  await runTest("R. service guess does not mint XP/Loot/BP itself", () => {
     const src = fs.readFileSync(
       path.join(__dirname, "../services/higherOrLower.js"),
       "utf8"
@@ -556,7 +563,18 @@ async function main() {
     const extra = getGroupGamesMenuExtra({ botInfo: { username: "ManGoBot" } });
     const blob = JSON.stringify(extra);
     assert.ok(blob.includes(GROUP_MENU_CALLBACK.HOL));
-    assert.ok(blob.includes("Higher or Lower"));
+    assert.ok(blob.includes("📈 Higher or Lower"));
+    assert.ok(blob.includes("🥭 ManGo or Moon"));
+    assert.ok(blob.includes(GROUP_MENU_CALLBACK.MOM));
+    assert.ok(blob.includes("🐍 Snake"));
+    assert.ok(blob.includes("🟠 Bounch"));
+    assert.ok(blob.includes("⭕ Tic-Tac-Toe"));
+    assert.ok(blob.includes("🔴 Connect Four"));
+    assert.ok(blob.includes("♟️ Checkers"));
+    assert.ok(blob.includes("✊ Rock Paper Scissors"));
+    assert.ok(blob.includes("💣 ManGo Bomb"));
+    assert.ok(blob.includes("🃏 Blackjack"));
+    assert.ok(blob.includes("🧠 Trivia"));
     assert.ok(PRIVATE_GAMES_TEXT.includes("Higher or Lower"));
     const ctx = createCtx({ callbackData: GROUP_MENU_CALLBACK.HOL });
     bindGroupMenuOwnerFromCtx(ctx);
@@ -583,6 +601,81 @@ async function main() {
     const blob = JSON.stringify(ctx.answered) + JSON.stringify(ctx.edits);
     assert.ok(!blob.includes("Games are played in the Games topic"));
     assert.ok(ctx.answered.includes(GAME_ENDED_TOAST));
+  });
+
+  await runTest("U. streak milestones award XP up to shared daily cap", async () => {
+    const { service } = createService({
+      randomIntFn: seqRandom([10, 20, 30, 40, 50, 60, 70]),
+    });
+    const started = start(service);
+    const ctxFor = (action, round) =>
+      createCtx({
+        threadId: Number(GAMES_TOPIC_ID),
+        callbackData: buildPlayCallbackData(action, started.session.id, round),
+      });
+    await handleHigherOrLowerCallback(ctxFor("h", 1), {
+      runtime: service,
+      pointsFile,
+      shopFile,
+    });
+    await handleHigherOrLowerCallback(ctxFor("h", 2), {
+      runtime: service,
+      pointsFile,
+      shopFile,
+    });
+    assert.strictEqual(loadPoints(pointsFile).users[String(USER_A)].points, 0);
+    await handleHigherOrLowerCallback(ctxFor("h", 3), {
+      runtime: service,
+      pointsFile,
+      shopFile,
+    });
+    assert.strictEqual(loadPoints(pointsFile).users[String(USER_A)].points, 1);
+    await handleHigherOrLowerCallback(ctxFor("h", 4), {
+      runtime: service,
+      pointsFile,
+      shopFile,
+    });
+    await handleHigherOrLowerCallback(ctxFor("h", 5), {
+      runtime: service,
+      pointsFile,
+      shopFile,
+    });
+    assert.strictEqual(
+      loadPoints(pointsFile).users[String(USER_A)].points,
+      LIGHTWEIGHT_DAILY_XP_CAP
+    );
+    const capped = ctxFor("h", 6);
+    await handleHigherOrLowerCallback(capped, {
+      runtime: service,
+      pointsFile,
+      shopFile,
+    });
+    assert.strictEqual(
+      loadPoints(pointsFile).users[String(USER_A)].points,
+      LIGHTWEIGHT_DAILY_XP_CAP
+    );
+    const last = capped.edits[capped.edits.length - 1];
+    assert.ok(last.text.includes("🎮 Daily XP earned — keep playing for fun."));
+    assert.ok(last.text.includes("Current number:"));
+    assert.strictEqual(service.getSession(started.session.id).status, STATUS.ACTIVE);
+  });
+
+  await runTest("V. stale guess cannot reward after Finish", async () => {
+    const before = loadPoints(pointsFile);
+    const { service } = createService({ randomIntFn: seqRandom([10, 20, 30]) });
+    const started = start(service);
+    service.finish({
+      sessionId: started.session.id,
+      userId: USER_A,
+      round: 1,
+      chatId: COMMUNITY_CHAT,
+    });
+    const ctx = createCtx({
+      threadId: Number(GAMES_TOPIC_ID),
+      callbackData: buildPlayCallbackData("h", started.session.id, 1),
+    });
+    await handleHigherOrLowerCallback(ctx, { runtime: service, pointsFile, shopFile });
+    assert.deepStrictEqual(loadPoints(pointsFile), before);
   });
 
   await runTest("callback parse rejects junk", () => {

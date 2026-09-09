@@ -173,6 +173,7 @@ async function answerCorrect(service, sessionId, userId, name) {
     answerIndex: snap.correctIndex,
     chatId: COMMUNITY_CHAT,
     displayName: name,
+    questionGen: snap.questionGen,
   });
 }
 
@@ -184,6 +185,7 @@ async function answerWrong(service, sessionId, userId, name) {
     answerIndex: (snap.correctIndex + 1) % 4,
     chatId: COMMUNITY_CHAT,
     displayName: name,
+    questionGen: snap.questionGen,
   });
 }
 

@@ -208,6 +208,7 @@ async function answerCorrect(service, sessionId, userId, name) {
     answerIndex: snap.correctIndex,
     chatId: COMMUNITY_CHAT,
     displayName: name,
+    questionGen: snap.questionGen,
   });
 }
 
@@ -220,6 +221,7 @@ async function answerWrong(service, sessionId, userId, name) {
     answerIndex: wrong,
     chatId: COMMUNITY_CHAT,
     displayName: name,
+    questionGen: snap.questionGen,
   });
 }
 
@@ -331,6 +333,7 @@ async function main() {
       answerIndex: (service.getSnapshot().correctIndex + 1) % 4,
       chatId: COMMUNITY_CHAT,
       displayName: "Alice",
+      questionGen: service.getSnapshot().questionGen,
     });
     assert.strictEqual(service.getSnapshot().scores[String(USER_A)], undefined);
     const closed = await answerCorrect(service, started.session.id, USER_B, "Bob");
@@ -943,6 +946,7 @@ async function main() {
       answerIndex: correct ? snap.correctIndex : (snap.correctIndex + 1) % 4,
       chatId: COMMUNITY_CHAT,
       displayName: name,
+      questionGen: snap.questionGen,
     });
   }
 
@@ -1007,6 +1011,7 @@ async function main() {
       answerIndex: before.correctIndex,
       chatId: COMMUNITY_CHAT,
       displayName: "Piet",
+      questionGen: before.questionGen,
     });
     assert.strictEqual(denied.ok, false);
     assert.strictEqual(denied.reason, "not-owner");
@@ -1228,6 +1233,7 @@ async function main() {
       answerIndex: snap.correctIndex,
       chatId: COMMUNITY_CHAT,
       displayName: "Piet",
+      questionGen: snap.questionGen,
     });
     assert.strictEqual(first.ok, true);
     const second = await service.tryAnswer({
@@ -1236,6 +1242,7 @@ async function main() {
       answerIndex: snap.correctIndex,
       chatId: COMMUNITY_CHAT,
       displayName: "Kevin",
+      questionGen: snap.questionGen,
     });
     assert.strictEqual(second.ok, false);
     assert.ok(
@@ -1280,6 +1287,7 @@ async function main() {
       answerIndex: beforePiet.correctIndex,
       chatId: COMMUNITY_CHAT,
       displayName: "Kevin",
+      questionGen: beforePiet.questionGen,
     });
     assert.strictEqual(hijack.ok, false);
     assert.strictEqual(hijack.reason, "not-owner");

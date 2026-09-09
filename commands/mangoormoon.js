@@ -1,6 +1,6 @@
 /**
- * /higherorlower — single-player vs ManGoBot in the Games topic.
- * Callbacks: hol:h|l|f|a:<sessionId>:<round>
+ * /mangoormoon — single-player vs ManGoBot in the Games topic.
+ * Callbacks: mom:m|n|f|a:<sessionId>:<round>
  */
 
 const { isPrivateChat, isGroupChat } = require("../utils/botMenu");
@@ -9,13 +9,13 @@ const {
   getCommunityBusyReason,
 } = require("../services/communityGameState");
 const {
-  startHigherOrLowerGame,
-  getHigherOrLowerRuntime,
-  parseHolCallbackData,
+  startMangoOrMoonGame,
+  getMangoOrMoonRuntime,
+  parseMomCallbackData,
   PLAYER_BUSY_TEXT,
   GAME_ENDED_TOAST,
   renderMessage,
-} = require("../services/higherOrLower");
+} = require("../services/mangoOrMoon");
 const {
   awardLightweightStreakXp,
   getLightweightXpStatus,
@@ -34,8 +34,8 @@ const {
 } = require("../utils/gameTopic");
 const { error: logError } = require("../utils/logger");
 
-const PRIVATE_HOL_TEXT =
-  "📈 Higher or Lower is played in the ManGo group Games topic.";
+const PRIVATE_MOM_TEXT =
+  "🥭 ManGo or Moon is played in the ManGo group Games topic.";
 
 function cbAnswer(ctx, text) {
   if (ctx && typeof ctx.answerCbQuery === "function") {
@@ -44,7 +44,7 @@ function cbAnswer(ctx, text) {
   return Promise.resolve();
 }
 
-async function refreshHolRewards(runtime, session, user, { award = false, pointsFile, walletFile, shopFile } = {}) {
+async function refreshMomRewards(runtime, session, user, { award = false, pointsFile, walletFile, shopFile } = {}) {
   if (!runtime || !session || !user) {
     return null;
   }
@@ -57,7 +57,7 @@ async function refreshHolRewards(runtime, session, user, { award = false, points
       name,
       {
         streak: session.streak,
-        game: "hol",
+        game: "mom",
         walletFile,
         pointsFile,
         shopFile,
@@ -69,7 +69,7 @@ async function refreshHolRewards(runtime, session, user, { award = false, points
   if (typeof runtime.setRewardStatus === "function") {
     runtime.setRewardStatus(session.id, status);
   }
-  noteDailyQuestGame(userId, "hol", { shopFile, walletFile, pointsFile });
+  noteDailyQuestGame(userId, "mom", { shopFile, walletFile, pointsFile });
   const live = runtime.getSession(session.id);
   return renderMessage(live || { ...session, rewardStatus: status });
 }
@@ -82,14 +82,14 @@ async function safeEdit(ctx, text, extra) {
     }
   } catch (err) {
     logError(
-      "[hol] editMessageText failed:",
+      "[mom] editMessageText failed:",
       err && err.message ? err.message : err
     );
   }
   return false;
 }
 
-function wireHigherOrLowerRuntime(runtime, botOrTelegram) {
+function wireMangoOrMoonRuntime(runtime, botOrTelegram) {
   if (!runtime || typeof runtime.setRenderHandler !== "function") {
     return;
   }
@@ -116,20 +116,20 @@ function wireHigherOrLowerRuntime(runtime, botOrTelegram) {
       )
     ).catch((err) => {
       logError(
-        "[hol] timeout edit failed:",
+        "[mom] timeout edit failed:",
         err && err.message ? err.message : err
       );
     });
   });
 }
 
-async function handleHigherOrLower(ctx, options = {}) {
+async function handleMangoOrMoon(ctx, options = {}) {
   const startFn =
     typeof options.startChallengeFn === "function"
       ? options.startChallengeFn
       : typeof options.startGameFn === "function"
         ? options.startGameFn
-        : startHigherOrLowerGame;
+        : startMangoOrMoonGame;
   const busyFn =
     typeof options.isBusyFn === "function"
       ? options.isBusyFn
@@ -142,7 +142,7 @@ async function handleHigherOrLower(ctx, options = {}) {
     typeof options.setMessageIdFn === "function"
       ? options.setMessageIdFn
       : (sessionId, messageId) =>
-          getHigherOrLowerRuntime().setMessageId(sessionId, messageId);
+          getMangoOrMoonRuntime().setMessageId(sessionId, messageId);
   const assertStartFn =
     typeof options.assertCanStartFn === "function"
       ? options.assertCanStartFn
@@ -153,18 +153,18 @@ async function handleHigherOrLower(ctx, options = {}) {
   }
 
   if (isPrivateChat(ctx) || !isGroupChat(ctx)) {
-    return ctx.reply(PRIVATE_HOL_TEXT);
+    return ctx.reply(PRIVATE_MOM_TEXT);
   }
 
   const gate = await assertStartFn(ctx, options);
   if (!gate.ok) {
     if (gate.reason === "bot") {
-      return ctx.reply("📈 Bots cannot start Higher or Lower.");
+      return ctx.reply("🥭 Bots cannot start ManGo or Moon.");
     }
     if (gate.reason === "wrong-topic") {
       return ctx.reply(GAMES_TOPIC_REQUIRED_MESSAGE);
     }
-    return ctx.reply("📈 Higher or Lower is not available in this group.");
+    return ctx.reply("🥭 ManGo or Moon is not available in this group.");
   }
 
   if (
@@ -211,22 +211,22 @@ async function handleHigherOrLower(ctx, options = {}) {
       return ctx.reply(PLAYER_BUSY_TEXT);
     }
     if (result.reason === "already-active") {
-      return ctx.reply("📈 You already have a Higher or Lower game.");
+      return ctx.reply("🥭 You already have a ManGo or Moon game.");
     }
     if (result.reason === "bot") {
-      return ctx.reply("📈 Bots cannot start Higher or Lower.");
+      return ctx.reply("🥭 Bots cannot start ManGo or Moon.");
     }
     if (result.reason === "wrong-chat") {
-      return ctx.reply("📈 Higher or Lower is not available in this group.");
+      return ctx.reply("🥭 ManGo or Moon is not available in this group.");
     }
-    return ctx.reply("📈 Could not start Higher or Lower.");
+    return ctx.reply("🥭 Could not start ManGo or Moon.");
   }
 
   const runtime =
     options.runtime ||
     (typeof options.getRuntimeFn === "function"
       ? options.getRuntimeFn()
-      : getHigherOrLowerRuntime());
+      : getMangoOrMoonRuntime());
   if (result.session && runtime && typeof runtime.setRewardStatus === "function") {
     runtime.setRewardStatus(
       result.session.id,
@@ -251,16 +251,16 @@ async function handleHigherOrLower(ctx, options = {}) {
   return sent;
 }
 
-async function handleHigherOrLowerCallback(ctx, options = {}) {
+async function handleMangoOrMoonCallback(ctx, options = {}) {
   const runtime =
     options.runtime ||
     (typeof options.getRuntimeFn === "function"
       ? options.getRuntimeFn()
-      : getHigherOrLowerRuntime());
+      : getMangoOrMoonRuntime());
   const parseFn =
     typeof options.parseCallbackData === "function"
       ? options.parseCallbackData
-      : parseHolCallbackData;
+      : parseMomCallbackData;
 
   if (!ctx || !ctx.from || !ctx.callbackQuery) {
     return;
@@ -290,7 +290,7 @@ async function handleHigherOrLowerCallback(ctx, options = {}) {
 
   async function rejectStale(result) {
     await handleStaleGameCallback(ctx, {
-      gameType: GAME_TYPE.HOL,
+      gameType: GAME_TYPE.MOM,
       sessionId: parsed.sessionId,
       text: result && result.rendered && result.rendered.text,
       toast: (result && result.toast) || GAME_ENDED_TOAST,
@@ -299,7 +299,7 @@ async function handleHigherOrLowerCallback(ctx, options = {}) {
     });
   }
 
-  if (parsed.action === "h" || parsed.action === "l") {
+  if (parsed.action === "m" || parsed.action === "n") {
     const result = runtime.guess(input);
     if (!result.ok) {
       if (result.reason === "outsider") {
@@ -320,7 +320,7 @@ async function handleHigherOrLowerCallback(ctx, options = {}) {
     await cbAnswer(ctx, result.correct ? "✅ Correct!" : "❌ Wrong!");
     let rendered = result.rendered;
     if (result.session) {
-      const updated = await refreshHolRewards(runtime, result.session, ctx.from, {
+      const updated = await refreshMomRewards(runtime, result.session, ctx.from, {
         award: Boolean(result.correct),
         pointsFile: options.pointsFile,
         walletFile: options.walletFile,
@@ -404,14 +404,14 @@ async function handleHigherOrLowerCallback(ctx, options = {}) {
 }
 
 module.exports = (bot) => {
-  wireHigherOrLowerRuntime(getHigherOrLowerRuntime(), bot);
-  bot.command(["higherorlower", "hol"], (ctx) => handleHigherOrLower(ctx));
-  bot.action(/^hol:(h|l|f|a):[a-f0-9]+:\d+$/i, (ctx) =>
-    handleHigherOrLowerCallback(ctx)
+  wireMangoOrMoonRuntime(getMangoOrMoonRuntime(), bot);
+  bot.command(["mangoormoon", "mom"], (ctx) => handleMangoOrMoon(ctx));
+  bot.action(/^mom:(m|n|f|a):[a-f0-9]+:\d+$/i, (ctx) =>
+    handleMangoOrMoonCallback(ctx)
   );
 };
 
-module.exports.handleHigherOrLower = handleHigherOrLower;
-module.exports.handleHigherOrLowerCallback = handleHigherOrLowerCallback;
-module.exports.wireHigherOrLowerRuntime = wireHigherOrLowerRuntime;
-module.exports.PRIVATE_HOL_TEXT = PRIVATE_HOL_TEXT;
+module.exports.handleMangoOrMoon = handleMangoOrMoon;
+module.exports.handleMangoOrMoonCallback = handleMangoOrMoonCallback;
+module.exports.wireMangoOrMoonRuntime = wireMangoOrMoonRuntime;
+module.exports.PRIVATE_MOM_TEXT = PRIVATE_MOM_TEXT;

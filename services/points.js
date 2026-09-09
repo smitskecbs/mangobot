@@ -924,14 +924,20 @@ function ensureUserRecord(data, id, userName) {
 /**
  * Ensure optional game XP state exists on a user record (in-memory defaults).
  * @param {object} user
- * @returns {{ snakePlayDate: string|null, bounchPlayDate: string|null, bounchUnlockedMax: number }}
+ * @returns {{ snakePlayDate: string|null, bounchPlayDate: string|null, bounchUnlockedMax: number, lightweightXpDate: string|null, lightweightXpAwarded: number }}
  */
+const LIGHTWEIGHT_MILESTONE_XP = 1;
+const LIGHTWEIGHT_STREAK_MILESTONES = Object.freeze([3, 5]);
+const LIGHTWEIGHT_DAILY_XP_CAP = 2;
+
 function ensureGameState(user) {
   if (!user.game || typeof user.game !== "object") {
     user.game = {
       snakePlayDate: null,
       bounchPlayDate: null,
       bounchUnlockedMax: 0,
+      lightweightXpDate: null,
+      lightweightXpAwarded: 0,
     };
   }
 
@@ -940,6 +946,16 @@ function ensureGameState(user) {
   }
   if (!Object.prototype.hasOwnProperty.call(user.game, "bounchPlayDate")) {
     user.game.bounchPlayDate = null;
+  }
+  if (!Object.prototype.hasOwnProperty.call(user.game, "lightweightXpDate")) {
+    user.game.lightweightXpDate = null;
+  }
+  if (
+    typeof user.game.lightweightXpAwarded !== "number" ||
+    !Number.isInteger(user.game.lightweightXpAwarded) ||
+    user.game.lightweightXpAwarded < 0
+  ) {
+    user.game.lightweightXpAwarded = 0;
   }
 
   let unlockedMax = user.game.bounchUnlockedMax;
@@ -1099,6 +1115,162 @@ async function awardBounchGameXp(userId, userName, level, pointsFile = POINTS_FI
 
     return buildGameXpResult(pointsBefore, user.points, dailyPlay, unlock);
   }, pointsFile),
+    questExtras
+  );
+}
+
+function resetLightweightIfNewDay(game, today) {
+  if (game.lightweightXpDate !== today) {
+    game.lightweightXpDate = today;
+    game.lightweightXpAwarded = 0;
+  }
+}
+
+function lightweightStatusFromGame(game, extra = {}) {
+  const awarded =
+    game && typeof game.lightweightXpAwarded === "number"
+      ? game.lightweightXpAwarded
+      : 0;
+  const remaining = Math.max(0, LIGHTWEIGHT_DAILY_XP_CAP - awarded);
+  return {
+    awarded,
+    dailyCap: LIGHTWEIGHT_DAILY_XP_CAP,
+    remaining,
+    limitReached: awarded >= LIGHTWEIGHT_DAILY_XP_CAP,
+    milestones: LIGHTWEIGHT_STREAK_MILESTONES.slice(),
+    milestoneXp: LIGHTWEIGHT_MILESTONE_XP,
+    ...extra,
+  };
+}
+
+function getLightweightXpStatus(userId, pointsFile = POINTS_FILE) {
+  const data = loadPoints(pointsFile);
+  const user = data.users && data.users[String(userId)];
+  if (!user) {
+    return lightweightStatusFromGame({ lightweightXpAwarded: 0 });
+  }
+  const game = ensureGameState(user);
+  const today = getTodayDate();
+  if (game.lightweightXpDate !== today) {
+    return lightweightStatusFromGame({ lightweightXpAwarded: 0 });
+  }
+  return lightweightStatusFromGame(game);
+}
+
+function formatLightweightRewardLines(peerName, status) {
+  const lines = [
+    `🎯 Reward: +${LIGHTWEIGHT_MILESTONE_XP} XP at streak ${LIGHTWEIGHT_STREAK_MILESTONES.join(" and ")}`,
+    `🏆 Daily limit: ${LIGHTWEIGHT_DAILY_XP_CAP} XP shared with ${peerName}`,
+  ];
+  if (status && status.limitReached) {
+    lines.push("🎮 Daily XP earned — keep playing for fun.");
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Higher or Lower / ManGo or Moon: +1 XP at streak 3 and 5, sharing a 2 XP UTC-day cap.
+ * Wallet gate applies. Gameplay continues after the cap.
+ */
+async function awardLightweightStreakXp(
+  userId,
+  userName,
+  payload = {},
+  pointsFile = POINTS_FILE,
+  walletFile
+) {
+  const streak = Number(payload && payload.streak);
+  const game = String((payload && payload.game) || "hol").toLowerCase();
+  const resolvedWallet =
+    walletFile || (payload && payload.walletFile ? payload.walletFile : undefined);
+  const questExtras = {
+    game,
+    walletFile: resolvedWallet,
+    pointsFile,
+    shopFile: payload && payload.shopFile ? payload.shopFile : undefined,
+  };
+  const isMilestone = LIGHTWEIGHT_STREAK_MILESTONES.includes(streak);
+  const walletOk = canEarnXp(userId, resolvedWallet);
+
+  return finalizeXpAward(
+    userId,
+    userName,
+    await mutatePointsAsync((data) => {
+      const id = String(userId);
+      const user = ensureUserRecord(data, id, userName);
+      user.name = userName;
+      resetWeeklyIfNewWeek(user, id);
+      const gameState = ensureGameState(user);
+      const today = getTodayDate();
+      resetLightweightIfNewDay(gameState, today);
+      const status = lightweightStatusFromGame(gameState);
+
+      if (!isMilestone) {
+        return {
+          awarded: false,
+          reason: "not-milestone",
+          points: user.points,
+          pointsToAdd: 0,
+          rankUp: false,
+          rank: getRank(user.points),
+          ...status,
+        };
+      }
+      if (isCommunityCompetitionExcluded(userId)) {
+        return {
+          awarded: false,
+          reason: "excluded",
+          points: user.points,
+          pointsToAdd: 0,
+          rankUp: false,
+          rank: getRank(user.points),
+          ...status,
+        };
+      }
+      if (status.limitReached) {
+        return {
+          awarded: false,
+          reason: "daily-cap",
+          points: user.points,
+          pointsToAdd: 0,
+          rankUp: false,
+          rank: getRank(user.points),
+          funPlay: true,
+          ...status,
+          limitReached: true,
+          remaining: 0,
+        };
+      }
+      if (!walletOk) {
+        return {
+          awarded: false,
+          reason: XP_WALLET_REQUIRED,
+          points: user.points,
+          pointsToAdd: 0,
+          rankUp: false,
+          rank: getRank(user.points),
+          previousRank: getRank(user.points),
+          ...status,
+        };
+      }
+
+      const pointsBefore = user.points;
+      user.points += LIGHTWEIGHT_MILESTONE_XP;
+      user.weeklyPoints += LIGHTWEIGHT_MILESTONE_XP;
+      gameState.lightweightXpAwarded += LIGHTWEIGHT_MILESTONE_XP;
+      noteWeeklyStandingSafe(id, user);
+      const previousRank = getRank(pointsBefore);
+      const rank = getRank(user.points);
+      return {
+        awarded: true,
+        points: user.points,
+        pointsToAdd: LIGHTWEIGHT_MILESTONE_XP,
+        rankUp: previousRank.title !== rank.title,
+        rank,
+        previousRank,
+        ...lightweightStatusFromGame(gameState),
+      };
+    }, pointsFile),
     questExtras
   );
 }
@@ -2608,6 +2780,12 @@ module.exports = {
   awardCommunityBuilderXp,
   awardSnakeGameXp,
   awardBounchGameXp,
+  awardLightweightStreakXp,
+  getLightweightXpStatus,
+  formatLightweightRewardLines,
+  LIGHTWEIGHT_MILESTONE_XP,
+  LIGHTWEIGHT_STREAK_MILESTONES,
+  LIGHTWEIGHT_DAILY_XP_CAP,
   ensureGameState,
   emptyGameXpPayload,
   publicGameXpFromAward,

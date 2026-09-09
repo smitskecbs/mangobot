@@ -472,7 +472,7 @@ function wireTimeoutMessageEdits(runtime, telegram, awardXpFn) {
         ? runtime.getSession(result.session.id)
         : result.session;
     schedulePvpSessionCleanup(
-      live,
+      live || result.session,
       telegram,
       pvpCleanupGameType(runtime, live || result.session),
       runtime
@@ -784,8 +784,17 @@ async function handlePvpCallbackBody(ctx, options = {}) {
     }
     await cbAnswer(ctx);
     await applyRenderedEdit(ctx, runtime, parsed, result.rendered);
+    const sessionForCleanup = result.session
+      ? {
+          ...result.session,
+          messageId:
+            result.session.messageId != null
+              ? result.session.messageId
+              : callbackMessageIdSafe(ctx),
+        }
+      : result.session;
     schedulePvpSessionCleanup(
-      result.session,
+      sessionForCleanup,
       ctx.telegram,
       pvpGameType(parsed),
       runtime

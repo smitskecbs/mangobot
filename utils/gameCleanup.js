@@ -40,6 +40,7 @@ const GAME_TYPE = Object.freeze({
   BLACKJACK: "blackjack",
   RPS: "rps",
   HOL: "hol",
+  MOM: "mom",
 });
 
 function isMessageNotModifiedError(err) {
@@ -78,6 +79,9 @@ function titleFor(gameType) {
   }
   if (gameType === GAME_TYPE.HOL) {
     return "📈 Higher or Lower cancelled";
+  }
+  if (gameType === GAME_TYPE.MOM) {
+    return "🥭 ManGo or Moon cancelled";
   }
   return "🎮 Game cancelled";
 }

@@ -2,8 +2,8 @@
  * /trivia | /quiz — Trivia Hub category chooser, then personal or community questions.
  * Personal hub: Games → category → unlimited questions (chatId + userId session).
  * Auto Trivia uses a separate community runtime via Activity Engine (Random, 5-question round).
- * Answer callbacks: trivia:<sessionId>:<answerIndex>
- * Hub callbacks: trivia:hub | trivia:next[:id] | trivia:change[:id] | trivia:games[:id] | trivia:cat:<id>
+ * Answer callbacks: trivia:<sessionId>:<answerIndex> or trivia:<sessionId>:<questionGen>:<answerIndex>
+ * Hub callbacks: trivia:hub | trivia:next[:id[:gen]] | trivia:change[:id] | trivia:games[:id] | trivia:cat:<id>
  */
 
 const {
@@ -490,7 +490,11 @@ async function handleTriviaHubCallback(ctx, options = {}) {
       await rejectStaleTriviaMessage(ctx, parsed && parsed.sessionId);
       return;
     }
-    const result = runtime.nextHubQuestion(parsed.sessionId, ctx.from.id);
+    const result = runtime.nextHubQuestion(
+      parsed.sessionId,
+      ctx.from.id,
+      parsed.questionGen
+    );
     if (!result.ok) {
       if (result.reason === "not-owner") {
         await answer(formatTriviaUnauthorizedToast(result.ownerDisplayName));
@@ -498,6 +502,10 @@ async function handleTriviaHubCallback(ctx, options = {}) {
       }
       if (result.reason === "question-open") {
         await answer("Answer this question first.");
+        return;
+      }
+      if (result.reason === "stale-question") {
+        await answer("This question already ended.");
         return;
       }
       await answer(GAME_OVER_TOAST);
@@ -653,12 +661,14 @@ async function handleTriviaAnswer(ctx, options = {}) {
     displayName,
     isBot: Boolean(ctx.from.is_bot),
     deferXp: true,
+    questionGen: parsed.questionGen,
   });
 
   if (!result.ok) {
     if (
       result.reason === "already-answered" ||
-      result.reason === "question-closed"
+      result.reason === "question-closed" ||
+      result.reason === "stale-question"
     ) {
       await answer("This question is already finished.");
     } else if (
@@ -691,7 +701,9 @@ async function handleTriviaAnswer(ctx, options = {}) {
   let rendered = result.rendered;
   if (result.xpDeferred && typeof runtime.settleDeferredXp === "function") {
     const settled = await runtime.settleDeferredXp(parsed.sessionId);
-    if (settled && settled.rendered) {
+    if (settled && settled.staleRender) {
+      rendered = null;
+    } else if (settled && settled.rendered) {
       rendered = settled.rendered;
     }
   }
@@ -717,10 +729,10 @@ module.exports = (bot) => {
   bot.command(["trivia", "quiz"], (ctx) =>
     Promise.resolve(handleTrivia(ctx)).catch(() => undefined)
   );
-  bot.action(/^trivia:[a-f0-9]+:[0-3]$/i, (ctx) =>
+  bot.action(/^trivia:[a-f0-9]+:(?:\d+:)?[0-3]$/i, (ctx) =>
     Promise.resolve(handleTriviaAnswer(ctx)).catch(() => undefined)
   );
-  bot.action(/^trivia:(hub|next|change|games)(?::[a-f0-9]+)?$/i, (ctx) =>
+  bot.action(/^trivia:(hub|next|change|games)(?::[a-f0-9]+)?(?::\d+)?$/i, (ctx) =>
     Promise.resolve(handleTriviaHubCallback(ctx)).catch(() => undefined)
   );
   bot.action(

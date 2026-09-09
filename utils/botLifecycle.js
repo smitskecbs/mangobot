@@ -179,6 +179,15 @@ function startBotRuntime({
       /* ignore */
     }
     try {
+      const { getMangoOrMoonRuntime } = require("../services/mangoOrMoon");
+      const runtime = getMangoOrMoonRuntime();
+      if (runtime && typeof runtime.clearAllTimers === "function") {
+        runtime.clearAllTimers();
+      }
+    } catch (_err) {
+      /* ignore */
+    }
+    try {
       const { getSharedPvpSessionManager } = require("../services/pvpSessionManager");
       getSharedPvpSessionManager().resetAll();
     } catch (_err) {

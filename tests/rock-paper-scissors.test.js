@@ -70,6 +70,8 @@ const { PVP_MATCH_GAMES } = require("../services/pvpProgress");
 const { ACTION_REGISTRY } = require("../services/communityActivityEngine");
 const {
   GAME_TYPE,
+  GAME_CLEANUP_FOOTER,
+  GAME_MESSAGE_CLEANUP_DELAY_MS,
   scheduleGameMessageCleanup,
   getPendingGameMessageCleanupCount,
   getScheduledGameCleanupIds,
@@ -760,7 +762,7 @@ async function main() {
     const extra = getGroupGamesMenuExtra({ botInfo: { username: "ManGoBot" } });
     const blob = JSON.stringify(extra);
     assert.ok(blob.includes(GROUP_MENU_CALLBACK.RPS));
-    assert.ok(blob.includes("✊✋✌️ RPS") || blob.includes("Rock Paper Scissors"));
+    assert.ok(blob.includes("✊ Rock Paper Scissors") || blob.includes("Rock Paper Scissors"));
     assert.strictEqual(isGameMenuCallback(GROUP_MENU_CALLBACK.RPS), true);
     assert.ok(PRIVATE_GAMES_TEXT.includes("Rock Paper Scissors"));
     assert.ok(PRIVATE_GAMES_TEXT.includes("Games topic"));
@@ -1883,6 +1885,131 @@ async function main() {
     assert.strictEqual(res.has(USER_A), true);
     assert.strictEqual(getPendingGameMessageCleanupCount(), 0);
     assert.deepStrictEqual(getScheduledGameCleanupIds(GAME_TYPE.RPS, started.session.id), []);
+    clearAllGameMessageCleanups();
+  });
+
+  await runTest("Finish A-F. bot Finish is terminal cleanup; immediate /rps works", async () => {
+    clearAllGameMessageCleanups();
+    const { service, reservation, manager } = createService({
+      randomMoveFn: () => "scissors",
+    });
+    const started = startBot(service);
+    await lock(service, started.session.id, USER_A, "rock");
+    const ctx = createMockCtx({
+      callbackData: buildFinishCallbackData(started.session.id, 1),
+    });
+    await handlePvpCallback(ctx, {
+      runtime: service,
+      parseCallbackData: parsePvpCallbackData,
+      awardPvpWinXpFn: () => ({ awarded: false, pointsToAdd: 0 }),
+    });
+    assert.strictEqual(service.getSession(started.session.id), null);
+    assert.strictEqual(manager.getSession(started.session.id), null);
+    assert.strictEqual(reservation.has(USER_A), false);
+    const edit = ctx.edited[0];
+    assert.ok(edit);
+    assert.ok(edit.text.includes("wins") || edit.text.includes("Draw") || edit.text.includes("finished"));
+    assert.ok(edit.text.includes(GAME_CLEANUP_FOOTER));
+    assert.ok(!edit.text.includes("Play Again"));
+    assert.deepStrictEqual(edit.extra.reply_markup.inline_keyboard, []);
+    assert.strictEqual(GAME_MESSAGE_CLEANUP_DELAY_MS, 60 * 1000);
+    assert.deepStrictEqual(
+      getScheduledGameCleanupIds(GAME_TYPE.RPS, started.session.id).map(String),
+      ["5001"]
+    );
+    const next = createMockCtx({
+      userId: USER_A,
+      firstName: "Kevin",
+      messageThreadId: Number(GAMES_TOPIC_ID),
+    });
+    await handleRps(next, {
+      startChallengeFn: (p) => service.startChallenge(p),
+      setMessageIdFn: (id, mid) => service.setMessageId(id, mid),
+      isBusyFn: () => false,
+      getBusyReasonFn: () => null,
+    });
+    assert.ok(next.replies[0].text.includes("How do you want to play"));
+    assert.strictEqual(reservation.has(USER_A), true);
+    clearAllGameMessageCleanups();
+  });
+
+  await runTest("Finish G-I. Play Again is not terminal cleanup", async () => {
+    clearAllGameMessageCleanups();
+    const { service, reservation } = createService({
+      randomMoveFn: () => "scissors",
+    });
+    const started = startBot(service);
+    await lock(service, started.session.id, USER_A, "rock");
+    const replayCtx = createMockCtx({
+      callbackData: buildReplayCallbackData(started.session.id, 1),
+    });
+    await handlePvpCallback(replayCtx, {
+      runtime: service,
+      parseCallbackData: parsePvpCallbackData,
+      awardPvpWinXpFn: () => ({ awarded: false, pointsToAdd: 0 }),
+    });
+    const live = service.getSession(started.session.id);
+    assert.strictEqual(live.status, STATUS.ACTIVE);
+    assert.strictEqual(live.round, 2);
+    assert.strictEqual(reservation.has(USER_A), true);
+    const edit = replayCtx.edited[0];
+    assert.ok(edit);
+    assert.ok(!edit.text.includes(GAME_CLEANUP_FOOTER));
+    assert.strictEqual(getPendingGameMessageCleanupCount(), 0);
+    assert.deepStrictEqual(getScheduledGameCleanupIds(GAME_TYPE.RPS, started.session.id), []);
+    clearAllGameMessageCleanups();
+  });
+
+  await runTest("Finish J. human Finish is terminal cleanup", async () => {
+    clearAllGameMessageCleanups();
+    const { service, reservation } = createService();
+    const lobby = startLobby(service);
+    joinP2(service, lobby.session.id);
+    await lock(service, lobby.session.id, USER_A, "rock");
+    await lock(service, lobby.session.id, USER_B, "scissors");
+    const ctx = createMockCtx({
+      callbackData: buildFinishCallbackData(lobby.session.id, 1),
+    });
+    await handlePvpCallback(ctx, {
+      runtime: service,
+      parseCallbackData: parsePvpCallbackData,
+      awardPvpWinXpFn: () => ({ awarded: false, pointsToAdd: 0 }),
+    });
+    assert.strictEqual(service.getSession(lobby.session.id), null);
+    assert.strictEqual(reservation.has(USER_A), false);
+    assert.strictEqual(reservation.has(USER_B), false);
+    const edit = ctx.edited[0];
+    assert.ok(edit.text.includes(GAME_CLEANUP_FOOTER));
+    assert.deepStrictEqual(edit.extra.reply_markup.inline_keyboard, []);
+    assert.deepStrictEqual(
+      getScheduledGameCleanupIds(GAME_TYPE.RPS, lobby.session.id).map(String),
+      ["5001"]
+    );
+    clearAllGameMessageCleanups();
+  });
+
+  await runTest("Finish K-L. stale Finish cannot affect newer session; economics unchanged", async () => {
+    clearAllGameMessageCleanups();
+    const { service } = createService({ randomMoveFn: () => "scissors" });
+    const started = startBot(service);
+    await lock(service, started.session.id, USER_A, "rock");
+    const fresh = service.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_A, displayName: "Kevin", isBot: false },
+    });
+    assert.strictEqual(fresh.ok, true);
+    const stale = createMockCtx({
+      callbackData: buildFinishCallbackData(started.session.id, 1),
+    });
+    await handlePvpCallback(stale, {
+      runtime: service,
+      parseCallbackData: parsePvpCallbackData,
+      awardPvpWinXpFn: () => ({ awarded: false, pointsToAdd: 0 }),
+    });
+    assert.strictEqual(service.getSession(fresh.session.id).status, STATUS.WAITING);
+    assert.strictEqual(service.getSession(started.session.id), null);
+    assert.strictEqual(PVP_WIN_XP, 3);
+    assert.strictEqual(PVP_DAILY_WIN_CAP, 3);
     clearAllGameMessageCleanups();
   });
 

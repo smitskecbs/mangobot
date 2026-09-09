@@ -59,6 +59,8 @@ const GAME_SOURCES = Object.freeze([
   "pvp",
   "blackjack",
   "rps",
+  "hol",
+  "mom",
 ]);
 
 const DEDUPE_BUCKETS = Object.freeze(["replies", "media", "messages"]);
