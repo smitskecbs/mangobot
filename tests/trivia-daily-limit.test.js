@@ -585,28 +585,25 @@ async function main() {
     const started = startHub(service);
     const result = await answerCorrect(service, started.session.id, USER_A, "Alice");
     const buttons = resultButtons(result.rendered.extra);
-    assert.ok(!buttons.some((b) => /^trivia:[a-f0-9]+:[0-3]$/i.test(b.callback_data)));
+    const texts = buttons.map((b) => String(b.text || ""));
+    const datas = buttons.map((b) => String(b.callback_data || ""));
+    assert.ok(!datas.some((d) => /:(\d+:)?[0-3]$/.test(d) && !d.includes("next") && !d.includes("finish")));
+    assert.ok(!datas.some((d) => /trivia:[a-f0-9]+:(?:\d+:)?[0-3]$/i.test(d)));
+    assert.ok(texts.includes("➡️ Next Question"));
+    assert.ok(texts.includes("❌ Finish"));
     assert.ok(
-      buttons.some(
-        (b) =>
-          b.callback_data ===
-          buildHubNavCallbackData("next", started.session.id)
+      datas.includes(
+        buildHubNavCallbackData("next", started.session.id, started.session.questionGen)
       )
     );
     assert.ok(
-      buttons.some(
-        (b) =>
-          b.callback_data ===
-          buildHubNavCallbackData("change", started.session.id)
+      datas.includes(
+        buildHubNavCallbackData("finish", started.session.id, started.session.questionGen)
       )
     );
-    assert.ok(
-      buttons.some(
-        (b) =>
-          b.callback_data ===
-          buildHubNavCallbackData("games", started.session.id)
-      )
-    );
+    assert.ok(!texts.includes("Change Category"));
+    assert.ok(!datas.some((d) => d.startsWith("trivia:change")));
+    assert.ok(!datas.some((d) => d.startsWith("trivia:games")));
     assert.strictEqual(service.getSnapshot().questionPhase, QUESTION_PHASE.RESOLVED);
   });
 

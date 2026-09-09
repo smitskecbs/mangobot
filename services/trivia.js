@@ -37,6 +37,7 @@ const {
   logCleanupRenderFailed,
   emptyGameKeyboardExtra,
   scheduleGameMessageCleanup,
+  clearGameMessageCleanup,
 } = require("../utils/gameCleanup");
 
 const TRIVIA_ROUND_QUESTIONS = 5;
@@ -50,6 +51,7 @@ const STATUS = Object.freeze({
   ACTIVE: "active",
   COMPLETE: "complete",
   ABORTED: "aborted",
+  FINISHED: "finished",
 });
 
 const QUESTION_PHASE = Object.freeze({
@@ -116,15 +118,18 @@ const TRIVIA_HUB_ACTION = Object.freeze({
   NEXT: "trivia:next",
   CHANGE: "trivia:change",
   GAMES: "trivia:games",
+  FINISH: "trivia:finish",
 });
 
 function buildHubNavCallbackData(action, sessionId, questionGen) {
   const prefix =
     action === "next"
       ? TRIVIA_HUB_ACTION.NEXT
-      : action === "change"
-        ? TRIVIA_HUB_ACTION.CHANGE
-        : TRIVIA_HUB_ACTION.GAMES;
+      : action === "finish"
+        ? TRIVIA_HUB_ACTION.FINISH
+        : action === "change"
+          ? TRIVIA_HUB_ACTION.CHANGE
+          : TRIVIA_HUB_ACTION.GAMES;
   if (!sessionId) {
     return prefix;
   }
@@ -148,7 +153,7 @@ function parseTriviaHubCallback(data) {
   if (data === TRIVIA_HUB_ACTION.CHOOSER) {
     return { action: "hub" };
   }
-  const nav = /^(trivia):(next|change|games)(?::([a-f0-9]+))?(?::(\d+))?$/i.exec(data);
+  const nav = /^(trivia):(next|change|games|finish)(?::([a-f0-9]+))?(?::(\d+))?$/i.exec(data);
   if (nav) {
     const parsed = {
       action: nav[2].toLowerCase(),
@@ -211,17 +216,26 @@ function buildHubResultKeyboard(sessionId, questionGen) {
     ],
     [
       Markup.button.callback(
-        "🔄 Change Category",
-        buildHubNavCallbackData("change", sessionId)
-      ),
-    ],
-    [
-      Markup.button.callback(
-        "⬅️ Games",
-        buildHubNavCallbackData("games", sessionId)
+        "❌ Finish",
+        buildHubNavCallbackData("finish", sessionId, questionGen)
       ),
     ],
   ]);
+}
+
+function plainTriviaKeyboardExtra(extra) {
+  if (!extra || typeof extra !== "object") {
+    return emptyInlineKeyboardExtra();
+  }
+  const markup = extra.reply_markup;
+  if (markup && Array.isArray(markup.inline_keyboard)) {
+    return { reply_markup: { inline_keyboard: markup.inline_keyboard } };
+  }
+  return emptyInlineKeyboardExtra();
+}
+
+function buildHubFinishedText() {
+  return withGameCleanupFooter("🧠 Trivia\n\nThis game is finished.");
 }
 
 function buildTriviaChooserKeyboard() {
@@ -902,6 +916,12 @@ function createTriviaService(options = {}) {
       ownerUserId: session.ownerUserId || null,
       ownerDisplayName: session.ownerDisplayName || null,
       kind: session.kind || (session.hubMode ? "personal" : "community"),
+      lastResolveKind: session.lastResolveKind || null,
+      lastAnswerCorrect: Boolean(session.lastAnswerCorrect),
+      askedQuestionIds: Array.isArray(session.askedQuestionIds)
+        ? session.askedQuestionIds.slice()
+        : [],
+      lastXpResult: session.lastXpResult || null,
     };
     if (includeSecret) {
       snap.correctIndex = session.correctIndex;
@@ -937,7 +957,8 @@ function createTriviaService(options = {}) {
       recentQuestionIds,
       random,
       antiRepeatWindow,
-      category
+      category,
+      { excludeIds: session && session.askedQuestionIds }
     );
     if (!picked.question) {
       return null;
@@ -956,6 +977,14 @@ function createTriviaService(options = {}) {
     target.questionPhase = QUESTION_PHASE.OPEN;
     target.answeredUsers = {};
     target.questionWinnerId = null;
+    target.lastResolveKind = null;
+    target.lastAnswerCorrect = false;
+    if (!Array.isArray(target.askedQuestionIds)) {
+      target.askedQuestionIds = [];
+    }
+    if (materialized.id) {
+      target.askedQuestionIds.push(materialized.id);
+    }
     target.expiresAt = now() + questionTimeoutMs;
     touchActivity(target);
   }
@@ -990,10 +1019,12 @@ function createTriviaService(options = {}) {
       return;
     }
     session.questionPhase = QUESTION_PHASE.RESOLVED;
+    session.lastResolveKind = "timeout";
+    session.lastAnswerCorrect = false;
     clearSessionTimer(session, "questionTimer");
     const text = buildQuestionTimeoutText(session);
     const extra = session.hubMode
-      ? buildHubResultKeyboard(session.id, session.questionGen)
+      ? plainTriviaKeyboardExtra(buildHubResultKeyboard(session.id, session.questionGen))
       : emptyInlineKeyboardExtra();
     Promise.resolve(safeEdit(text, extra, session)).catch(() => {});
     if (!session.hubMode) {
@@ -1158,7 +1189,9 @@ function createTriviaService(options = {}) {
     applyQuestionToSession(session, next);
     scheduleQuestionTimeout(session);
     const text = buildQuestionText(session, session.lastXpResult || session.xpStatus);
-    const extra = buildAnswerKeyboard(session.id, session.questionGen);
+    const extra = plainTriviaKeyboardExtra(
+      buildAnswerKeyboard(session.id, session.questionGen)
+    );
     if (!session.hubMode) {
       Promise.resolve(safeEdit(text, extra, session)).catch(() => {
         abortRound("edit-failed", { session });
@@ -1307,6 +1340,9 @@ function createTriviaService(options = {}) {
       advanceTimer: null,
       hubIdleTimer: null,
       questionGen: 0,
+      lastResolveKind: null,
+      lastAnswerCorrect: false,
+      askedQuestionIds: [],
     };
     applyQuestionToSession(session, materialized);
     touchActivity(session);
@@ -1329,7 +1365,9 @@ function createTriviaService(options = {}) {
       ok: true,
       session: snapshot(true, session),
       text,
-      keyboard: buildAnswerKeyboard(session.id, session.questionGen),
+      keyboard: plainTriviaKeyboardExtra(
+        buildAnswerKeyboard(session.id, session.questionGen)
+      ),
     };
   }
 
@@ -1371,7 +1409,9 @@ function createTriviaService(options = {}) {
 
   function resultExtra(target) {
     if (target.hubMode) {
-      return buildHubResultKeyboard(target.id, target.questionGen);
+      return plainTriviaKeyboardExtra(
+        buildHubResultKeyboard(target.id, target.questionGen)
+      );
     }
     return emptyInlineKeyboardExtra();
   }
@@ -1471,6 +1511,8 @@ function createTriviaService(options = {}) {
     const correct = answerIndex === target.correctIndex;
 
     target.questionPhase = QUESTION_PHASE.RESOLVED;
+    target.lastResolveKind = correct ? "correct" : "wrong";
+    target.lastAnswerCorrect = correct;
     clearSessionTimer(target, "questionTimer");
 
     let xpResult = null;
@@ -1616,6 +1658,105 @@ function createTriviaService(options = {}) {
     return { ok: true, ...advanced };
   }
 
+  function getAuthoritativeView(sessionId, xpStatus) {
+    const target = resolveSession(sessionId, lastSession);
+    if (!target || target.status !== STATUS.ACTIVE) {
+      return { ok: false, reason: "inactive" };
+    }
+    const status = xpStatus || target.lastXpResult || target.xpStatus;
+    if (target.questionPhase === QUESTION_PHASE.OPEN) {
+      return {
+        ok: true,
+        phase: QUESTION_PHASE.OPEN,
+        session: snapshot(true, target),
+        text: buildQuestionText(target, status),
+        extra: plainTriviaKeyboardExtra(
+          buildAnswerKeyboard(target.id, target.questionGen)
+        ),
+      };
+    }
+    let text;
+    if (target.lastResolveKind === "wrong") {
+      text = buildQuestionWrongText(target, target.lastXpResult);
+    } else if (target.lastResolveKind === "timeout") {
+      text = buildQuestionTimeoutText(target);
+    } else {
+      const winnerName =
+        (target.questionWinnerId &&
+          target.scores[String(target.questionWinnerId)] &&
+          target.scores[String(target.questionWinnerId)].displayName) ||
+        target.ownerDisplayName ||
+        "Player";
+      text = buildQuestionWonText(target, winnerName, target.lastXpResult);
+    }
+    return {
+      ok: true,
+      phase: QUESTION_PHASE.RESOLVED,
+      session: snapshot(true, target),
+      text,
+      extra: resultExtra(target),
+    };
+  }
+
+  function rebindMessageId(sessionId, messageId) {
+    const target = getSession(sessionId);
+    if (!target) {
+      return { ok: false, reason: "invalid-session" };
+    }
+    const previousMessageId = target.messageId;
+    target.messageId = messageId;
+    clearGameMessageCleanup(GAME_TYPE.TRIVIA, target.id);
+    return {
+      ok: true,
+      previousMessageId,
+      messageId,
+      session: snapshot(true, target),
+    };
+  }
+
+  function finishHub({ sessionId, userId, questionGen = null, chatId } = {}) {
+    const target = resolveSession(sessionId, lastSession);
+    if (!target) {
+      return { ok: false, reason: "invalid-session" };
+    }
+    if (!target.hubMode) {
+      return { ok: false, reason: "not-hub" };
+    }
+    if (chatId != null && String(target.chatId) !== String(chatId)) {
+      return { ok: false, reason: "wrong-chat" };
+    }
+    const ownerGate = assertPersonalOwner(target, userId);
+    if (!ownerGate.ok) {
+      return ownerGate;
+    }
+    if (target.status !== STATUS.ACTIVE) {
+      return { ok: false, reason: "inactive" };
+    }
+    if (
+      questionGen != null &&
+      Number(questionGen) !== Number(target.questionGen)
+    ) {
+      return { ok: false, reason: "stale-question" };
+    }
+    clearSessionTimers(target);
+    target.status = STATUS.FINISHED;
+    target.abortReason = "finished";
+    const rendered = {
+      text: buildHubFinishedText(),
+      extra: emptyGameKeyboardExtra(),
+    };
+    const snap = snapshot(true, target);
+    removeSessionFromIndexes(target);
+    lastSession = target;
+    logGameCleanup(GAME_TYPE.TRIVIA, FINAL_STATE.FINISHED);
+    return {
+      ok: true,
+      session: snap,
+      rendered,
+      skipNotify: true,
+    };
+  }
+
   function forceQuestionTimeout(sessionId) {
     const session = resolveSession(sessionId, lastSession);
     if (!session || session.status !== STATUS.ACTIVE) {
@@ -1704,6 +1845,9 @@ function createTriviaService(options = {}) {
     forceCompleteRound,
     advanceRound,
     nextHubQuestion,
+    finishHub,
+    getAuthoritativeView,
+    rebindMessageId,
     abortRound,
     releaseHubSession,
     recoverStaleSession,
@@ -1752,6 +1896,8 @@ module.exports = {
   buildFinalScoreboardText,
   buildAnswerKeyboard,
   buildHubResultKeyboard,
+  plainTriviaKeyboardExtra,
+  buildHubFinishedText,
   buildTriviaChooserText,
   buildTriviaChooserKeyboard,
   formatTriviaXpStatusLine,
@@ -1769,6 +1915,7 @@ module.exports = {
     defaultService.isCommunityTriviaOpen(...args),
   isPersonalTriviaOpen: (...args) =>
     defaultService.isPersonalTriviaOpen(...args),
+  getPersonalSession: (...args) => defaultService.getPersonalSession(...args),
   setTriviaMessageId: (...args) => defaultService.setMessageId(...args),
   resetTrivia: (...args) => defaultService.reset(...args),
 };

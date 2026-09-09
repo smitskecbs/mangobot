@@ -304,7 +304,11 @@ const CORE_QUESTIONS = [
   q("ent-26", "entertainment", "Which of these is a string instrument?", ["Guitar", "Trumpet", "Flute", "Timpani"]),
 ];
 
-const TRIVIA_QUESTIONS = Object.freeze(CORE_QUESTIONS.concat(buildMathQuestions()));
+const EXTRA_QUESTIONS = require("./triviaQuestionBankExtra");
+
+const TRIVIA_QUESTIONS = Object.freeze(
+  CORE_QUESTIONS.concat(buildMathQuestions(), EXTRA_QUESTIONS)
+);
 
 function getCategoryMeta(categoryId) {
   const id = String(categoryId || "");
@@ -348,6 +352,19 @@ function countQuestionsByCategory(questions = TRIVIA_QUESTIONS) {
   return counts;
 }
 
+function countQuestionsByDifficulty(questions = TRIVIA_QUESTIONS) {
+  const counts = { easy: 0, medium: 0, hard: 0 };
+  for (const row of questions || []) {
+    const difficulty = row && row.difficulty ? row.difficulty : "easy";
+    if (Object.prototype.hasOwnProperty.call(counts, difficulty)) {
+      counts[difficulty] += 1;
+    } else {
+      counts.easy += 1;
+    }
+  }
+  return counts;
+}
+
 /**
  * Pick a question avoiding recent IDs. Safe fallback when the pool is empty.
  * @param {ReadonlyArray<object>} questions
@@ -361,7 +378,8 @@ function pickTriviaQuestion(
   recentIds,
   random,
   windowSize = ANTI_REPEAT_WINDOW,
-  category
+  category,
+  options = {}
 ) {
   const bank = filterQuestionsByCategory(questions, category);
   if (bank.length === 0) {
@@ -369,17 +387,48 @@ function pickTriviaQuestion(
   }
   const recent = Array.isArray(recentIds) ? recentIds.slice() : [];
   const windowed = recent.slice(-Math.max(0, windowSize));
-  const recentSet = new Set(windowed);
-  let pool = bank.filter((item) => item && !recentSet.has(item.id));
+  const exclude = new Set(windowed);
+  const extraExclude = options && Array.isArray(options.excludeIds) ? options.excludeIds : [];
+  for (const id of extraExclude) {
+    if (id) {
+      exclude.add(id);
+    }
+  }
+  let pool = bank.filter((item) => item && !exclude.has(item.id));
+  if (pool.length === 0) {
+    pool = bank.filter((item) => item && !new Set(extraExclude).has(item.id));
+  }
   if (pool.length === 0) {
     pool = bank.slice();
   }
+  const buckets = { easy: [], medium: [], hard: [] };
+  for (const item of pool) {
+    const difficulty = item && item.difficulty ? item.difficulty : "easy";
+    if (buckets[difficulty]) {
+      buckets[difficulty].push(item);
+    } else {
+      buckets.easy.push(item);
+    }
+  }
   const roll = typeof random === "function" ? random() : Math.random();
+  const order =
+    roll < 0.25
+      ? ["easy", "medium", "hard"]
+      : roll < 0.7
+        ? ["medium", "easy", "hard"]
+        : ["hard", "medium", "easy"];
+  let chosen = pool;
+  for (const key of order) {
+    if (buckets[key].length) {
+      chosen = buckets[key];
+      break;
+    }
+  }
   const idx = Math.min(
-    pool.length - 1,
-    Math.max(0, Math.floor(roll * pool.length))
+    chosen.length - 1,
+    Math.max(0, Math.floor((typeof random === "function" ? random() : Math.random()) * chosen.length))
   );
-  const picked = pool[idx];
+  const picked = chosen[idx];
   const nextRecent = windowed.concat(picked.id);
   while (nextRecent.length > windowSize) {
     nextRecent.shift();
@@ -456,7 +505,6 @@ function validateTriviaQuestionBank(questions = TRIVIA_QUESTIONS) {
       }
     }
     if (
-      item.difficulty != null &&
       item.difficulty !== "easy" &&
       item.difficulty !== "medium" &&
       item.difficulty !== "hard"
@@ -486,6 +534,7 @@ module.exports = {
   isHubCategoryId,
   filterQuestionsByCategory,
   countQuestionsByCategory,
+  countQuestionsByDifficulty,
   pickTriviaQuestion,
   validateTriviaQuestionBank,
 };

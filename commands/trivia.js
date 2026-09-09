@@ -25,6 +25,7 @@ const {
   buildTriviaChooserText,
   buildTriviaChooserKeyboard,
   formatTriviaUnauthorizedToast,
+  plainTriviaKeyboardExtra,
 } = require("../services/trivia");
 const { isHubCategoryId } = require("../services/triviaQuestions");
 const {
@@ -77,6 +78,138 @@ function resolveTriviaRuntime(options = {}) {
     return options.getRuntimeFn();
   }
   return getTriviaRuntime();
+}
+
+function isTelegramMessageGone(err) {
+  const msg = String((err && err.description) || (err && err.message) || err || "").toLowerCase();
+  return (
+    msg.includes("message to edit not found") ||
+    msg.includes("message to delete not found") ||
+    msg.includes("message can't be edited") ||
+    msg.includes("message identifier is not specified")
+  );
+}
+
+function isTelegramNotModified(err) {
+  const msg = String((err && err.description) || (err && err.message) || err || "").toLowerCase();
+  return msg.includes("message is not modified");
+}
+
+function triviaEditExtra(ctx, extra) {
+  return withCtxThreadExtra(ctx, plainTriviaKeyboardExtra(extra));
+}
+
+function callbackMessageOwnsSession(session, ctx) {
+  if (!session || session.messageId == null) {
+    return true;
+  }
+  const mid = callbackMessageId(ctx);
+  if (mid == null) {
+    return true;
+  }
+  return String(session.messageId) === String(mid);
+}
+
+async function editTriviaMessage(ctx, text, extra) {
+  const markup = triviaEditExtra(ctx, extra);
+  if (!ctx || typeof ctx.editMessageText !== "function") {
+    return { ok: false, reason: "no-edit" };
+  }
+  try {
+    await ctx.editMessageText(text, markup);
+    return { ok: true };
+  } catch (err) {
+    if (isTelegramNotModified(err) && typeof ctx.editMessageReplyMarkup === "function") {
+      try {
+        await ctx.editMessageReplyMarkup(markup);
+        return { ok: true };
+      } catch (err2) {
+        if (isTelegramMessageGone(err2)) {
+          return { ok: false, reason: "missing-message" };
+        }
+      }
+    }
+    if (isTelegramMessageGone(err)) {
+      return { ok: false, reason: "missing-message" };
+    }
+    logError(
+      "[trivia] editMessageText failed:",
+      err && err.message ? err.message : err
+    );
+    if (typeof ctx.editMessageReplyMarkup === "function") {
+      try {
+        await ctx.editMessageReplyMarkup(markup);
+        return { ok: true, markupOnly: true };
+      } catch (_err2) {
+        /* ignore */
+      }
+    }
+    return { ok: false, reason: "edit-failed" };
+  }
+}
+
+async function tryEditExistingTriviaMessage(ctx, session, view) {
+  if (
+    !ctx ||
+    !ctx.telegram ||
+    typeof ctx.telegram.editMessageText !== "function" ||
+    !session ||
+    session.messageId == null
+  ) {
+    return { ok: false, reason: "no-message" };
+  }
+  const extra = triviaEditExtra(ctx, view.extra);
+  try {
+    await ctx.telegram.editMessageText(
+      session.chatId,
+      session.messageId,
+      undefined,
+      view.text,
+      extra
+    );
+    return { ok: true };
+  } catch (err) {
+    if (isTelegramNotModified(err)) {
+      return { ok: true };
+    }
+    if (isTelegramMessageGone(err)) {
+      return { ok: false, reason: "missing-message" };
+    }
+    return { ok: false, reason: "edit-failed", error: err };
+  }
+}
+
+async function resumePersonalTrivia(ctx, runtime, options = {}) {
+  if (!runtime || typeof runtime.getPersonalSession !== "function") {
+    return { ok: false, reason: "no-runtime" };
+  }
+  if (!ctx || !ctx.chat || !ctx.from) {
+    return { ok: false, reason: "no-user" };
+  }
+  const existing = runtime.getPersonalSession(ctx.chat.id, ctx.from.id);
+  if (!existing || existing.status !== "active") {
+    return { ok: false, reason: "no-session" };
+  }
+  const xpStatus = getTriviaAttemptStatus(ctx.from.id, options.pointsFile);
+  const view = runtime.getAuthoritativeView(existing.id, xpStatus);
+  if (!view || !view.ok) {
+    return { ok: false, reason: "no-view" };
+  }
+
+  const liveEdit = await tryEditExistingTriviaMessage(ctx, existing, view);
+  if (liveEdit.ok) {
+    return { ok: true, reused: true, session: view.session };
+  }
+
+  const sent = await presentTriviaView(ctx, view.text, view.extra);
+  const messageId =
+    sent && sent.message_id != null
+      ? sent.message_id
+      : callbackMessageId(ctx);
+  if (messageId != null && typeof runtime.rebindMessageId === "function") {
+    runtime.rebindMessageId(existing.id, messageId);
+  }
+  return { ok: true, reused: false, rebound: true, session: view.session, sent };
 }
 
 function callbackMessageId(ctx) {
@@ -207,7 +340,7 @@ function wireTriviaRuntime(runtime, botOrTelegram, options = {}) {
 }
 
 async function presentTriviaView(ctx, text, extra) {
-  const withThread = withCtxThreadExtra(ctx, extra || undefined);
+  const withThread = triviaEditExtra(ctx, extra);
   if (ctx && ctx.callbackQuery && typeof ctx.editMessageText === "function") {
     try {
       return await ctx.editMessageText(text, withThread);
@@ -317,9 +450,20 @@ async function handleTrivia(ctx, options = {}) {
     return ctx.reply(busyText);
   }
 
+  const runtime = resolveTriviaRuntime(options);
+  const resumed = await resumePersonalTrivia(ctx, runtime, options);
+  if (resumed.ok) {
+    if (typeof ctx.answerCbQuery === "function") {
+      await ctx.answerCbQuery(
+        resumed.reused ? "Trivia is still open." : ""
+      ).catch(() => {});
+    }
+    return resumed.sent;
+  }
+
   const chooser = chooserPayload(ctx.from.id, options);
   const sent = await presentTriviaView(ctx, chooser.text, chooser.extra);
-  bindChooserOwner(resolveTriviaRuntime(options), ctx, sent);
+  bindChooserOwner(runtime, ctx, sent);
   return sent;
 }
 
@@ -397,6 +541,11 @@ async function handleTriviaCategoryStart(ctx, options = {}) {
   });
   if (!result.ok) {
     if (result.reason === "already-active") {
+      const resumed = await resumePersonalTrivia(ctx, runtime, options);
+      if (resumed.ok) {
+        await answer(resumed.reused ? "Trivia is still open." : "");
+        return resumed.sent;
+      }
       await answer("🧠 A Trivia challenge is already open.");
       return ctx.reply("🧠 A Trivia challenge is already open.");
     }
@@ -481,6 +630,10 @@ async function handleTriviaHubCallback(ctx, options = {}) {
       await rejectStaleTriviaMessage(ctx, parsed && parsed.sessionId);
       return;
     }
+    if (!callbackMessageOwnsSession(session, ctx)) {
+      await answer("This question already ended.");
+      return;
+    }
     if (!session.hubMode || personalSessionOwnerMismatch(session, ctx.from && ctx.from.id)) {
       if (personalSessionOwnerMismatch(session, ctx.from && ctx.from.id)) {
         await answer(formatTriviaUnauthorizedToast(session.ownerDisplayName));
@@ -513,18 +666,81 @@ async function handleTriviaHubCallback(ctx, options = {}) {
       return;
     }
     await answer();
-    if (typeof ctx.editMessageText === "function") {
-      try {
-        await ctx.editMessageText(
-          result.text,
-          result.keyboard || emptyInlineKeyboardExtra()
-        );
-      } catch (err) {
-        logError(
-          "[trivia] next edit failed:",
-          err && err.message ? err.message : err
-        );
+    const edited = await editTriviaMessage(
+      ctx,
+      result.text,
+      result.keyboard || emptyInlineKeyboardExtra()
+    );
+    if (!edited.ok && edited.reason === "missing-message") {
+      const sent = await ctx.reply(
+        result.text,
+        triviaEditExtra(ctx, result.keyboard)
+      );
+      const messageId = sent && sent.message_id;
+      if (messageId != null && result.session && runtime.rebindMessageId) {
+        runtime.rebindMessageId(result.session.id, messageId);
       }
+    }
+    return;
+  }
+
+  if (parsed.action === "finish") {
+    if (ctx.from && ctx.from.is_bot) {
+      await answer("Bots cannot play.");
+      return;
+    }
+    if (!parsed.sessionId || typeof runtime.finishHub !== "function") {
+      await answer(GAME_OVER_TOAST);
+      await rejectStaleTriviaMessage(ctx, parsed && parsed.sessionId);
+      return;
+    }
+    const finishSession = runtime.getSession(parsed.sessionId);
+    if (finishSession && !callbackMessageOwnsSession(finishSession, ctx)) {
+      await answer("This question already ended.");
+      return;
+    }
+    const finished = runtime.finishHub({
+      sessionId: parsed.sessionId,
+      userId: ctx.from.id,
+      questionGen: parsed.questionGen,
+      chatId: ctx.chat && ctx.chat.id,
+    });
+    if (!finished.ok) {
+      if (finished.reason === "not-owner") {
+        await answer(formatTriviaUnauthorizedToast(finished.ownerDisplayName));
+        return;
+      }
+      if (finished.reason === "stale-question") {
+        await answer("This question already ended.");
+        return;
+      }
+      await answer(GAME_OVER_TOAST);
+      await rejectStaleTriviaMessage(ctx, parsed && parsed.sessionId);
+      return;
+    }
+    await answer();
+    await editTriviaMessage(
+      ctx,
+      finished.rendered.text,
+      finished.rendered.extra
+    );
+    const sessionForCleanup = finished.session
+      ? {
+          ...finished.session,
+          messageId:
+            finished.session.messageId != null
+              ? finished.session.messageId
+              : callbackMessageId(ctx),
+        }
+      : finished.session;
+    if (sessionForCleanup && sessionForCleanup.messageId != null) {
+      scheduleGameMessageCleanup({
+        gameType: GAME_TYPE.TRIVIA,
+        sessionId: sessionForCleanup.id,
+        chatId: sessionForCleanup.chatId,
+        messageIds: [sessionForCleanup.messageId],
+        telegram: ctx.telegram,
+      });
     }
     return;
   }
@@ -653,6 +869,15 @@ async function handleTriviaAnswer(ctx, options = {}) {
   const chatId = ctx.chat && ctx.chat.id;
   const displayName = sanitizePvpDisplayName(ctx.from);
 
+  const liveSession =
+    runtime && typeof runtime.getSession === "function"
+      ? runtime.getSession(parsed.sessionId)
+      : null;
+  if (liveSession && !callbackMessageOwnsSession(liveSession, ctx)) {
+    await answer("This question already ended.");
+    return;
+  }
+
   const result = await runtime.tryAnswer({
     sessionId: parsed.sessionId,
     userId: ctx.from.id,
@@ -708,18 +933,12 @@ async function handleTriviaAnswer(ctx, options = {}) {
     }
   }
 
-  if (rendered && typeof ctx.editMessageText === "function") {
-    try {
-      await ctx.editMessageText(
-        rendered.text,
-        rendered.extra || emptyInlineKeyboardExtra()
-      );
-    } catch (err) {
-      logError(
-        "[trivia] editMessageText failed:",
-        err && err.message ? err.message : err
-      );
-    }
+  if (rendered) {
+    await editTriviaMessage(
+      ctx,
+      rendered.text,
+      rendered.extra || emptyInlineKeyboardExtra()
+    );
   }
 }
 
@@ -732,7 +951,7 @@ module.exports = (bot) => {
   bot.action(/^trivia:[a-f0-9]+:(?:\d+:)?[0-3]$/i, (ctx) =>
     Promise.resolve(handleTriviaAnswer(ctx)).catch(() => undefined)
   );
-  bot.action(/^trivia:(hub|next|change|games)(?::[a-f0-9]+)?(?::\d+)?$/i, (ctx) =>
+  bot.action(/^trivia:(hub|next|change|games|finish)(?::[a-f0-9]+)?(?::\d+)?$/i, (ctx) =>
     Promise.resolve(handleTriviaHubCallback(ctx)).catch(() => undefined)
   );
   bot.action(
