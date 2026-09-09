@@ -98,6 +98,8 @@ async function runTest(name, fn) {
     throw err;
   } finally {
     getMangoBombRuntime().reset();
+    clearAllExpiredMessageCleanups();
+    clearAllGameMessageCleanups();
   }
 }
 

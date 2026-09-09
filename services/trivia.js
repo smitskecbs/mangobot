@@ -32,6 +32,7 @@ const {
   FINAL_STATE,
   GAME_MESSAGE_CLEANUP_DELAY_MS,
   buildFinalGameText,
+  withGameCleanupFooter,
   logGameCleanup,
   logCleanupRenderFailed,
   emptyGameKeyboardExtra,
@@ -42,7 +43,7 @@ const TRIVIA_ROUND_QUESTIONS = 5;
 const TRIVIA_QUESTION_TIMEOUT_MS = 60 * 1000;
 const TRIVIA_NEXT_QUESTION_DELAY_MS = 5 * 1000;
 const TRIVIA_WRONG_ANSWER_NEXT_DELAY_MS = 2500;
-const TRIVIA_STALE_MS = GAME_MESSAGE_CLEANUP_DELAY_MS;
+const TRIVIA_STALE_MS = 5 * 60 * 1000;
 const LETTERS = Object.freeze(["A", "B", "C", "D"]);
 
 const STATUS = Object.freeze({
@@ -1036,7 +1037,9 @@ function createTriviaService(options = {}) {
       claim,
     };
     session.lastXpSummary = xpSummary;
-    const text = buildFinalScoreboardText(session, xpSummary);
+    const text = withGameCleanupFooter(
+      buildFinalScoreboardText(session, xpSummary)
+    );
     logGameCleanup(GAME_TYPE.TRIVIA, FINAL_STATE.FINISHED);
 
     const payload = {

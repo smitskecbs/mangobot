@@ -38,7 +38,7 @@ const GROUP_RANKINGS_BODY =
   "See how you compare on XP, weekly score, and Activity Streak.";
 const GROUP_GAMES_TITLE = "🎮 Games";
 const GROUP_GAMES_BODY =
-  "Play here.\nSnake and Bounch open privately with your profile.\nTic-Tac-Toe, Connect Four, Checkers, Rock Paper Scissors, Trivia, ManGo Bomb and Blackjack start in the Games topic.";
+  "Play here.\nSnake and Bounch open privately with your profile.\nTic-Tac-Toe, Connect Four, Checkers, Rock Paper Scissors, Trivia, ManGo Bomb, Blackjack and Higher or Lower start in the Games topic.";
 const GROUP_PROFILE_TITLE = "👤 My Profile";
 const GROUP_PROFILE_BODY = "Your ManGo progress at a glance.";
 const MAIN_MENU_BUTTON_LABEL = "🥭 Main Menu";
@@ -47,7 +47,7 @@ const PRIVATE_GAMES_TEXT = `🎮 Games
 Play Snake and Bounch here.
 Snake has 4 difficulties: Classic, Walls, Center, Danger Zone. Harder = more points. One leaderboard. No unlocking.
 
-Tic-Tac-Toe, Connect Four, Checkers, Rock Paper Scissors, Trivia, ManGo Bomb and Blackjack are played in the ManGo group Games topic.`;
+Tic-Tac-Toe, Connect Four, Checkers, Rock Paper Scissors, Trivia, ManGo Bomb, Blackjack and Higher or Lower are played in the ManGo group Games topic.`;
 
 const GROUP_MENU_TEXT = `${GROUP_MENU_TITLE}\n\n${GROUP_MENU_BODY}`;
 
@@ -83,6 +83,7 @@ const GROUP_MENU_CALLBACK = Object.freeze({
   TRIVIA: "gmenu:trivia",
   MANGOBOMB: "gmenu:mangobomb",
   BLACKJACK: "gmenu:blackjack",
+  HOL: "gmenu:hol",
   BUILDER: "gmenu:builder",
   SHOP: "gmenu:shop",
   DAILY_QUEST: "gmenu:dquest",
@@ -534,6 +535,7 @@ function getGroupGamesMenuExtra(ctx) {
   ]);
   rows.push([
     Markup.button.callback("ManGo Bomb", GROUP_MENU_CALLBACK.MANGOBOMB),
+    Markup.button.callback("📈 Higher or Lower", GROUP_MENU_CALLBACK.HOL),
   ]);
   rows.push([Markup.button.callback("⬅️ Back", GROUP_MENU_CALLBACK.BACK)]);
 
@@ -639,7 +641,8 @@ function isGameMenuCallback(data) {
     data === GROUP_MENU_CALLBACK.RPS ||
     data === GROUP_MENU_CALLBACK.TRIVIA ||
     data === GROUP_MENU_CALLBACK.MANGOBOMB ||
-    data === GROUP_MENU_CALLBACK.BLACKJACK
+    data === GROUP_MENU_CALLBACK.BLACKJACK ||
+    data === GROUP_MENU_CALLBACK.HOL
   );
 }
 

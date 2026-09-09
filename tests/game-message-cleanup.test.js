@@ -14,13 +14,19 @@ const {
 const { createPvpSessionManager } = require("../services/pvpSessionManager");
 const {
   GAME_TYPE,
+  GAME_CLEANUP_FOOTER,
   GAME_MESSAGE_CLEANUP_DELAY_MS,
   scheduleGameMessageCleanup,
   addGameMessageIds,
   getScheduledGameCleanupIds,
   clearAllGameMessageCleanups,
   getPendingGameMessageCleanupCount,
+  withGameCleanupFooter,
 } = require("../utils/gameCleanup");
+const { GAMES_TOPIC_REQUIRED_MESSAGE } = require("../utils/gameTopic");
+const { handlePvpCallback } = require("../events/pvp-callbacks");
+const { parsePvpCallbackData } = require("../services/ticTacToe");
+const { createPvpMatchReservation } = require("../services/pvpMatchReservation");
 const {
   isCommunityChallengeBusy,
 } = require("../services/communityGameState");
@@ -152,7 +158,7 @@ async function runTest(name, fn) {
 }
 
 async function main() {
-  assert.strictEqual(GAME_MESSAGE_CLEANUP_DELAY_MS, 5 * 60 * 1000);
+    assert.strictEqual(GAME_MESSAGE_CLEANUP_DELAY_MS, 60 * 1000);
 
   await runTest("1. Trivia normal end releases active state", async () => {
     const { service, timers } = createTrivia();
@@ -530,6 +536,232 @@ async function main() {
         text: "What are you building or learning right now?",
       }).includes("What are you building or learning right now?")
     );
+  });
+
+  await runTest("A. active game message is not cleaned", async () => {
+    const timers = createFakeTimers();
+    const deleted = [];
+    const manager = createPvpSessionManager({
+      now: timers.now,
+      setTimeoutFn: timers.setTimeout,
+      clearTimeoutFn: timers.clearTimeout,
+    });
+    const ttt = createTicTacToeService({
+      manager,
+      now: timers.now,
+      joinTimeoutMs: 10 * 60 * 1000,
+    });
+    const started = ttt.startChallenge({
+      chatId: COMMUNITY_CHAT,
+      starter: { userId: USER_A, displayName: "Kevin", isBot: false },
+    });
+    ttt.setMessageId(started.session.id, 44);
+    assert.strictEqual(getPendingGameMessageCleanupCount(), 0);
+    timers.advance(GAME_MESSAGE_CLEANUP_DELAY_MS);
+    await Promise.resolve();
+    assert.strictEqual(deleted.length, 0);
+    assert.strictEqual(ttt.getSession(started.session.id).status, "waiting");
+  });
+
+  await runTest("B-C. terminal keyboard stripped and footer applied", async () => {
+    const expired = require("../services/ticTacToe").renderMessage({
+      status: "expired",
+      players: { X: { displayName: "Kevin" } },
+    });
+    assert.deepStrictEqual(expired.extra.reply_markup.inline_keyboard, []);
+    assert.ok(expired.text.includes(GAME_CLEANUP_FOOTER));
+    assert.ok(withGameCleanupFooter("done").includes(GAME_CLEANUP_FOOTER));
+  });
+
+  await runTest("D-E. terminal result deletes after delay; session already free", async () => {
+    const { service, timers, deleted } = createTrivia({ cleanupDelayMs: 60_000 });
+    const started = startAuto(service, 77);
+    service.abortRound("cancelled");
+    assert.strictEqual(service.isTriviaOpen(), false);
+    assert.strictEqual(deleted.length, 0);
+    timers.advance(59_999);
+    await Promise.resolve();
+    assert.strictEqual(deleted.length, 0);
+    timers.advance(1);
+    await Promise.resolve();
+    assert.ok(deleted.some((d) => d.messageId === 77));
+  });
+
+  await runTest("F-G. stale callback is game-ended, not Games-topic", async () => {
+    const ctx = {
+      chat: { id: COMMUNITY_CHAT, type: "supergroup" },
+      from: { id: USER_A, first_name: "Kevin", is_bot: false },
+      callbackQuery: {
+        data: "pvp:ttt:join:aabbccdd",
+        message: {
+          message_id: 12,
+          chat: { id: COMMUNITY_CHAT },
+          reply_markup: { inline_keyboard: [[{ text: "JOIN", callback_data: "x" }]] },
+        },
+      },
+      answered: [],
+      edits: [],
+      async answerCbQuery(text) {
+        this.answered.push(text || "");
+      },
+      async editMessageText(text, extra) {
+        this.edits.push({ text, extra });
+      },
+    };
+    const manager = createPvpSessionManager();
+    const ttt = createTicTacToeService({ manager });
+    await handlePvpCallback(ctx, {
+      runtime: ttt,
+      parseCallbackData: parsePvpCallbackData,
+    });
+    const blob = JSON.stringify(ctx.answered) + JSON.stringify(ctx.edits);
+    assert.ok(!blob.includes("Games are played in the Games topic"));
+    assert.ok(!blob.includes(GAMES_TOPIC_REQUIRED_MESSAGE));
+    assert.ok(
+      ctx.answered.some((t) => String(t).includes("ended") || String(t).includes("over"))
+    );
+    assert.ok(ctx.edits[0].text.includes(GAME_CLEANUP_FOOTER));
+    assert.deepStrictEqual(ctx.edits[0].extra.reply_markup.inline_keyboard, []);
+  });
+
+  await runTest("H. valid game start in wrong topic still gets Games-topic guidance", async () => {
+    assert.ok(GAMES_TOPIC_REQUIRED_MESSAGE.includes("Games topic"));
+  });
+
+  await runTest("I-J. old cleanup cannot delete new replay or release new reservation", async () => {
+    const timers = createFakeTimers();
+    const deleted = [];
+    const reservation = createPvpMatchReservation();
+    const live = { status: "active", messageId: 900, round: 2 };
+    scheduleGameMessageCleanup({
+      gameType: GAME_TYPE.RPS,
+      sessionId: "old-round",
+      chatId: COMMUNITY_CHAT,
+      messageIds: [900],
+      generation: 1,
+      delayMs: 10,
+      setTimeoutFn: timers.setTimeout,
+      clearTimeoutFn: timers.clearTimeout,
+      deleteMessageFn: async (chatId, messageId) => {
+        deleted.push(messageId);
+      },
+      shouldDeleteFn: () => {
+        if (live.status === "active") return false;
+        if (String(live.round) !== "1") return false;
+        return true;
+      },
+    });
+    reservation.tryReserve(USER_A, "rps", "new-session");
+    timers.advance(10);
+    await Promise.resolve();
+    assert.deepStrictEqual(deleted, []);
+    assert.strictEqual(reservation.has(USER_A), true);
+  });
+
+  await runTest("K-L. user and unrelated bot messages are never deleted", async () => {
+    const timers = createFakeTimers();
+    const deleted = [];
+    scheduleGameMessageCleanup({
+      gameType: GAME_TYPE.TICTACTOE,
+      sessionId: "s1",
+      chatId: COMMUNITY_CHAT,
+      messageIds: [501],
+      delayMs: 5,
+      setTimeoutFn: timers.setTimeout,
+      clearTimeoutFn: timers.clearTimeout,
+      deleteMessageFn: async (chatId, messageId) => {
+        deleted.push(messageId);
+      },
+    });
+    timers.advance(5);
+    await Promise.resolve();
+    assert.deepStrictEqual(deleted, [501]);
+    assert.ok(!deleted.includes(1));
+    assert.ok(!deleted.includes(9999));
+  });
+
+  await runTest("M. cleanup Telegram failure is swallowed safely", async () => {
+    const timers = createFakeTimers();
+    let logged = 0;
+    scheduleGameMessageCleanup({
+      gameType: GAME_TYPE.TICTACTOE,
+      sessionId: "s-fail",
+      chatId: COMMUNITY_CHAT,
+      messageIds: [8],
+      delayMs: 1,
+      setTimeoutFn: timers.setTimeout,
+      clearTimeoutFn: timers.clearTimeout,
+      deleteMessageFn: async () => {
+        throw new Error("telegram down");
+      },
+      logErrorFn: () => {
+        logged += 1;
+      },
+    });
+    timers.advance(1);
+    await Promise.resolve();
+    assert.strictEqual(logged, 1);
+    assert.strictEqual(getPendingGameMessageCleanupCount(), 0);
+  });
+
+  await runTest("N. no retry/delete loop after failure", async () => {
+    const timers = createFakeTimers();
+    let calls = 0;
+    scheduleGameMessageCleanup({
+      gameType: GAME_TYPE.TICTACTOE,
+      sessionId: "s-loop",
+      chatId: COMMUNITY_CHAT,
+      messageIds: [9],
+      delayMs: 1,
+      setTimeoutFn: timers.setTimeout,
+      clearTimeoutFn: timers.clearTimeout,
+      deleteMessageFn: async () => {
+        calls += 1;
+        throw new Error("fail");
+      },
+      logErrorFn: () => {},
+    });
+    timers.advance(1);
+    await Promise.resolve();
+    timers.advance(60_000);
+    await Promise.resolve();
+    assert.strictEqual(calls, 1);
+    assert.strictEqual(getPendingGameMessageCleanupCount(), 0);
+  });
+
+  await runTest("O. no cross-game message deletion", async () => {
+    const timers = createFakeTimers();
+    const deleted = [];
+    scheduleGameMessageCleanup({
+      gameType: GAME_TYPE.TICTACTOE,
+      sessionId: "ttt-1",
+      chatId: COMMUNITY_CHAT,
+      messageIds: [10],
+      delayMs: 5,
+      setTimeoutFn: timers.setTimeout,
+      clearTimeoutFn: timers.clearTimeout,
+      deleteMessageFn: async (chatId, messageId) => {
+        deleted.push({ game: "ttt", messageId });
+      },
+    });
+    scheduleGameMessageCleanup({
+      gameType: GAME_TYPE.CHECKERS,
+      sessionId: "chk-1",
+      chatId: COMMUNITY_CHAT,
+      messageIds: [11],
+      delayMs: 5,
+      setTimeoutFn: timers.setTimeout,
+      clearTimeoutFn: timers.clearTimeout,
+      deleteMessageFn: async (chatId, messageId) => {
+        deleted.push({ game: "chk", messageId });
+      },
+    });
+    timers.advance(5);
+    await Promise.resolve();
+    assert.deepStrictEqual(deleted, [
+      { game: "ttt", messageId: 10 },
+      { game: "chk", messageId: 11 },
+    ]);
   });
 
   restoreEnv();

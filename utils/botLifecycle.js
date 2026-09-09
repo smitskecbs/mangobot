@@ -170,6 +170,15 @@ function startBotRuntime({
       /* ignore */
     }
     try {
+      const { getHigherOrLowerRuntime } = require("../services/higherOrLower");
+      const runtime = getHigherOrLowerRuntime();
+      if (runtime && typeof runtime.clearAllTimers === "function") {
+        runtime.clearAllTimers();
+      }
+    } catch (_err) {
+      /* ignore */
+    }
+    try {
       const { getSharedPvpSessionManager } = require("../services/pvpSessionManager");
       getSharedPvpSessionManager().resetAll();
     } catch (_err) {

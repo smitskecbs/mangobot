@@ -31,6 +31,7 @@ const { emptyInlineKeyboardExtra } = require("../utils/expiredMessageCleanup");
 const {
   GAME_TYPE,
   stripStaleCallbackButtons,
+  scheduleGameMessageCleanup,
 } = require("../utils/gameCleanup");
 const {
   assertCanStartInteractiveGame,
@@ -326,6 +327,15 @@ async function handleBlackjackCallback(ctx, options = {}) {
         gameType: GAME_TYPE.BLACKJACK,
         text: finalUi && finalUi.text,
       });
+      if (cbMessage && cbMessage.message_id != null && chatId != null) {
+        scheduleGameMessageCleanup({
+          gameType: GAME_TYPE.BLACKJACK,
+          sessionId: parsed.gameId,
+          chatId,
+          messageIds: [cbMessage.message_id],
+          telegram: ctx.telegram,
+        });
+      }
     }
     return;
   }

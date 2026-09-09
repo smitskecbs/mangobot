@@ -197,13 +197,13 @@ async function main() {
   await runTest("production lobby is 60s and human turn is 120s", async () => {
     assert.strictEqual(JOIN_TIMEOUT_MS, 60 * 1000);
     assert.strictEqual(TURN_TIMEOUT_MS, 120 * 1000);
-    assert.strictEqual(GAME_MESSAGE_CLEANUP_DELAY_MS, 5 * 60 * 1000);
+    assert.strictEqual(GAME_MESSAGE_CLEANUP_DELAY_MS, 60 * 1000);
     const { service } = createService();
     assert.strictEqual(service.joinTimeoutMs, JOIN_TIMEOUT_MS);
     assert.strictEqual(service.turnTimeoutMs, TURN_TIMEOUT_MS);
   });
 
-  await runTest("Kevin vs Pippi stays ACTIVE past lobby timeout and 5-minute cleanup bound", async () => {
+  await runTest("Kevin vs Pippi stays ACTIVE past lobby timeout and 5-minute play window", async () => {
     const { service, timers } = createService();
     const started = startKevinLobby(service);
     const raw = service.manager.getSession(started.session.id);
@@ -230,7 +230,7 @@ async function main() {
 
     const generations = [];
     let elapsed = 0;
-    while (elapsed <= GAME_MESSAGE_CLEANUP_DELAY_MS) {
+    while (elapsed <= 5 * 60 * 1000) {
       const before = service.manager.getSession(started.session.id).turnGeneration;
       const moved = await playOneLegalMove(service, started.session.id);
       assert.notStrictEqual(moved.session.status, STATUS.EXPIRED);

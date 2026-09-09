@@ -30,6 +30,7 @@ const {
 const {
   GAME_TYPE,
   stripStaleCallbackButtons,
+  scheduleGameMessageCleanup,
 } = require("../utils/gameCleanup");
 const {
   assertCanStartInteractiveGame,
@@ -454,6 +455,15 @@ async function handleMangoBombCallback(ctx, options = {}) {
         gameType: GAME_TYPE.MANGOBOMB,
         text: finalUi && finalUi.text,
       });
+      if (cbMessage && cbMessage.message_id != null && chatId != null) {
+        scheduleGameMessageCleanup({
+          gameType: GAME_TYPE.MANGOBOMB,
+          sessionId: parsed.gameId,
+          chatId,
+          messageIds: [cbMessage.message_id],
+          telegram: ctx.telegram,
+        });
+      }
     }
     return;
   }

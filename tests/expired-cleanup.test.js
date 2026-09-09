@@ -84,7 +84,7 @@ async function main() {
     const extra = emptyInlineKeyboardExtra();
     assert.deepStrictEqual(extra.reply_markup.inline_keyboard, []);
     assert.strictEqual(EXPIRED_MESSAGE_CLEANUP_MS, 30_000);
-    assert.strictEqual(GAME_MESSAGE_CLEANUP_DELAY_MS, 5 * 60 * 1000);
+    assert.strictEqual(GAME_MESSAGE_CLEANUP_DELAY_MS, 60 * 1000);
   });
 
   await runTest("ChatFight timeout edits expired + schedules cleanup", async () => {
@@ -148,7 +148,7 @@ async function main() {
     const snap = fight.getFightSnapshot();
     const answer = snap.acceptedAnswers[0];
     fight.tryClaimWinner(111, COMMUNITY_CHAT, answer);
-    timers.advance(90_000);
+    timers.advance(30_000);
     await Promise.resolve();
     assert.strictEqual(deleted.length, 0);
     timers.advance(GAME_MESSAGE_CLEANUP_DELAY_MS);

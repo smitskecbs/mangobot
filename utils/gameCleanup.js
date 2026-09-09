@@ -2,18 +2,25 @@
  * Shared final-message + stale-button cleanup for Telegram group games.
  * Rendering is output-only; callers must already have closed gameplay state.
  *
+ * Gameplay/session/reservation release is independent of Telegram deletion.
  * Message deletion is best-effort, keyed by gameType+sessionId, and only
  * deletes Telegram IDs that were explicitly registered for that session.
  * Community/scheduler open-question posts must never be registered here.
+ *
+ * Restart drops in-memory timers. A later stale tap strips buttons and
+ * re-schedules deletion of that one known callback message.
  */
 
 const { emptyInlineKeyboardExtra } = require("./expiredMessageCleanup");
 const { log, error: logError } = require("./logger");
 
 /** Wait after a game has definitively ended before deleting bot game messages. */
-const GAME_MESSAGE_CLEANUP_DELAY_MS = 5 * 60 * 1000;
+const GAME_MESSAGE_CLEANUP_DELAY_MS = 60 * 1000;
 
 const GAME_OVER_TOAST = "This game is over.";
+const GAME_ENDED_TOAST = "This game has ended.";
+const GAME_CLEANUP_FOOTER =
+  "🧹 This game message will be cleaned up automatically.";
 
 const FINAL_STATE = Object.freeze({
   EMPTY: "empty",
@@ -32,6 +39,7 @@ const GAME_TYPE = Object.freeze({
   CHATFIGHT: "chatfight",
   BLACKJACK: "blackjack",
   RPS: "rps",
+  HOL: "hol",
 });
 
 function isMessageNotModifiedError(err) {
@@ -68,6 +76,9 @@ function titleFor(gameType) {
   if (gameType === GAME_TYPE.RPS) {
     return "✊✋✌️ Rock Paper Scissors cancelled";
   }
+  if (gameType === GAME_TYPE.HOL) {
+    return "📈 Higher or Lower cancelled";
+  }
   return "🎮 Game cancelled";
 }
 
@@ -87,8 +98,23 @@ function bodyFor(state) {
   return "This game has ended.";
 }
 
+function hasGameCleanupFooter(text) {
+  return typeof text === "string" && text.includes(GAME_CLEANUP_FOOTER);
+}
+
+function withGameCleanupFooter(text) {
+  const body = typeof text === "string" ? text.trimEnd() : "";
+  if (!body) {
+    return GAME_CLEANUP_FOOTER;
+  }
+  if (hasGameCleanupFooter(body)) {
+    return body;
+  }
+  return `${body}\n\n${GAME_CLEANUP_FOOTER}`;
+}
+
 function buildFinalGameText(gameType, state) {
-  return [titleFor(gameType), "", bodyFor(state)].join("\n");
+  return withGameCleanupFooter([titleFor(gameType), "", bodyFor(state)].join("\n"));
 }
 
 function logGameCleanup(gameType, state) {
@@ -120,6 +146,28 @@ function callbackMessageHasButtons(ctx) {
   return keyboard.some((row) => Array.isArray(row) && row.length > 0);
 }
 
+function callbackMessageId(ctx) {
+  const message =
+    ctx && ctx.callbackQuery && ctx.callbackQuery.message
+      ? ctx.callbackQuery.message
+      : null;
+  return message && message.message_id != null ? message.message_id : null;
+}
+
+function callbackChatId(ctx) {
+  if (ctx && ctx.chat && ctx.chat.id != null) {
+    return ctx.chat.id;
+  }
+  const message =
+    ctx && ctx.callbackQuery && ctx.callbackQuery.message
+      ? ctx.callbackQuery.message
+      : null;
+  if (message && message.chat && message.chat.id != null) {
+    return message.chat.id;
+  }
+  return null;
+}
+
 /**
  * Best-effort: if the callback's own message still shows controls, replace
  * it with a final text + empty keyboard. Always edits the callback message,
@@ -127,20 +175,22 @@ function callbackMessageHasButtons(ctx) {
  */
 async function stripStaleCallbackButtons(ctx, options = {}) {
   const gameType = options.gameType || "game";
-  if (!callbackMessageHasButtons(ctx)) {
+  const skipFooter = options.cleanupFooter === false;
+  if (!callbackMessageHasButtons(ctx) && options.forceEdit !== true) {
     return { edited: false };
   }
   if (!ctx || typeof ctx.editMessageText !== "function") {
     return { edited: false };
   }
-  const text =
+  const raw =
     typeof options.text === "string" && options.text
       ? options.text
       : buildFinalGameText(gameType, FINAL_STATE.EXPIRED);
+  const text = skipFooter ? raw : withGameCleanupFooter(raw);
   try {
     await ctx.editMessageText(text, emptyGameKeyboardExtra());
     logButtonsRemoved(gameType);
-    return { edited: true };
+    return { edited: true, text };
   } catch (err) {
     if (isMessageNotModifiedError(err)) {
       return { edited: false };
@@ -150,14 +200,21 @@ async function stripStaleCallbackButtons(ctx, options = {}) {
   }
 }
 
-async function answerGameOver(ctx, toast = GAME_OVER_TOAST) {
+async function answerGameOver(ctx, toast = GAME_ENDED_TOAST) {
   if (ctx && typeof ctx.answerCbQuery === "function") {
-    await ctx.answerCbQuery(toast || GAME_OVER_TOAST).catch(() => {});
+    await ctx.answerCbQuery(toast || GAME_ENDED_TOAST).catch(() => {});
   }
 }
 
 function gameCleanupKey(gameType, sessionId) {
   return `${String(gameType)}:${String(sessionId)}`;
+}
+
+function normalizeGeneration(value) {
+  if (value == null || value === "") {
+    return null;
+  }
+  return String(value);
 }
 
 function normalizeMessageIds(messageIds) {
@@ -192,7 +249,7 @@ function resolveDeleteMessageFn(options) {
   return null;
 }
 
-/** @type {Map<string, { handle: *, clear: Function, chatId: *, messageIds: Map<string, *>, gameType: string, sessionId: * }>} */
+/** @type {Map<string, { handle: *, clear: Function, chatId: *, messageIds: Map<string, *>, gameType: string, sessionId: *, generation: string|null, shouldDeleteFn: Function|null }>} */
 const pendingGameCleanups = new Map();
 
 function rememberMessageIds(store, ids) {
@@ -223,12 +280,67 @@ function getScheduledGameCleanupIds(gameType, sessionId) {
   return Array.from(existing.messageIds.keys());
 }
 
+function getScheduledGameCleanupGeneration(gameType, sessionId) {
+  const existing = pendingGameCleanups.get(gameCleanupKey(gameType, sessionId));
+  return existing && existing.generation != null ? existing.generation : null;
+}
+
+function runShouldDelete(entry, toDelete, targetChatId) {
+  if (!entry || typeof entry.shouldDeleteFn !== "function") {
+    return true;
+  }
+  try {
+    return entry.shouldDeleteFn({
+      gameType: entry.gameType,
+      sessionId: entry.sessionId,
+      chatId: targetChatId,
+      messageIds: toDelete,
+      generation: entry.generation,
+    }) !== false;
+  } catch (_err) {
+    return false;
+  }
+}
+
+function fireGameCleanup(entry, fallback) {
+  const toDelete = entry
+    ? Array.from(entry.messageIds.values())
+    : Array.from(fallback.messageIds.values());
+  const targetChatId =
+    entry && entry.chatId != null ? entry.chatId : fallback.chatId;
+  const deleteMessageFn = fallback.deleteMessageFn;
+  const logErrorFn = fallback.logErrorFn;
+  const gameType = (entry && entry.gameType) || fallback.gameType;
+  const sessionId = (entry && entry.sessionId) || fallback.sessionId;
+  if (!runShouldDelete(entry, toDelete, targetChatId)) {
+    return;
+  }
+  if (typeof deleteMessageFn !== "function") {
+    return;
+  }
+  for (const messageId of toDelete) {
+    Promise.resolve(deleteMessageFn(targetChatId, messageId)).catch((err) => {
+      try {
+        logErrorFn(
+          `[game-cleanup] deleteMessage failed game=${gameType} session=${sessionId}:`,
+          err && err.message ? err.message : err
+        );
+      } catch (_err) {
+        /* ignore logging failures */
+      }
+    });
+  }
+}
+
 /**
  * After a game is already closed, delete only that session's registered
  * bot message IDs. Delete failures are logged once and never retried.
  * Cleanup timers are unref'd so they cannot keep the Node process open.
  *
- * @returns {{ scheduled: boolean, key: string|null, merged?: boolean, clear: Function }}
+ * Optional generation / shouldDeleteFn prevent an old timer from deleting
+ * a replay that reused the same Telegram message id.
+ *
+ * @returns {{ scheduled: boolean, key: string|null, merged?: boolean, skipped?: string, clear: Function }}
  */
 function scheduleGameMessageCleanup(options = {}) {
   const gameType = options.gameType || "game";
@@ -240,10 +352,29 @@ function scheduleGameMessageCleanup(options = {}) {
   }
 
   const key = gameCleanupKey(gameType, sessionId);
+  const generation = normalizeGeneration(options.generation);
   const existing = pendingGameCleanups.get(key);
   if (existing) {
+    if (
+      generation != null &&
+      existing.generation != null &&
+      existing.generation !== generation
+    ) {
+      return {
+        scheduled: false,
+        key,
+        skipped: "generation-mismatch",
+        clear: existing.clear,
+      };
+    }
     existing.chatId = chatId;
     rememberMessageIds(existing.messageIds, ids);
+    if (generation != null) {
+      existing.generation = generation;
+    }
+    if (typeof options.shouldDeleteFn === "function") {
+      existing.shouldDeleteFn = options.shouldDeleteFn;
+    }
     return { scheduled: true, key, merged: true, clear: existing.clear };
   }
 
@@ -263,32 +394,25 @@ function scheduleGameMessageCleanup(options = {}) {
     typeof options.logErrorFn === "function" ? options.logErrorFn : logError;
   const shouldUnref = options.unref !== false;
   const deleteMessageFn = resolveDeleteMessageFn(options);
+  const shouldDeleteFn =
+    typeof options.shouldDeleteFn === "function" ? options.shouldDeleteFn : null;
 
   const messageIds = new Map();
   rememberMessageIds(messageIds, ids);
 
+  const fallback = {
+    chatId,
+    messageIds,
+    deleteMessageFn,
+    logErrorFn,
+    gameType,
+    sessionId,
+  };
+
   const handle = setTimeoutFn(() => {
     const row = pendingGameCleanups.get(key);
     pendingGameCleanups.delete(key);
-    const toDelete = row
-      ? Array.from(row.messageIds.values())
-      : Array.from(messageIds.values());
-    const targetChatId = row && row.chatId != null ? row.chatId : chatId;
-    if (typeof deleteMessageFn !== "function") {
-      return;
-    }
-    for (const messageId of toDelete) {
-      Promise.resolve(deleteMessageFn(targetChatId, messageId)).catch((err) => {
-        try {
-          logErrorFn(
-            `[game-cleanup] deleteMessage failed game=${gameType} session=${sessionId}:`,
-            err && err.message ? err.message : err
-          );
-        } catch (_err) {
-          /* ignore logging failures */
-        }
-      });
-    }
+    fireGameCleanup(row, fallback);
   }, delayMs);
 
   if (
@@ -316,6 +440,8 @@ function scheduleGameMessageCleanup(options = {}) {
     messageIds,
     gameType,
     sessionId,
+    generation,
+    shouldDeleteFn,
   });
   return { scheduled: true, key, clear };
 }
@@ -340,23 +466,75 @@ function getPendingGameMessageCleanupCount() {
   return pendingGameCleanups.size;
 }
 
+function resolveTelegramFromCtx(ctx) {
+  if (ctx && ctx.telegram) {
+    return ctx.telegram;
+  }
+  return null;
+}
+
+/**
+ * Stale/expired game callback: toast, strip buttons, then schedule deletion
+ * of this one callback message. Never used for new game starts.
+ */
+async function handleStaleGameCallback(ctx, options = {}) {
+  const gameType = options.gameType || "game";
+  const toast = options.toast || GAME_ENDED_TOAST;
+  await answerGameOver(ctx, toast);
+  const stripped = await stripStaleCallbackButtons(ctx, {
+    gameType,
+    text: options.text,
+    cleanupFooter: options.cleanupFooter,
+    forceEdit: options.forceEdit,
+  });
+  const sessionId = options.sessionId;
+  const chatId = options.chatId != null ? options.chatId : callbackChatId(ctx);
+  const messageId =
+    options.messageId != null ? options.messageId : callbackMessageId(ctx);
+  if (sessionId == null || sessionId === "" || chatId == null || messageId == null) {
+    return { ...stripped, scheduled: false };
+  }
+  const scheduled = scheduleGameMessageCleanup({
+    gameType,
+    sessionId,
+    chatId,
+    messageIds: [messageId],
+    generation: options.generation,
+    shouldDeleteFn: options.shouldDeleteFn,
+    delayMs: options.delayMs,
+    setTimeoutFn: options.setTimeoutFn,
+    clearTimeoutFn: options.clearTimeoutFn,
+    deleteMessageFn: options.deleteMessageFn,
+    telegram: options.telegram || resolveTelegramFromCtx(ctx),
+  });
+  return { ...stripped, scheduled: scheduled.scheduled, key: scheduled.key };
+}
+
 module.exports = {
   GAME_OVER_TOAST,
+  GAME_ENDED_TOAST,
+  GAME_CLEANUP_FOOTER,
   GAME_MESSAGE_CLEANUP_DELAY_MS,
   FINAL_STATE,
   GAME_TYPE,
   emptyGameKeyboardExtra,
+  hasGameCleanupFooter,
+  withGameCleanupFooter,
   buildFinalGameText,
   logGameCleanup,
   logButtonsRemoved,
   logCleanupRenderFailed,
   callbackMessageHasButtons,
+  callbackMessageId,
+  callbackChatId,
   stripStaleCallbackButtons,
   answerGameOver,
+  handleStaleGameCallback,
   isMessageNotModifiedError,
   scheduleGameMessageCleanup,
   addGameMessageIds,
   getScheduledGameCleanupIds,
+  getScheduledGameCleanupGeneration,
   clearGameMessageCleanup,
   clearAllGameMessageCleanups,
   getPendingGameMessageCleanupCount,

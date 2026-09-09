@@ -26,6 +26,7 @@ const { isAllowedChatFightChat } = require("./chatFight");
 const {
   GAME_TYPE,
   FINAL_STATE,
+  withGameCleanupFooter,
   logGameCleanup,
 } = require("../utils/gameCleanup");
 const { emptyInlineKeyboardExtra } = require("../utils/expiredMessageCleanup");
@@ -319,9 +320,9 @@ function buildExpiredChoiceText() {
 }
 
 function buildCancelledText() {
-  return `✊✋✌️ Rock Paper Scissors
+  return withGameCleanupFooter(`✊✋✌️ Rock Paper Scissors
 
-Challenge cancelled.`;
+Challenge cancelled.`);
 }
 
 function publicTextHasSecret(text, session) {

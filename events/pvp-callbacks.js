@@ -31,9 +31,9 @@ const {
 const {
   GAME_OVER_TOAST,
   GAME_TYPE,
-  stripStaleCallbackButtons,
   scheduleGameMessageCleanup,
   clearGameMessageCleanup,
+  handleStaleGameCallback,
 } = require("../utils/gameCleanup");
 
 function pvpCleanupGameType(runtime, session) {
@@ -106,6 +106,67 @@ function pvpSnapshotStillCurrent(runtime, sessionSnap) {
   return true;
 }
 
+function pvpCleanupGeneration(session) {
+  if (!session) {
+    return null;
+  }
+  if (session.round != null) {
+    return session.round;
+  }
+  if (session.turnGeneration != null) {
+    return session.turnGeneration;
+  }
+  if (session.boardGeneration != null) {
+    return session.boardGeneration;
+  }
+  return null;
+}
+
+function pvpShouldDeleteMessage(runtime, sessionId, messageId, generation) {
+  return () => {
+    if (!runtime || typeof runtime.getSession !== "function") {
+      return true;
+    }
+    const live = runtime.getSession(sessionId);
+    if (!live) {
+      return true;
+    }
+    if (live.status === "waiting" || live.status === "active") {
+      return false;
+    }
+    if (isRpsReplayableIntermission(live)) {
+      return false;
+    }
+    if (
+      messageId != null &&
+      live.messageId != null &&
+      String(live.messageId) !== String(messageId)
+    ) {
+      return false;
+    }
+    if (
+      generation != null &&
+      live.round != null &&
+      String(live.round) !== String(generation)
+    ) {
+      return false;
+    }
+    if (
+      generation != null &&
+      live.turnGeneration != null &&
+      sessionHasTurnGeneration(live) &&
+      String(live.turnGeneration) !== String(generation)
+    ) {
+      return false;
+    }
+    return true;
+  };
+}
+
+function sessionHasTurnGeneration(session) {
+  return session && session.round == null && session.turnGeneration != null;
+}
+
 function schedulePvpSessionCleanup(session, telegram, gameType, runtime) {
   if (!shouldSchedulePvpMessageCleanup(runtime, session)) {
     return;
@@ -113,6 +174,7 @@ function schedulePvpSessionCleanup(session, telegram, gameType, runtime) {
   if (session.messageId == null || session.chatId == null) {
     return;
   }
+  const generation = pvpCleanupGeneration(session);
   log(
     `[pvp] schedule-message-cleanup game=${gameType || "-"} session=${
       session.id || "-"
@@ -123,7 +185,14 @@ function schedulePvpSessionCleanup(session, telegram, gameType, runtime) {
     sessionId: session.id,
     chatId: session.chatId,
     messageIds: [session.messageId],
+    generation,
     telegram,
+    shouldDeleteFn: pvpShouldDeleteMessage(
+      runtime,
+      session.id,
+      session.messageId,
+      generation
+    ),
   });
 }
 
@@ -200,7 +269,16 @@ async function rejectStalePvp(ctx, runtime, parsed) {
     }
     return;
   }
-  await cbAnswer(ctx, GAME_OVER_TOAST);
+  if (isRpsReplayableIntermission(session)) {
+    await cbAnswer(ctx, GAME_OVER_TOAST);
+    if (typeof runtime.renderMessage === "function") {
+      const rendered = runtime.renderMessage(session);
+      if (rendered && rendered.text) {
+        await safeEdit(ctx, rendered.text, rendered.extra);
+      }
+    }
+    return;
+  }
   let text;
   if (session && runtime && typeof runtime.renderMessage === "function") {
     const rendered = runtime.renderMessage(session);
@@ -213,10 +291,29 @@ async function rejectStalePvp(ctx, runtime, parsed) {
       (session && session.endReason) || "-"
     } endedCopy=${text ? "session-render" : "default-cancelled"}`
   );
-  await stripStaleCallbackButtons(ctx, {
+  const generation = pvpCleanupGeneration(session);
+  await handleStaleGameCallback(ctx, {
     gameType: pvpGameType(parsed),
+    sessionId: parsed && parsed.sessionId,
     text,
+    toast: GAME_OVER_TOAST,
+    generation,
+    telegram: ctx && ctx.telegram,
+    shouldDeleteFn: pvpShouldDeleteMessage(
+      runtime,
+      parsed && parsed.sessionId,
+      callbackMessageIdSafe(ctx),
+      generation
+    ),
   });
+}
+
+function callbackMessageIdSafe(ctx) {
+  const message =
+    ctx && ctx.callbackQuery && ctx.callbackQuery.message
+      ? ctx.callbackQuery.message
+      : null;
+  return message && message.message_id != null ? message.message_id : null;
 }
 
 async function safeEdit(ctx, text, extra) {

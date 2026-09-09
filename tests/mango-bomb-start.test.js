@@ -416,7 +416,7 @@ async function main() {
     assert.strictEqual(service.getGame(started.gameId).pendingTransition, "close-lobby");
     timers.advance(20);
     assert.strictEqual(service.getStatus(COMMUNITY_CHAT), STATUS.LOBBY);
-    assert.ok(!edits.some((row) => row.text === INTERNAL_CANCEL_TEXT));
+    assert.ok(!edits.some((row) => String(row.text).includes("The game hit an unexpected error.")));
     for (let i = 0; i < 30; i += 1) {
       while (pendingAwards.length) {
         pendingAwards.shift()({ awarded: true, pointsToAdd: 0 });
@@ -439,7 +439,7 @@ async function main() {
     brokenTimers.advance(20);
     await broken.whenIdle(COMMUNITY_CHAT);
     assert.strictEqual(broken.getStatus(COMMUNITY_CHAT), STATUS.IDLE);
-    assert.ok(brokenEdits.some((row) => row.text === INTERNAL_CANCEL_TEXT));
+    assert.ok(brokenEdits.some((row) => String(row.text).includes(INTERNAL_CANCEL_TEXT)));
     assert.strictEqual(broken.isMangoBombOpen(COMMUNITY_CHAT), false);
     const retry = broken.startLobby({ chatId: COMMUNITY_CHAT, threadId: 123 });
     assert.strictEqual(retry.ok, false);

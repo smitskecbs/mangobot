@@ -28,6 +28,7 @@ const {
   GAME_TYPE,
   FINAL_STATE,
   buildFinalGameText,
+  withGameCleanupFooter,
   logGameCleanup,
 } = require("../utils/gameCleanup");
 
@@ -292,13 +293,13 @@ function renderMessage(session, xpResult, nowMs = Date.now()) {
   }
   if (session.status === STATUS.WON) {
     return {
-      text: buildWonText(session, xpResult),
+      text: withGameCleanupFooter(buildWonText(session, xpResult)),
       extra: emptyInlineKeyboardExtra(),
     };
   }
   if (session.status === STATUS.DRAW) {
     return {
-      text: buildDrawText(session),
+      text: withGameCleanupFooter(buildDrawText(session)),
       extra: emptyInlineKeyboardExtra(),
     };
   }

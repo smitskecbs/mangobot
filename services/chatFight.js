@@ -13,6 +13,7 @@ const {
   emptyGameKeyboardExtra,
   scheduleGameMessageCleanup,
   addGameMessageIds,
+  withGameCleanupFooter,
 } = require("../utils/gameCleanup");
 
 const CHAT_FIGHT_DURATION_MS = 60 * 1000;
@@ -557,16 +558,17 @@ function createChatFightService(options = {}) {
     const messageId = fight.messageId;
     logGameCleanup(GAME_TYPE.CHATFIGHT, FINAL_STATE.EXPIRED);
     scheduleFightMessageCleanup(fight);
+    const outText = withGameCleanupFooter(text);
 
     if (typeof editMessage === "function" && messageId != null) {
-      Promise.resolve(editMessage(chatId, messageId, text, extra))
+      Promise.resolve(editMessage(chatId, messageId, outText, extra))
         .catch(() => {
           const notify =
             typeof fight.sendMessage === "function"
               ? fight.sendMessage
               : sendMessage;
           if (typeof notify === "function") {
-            Promise.resolve(notify(chatId, text)).catch(() => {});
+            Promise.resolve(notify(chatId, outText)).catch(() => {});
           }
         });
       return;
@@ -575,7 +577,7 @@ function createChatFightService(options = {}) {
     const notify =
       typeof fight.sendMessage === "function" ? fight.sendMessage : sendMessage;
     if (typeof notify === "function") {
-      Promise.resolve(notify(chatId, text)).catch(() => {});
+      Promise.resolve(notify(chatId, outText)).catch(() => {});
     }
   }
 

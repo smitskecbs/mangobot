@@ -18,6 +18,7 @@ const { handleRps } = require("./rps");
 const { handleTrivia } = require("./trivia");
 const { handleMangoBomb } = require("./mangobomb");
 const { handleBlackjack } = require("./blackjack");
+const { handleHigherOrLower } = require("./higherorlower");
 const { handleWallet } = require("./wallet");
 const { handleRewards } = require("./rewards");
 const { handlePresale } = require("./presale");
@@ -94,6 +95,7 @@ const GROUP_MENU_ACTION_RE = new RegExp(
     GROUP_MENU_CALLBACK.TRIVIA,
     GROUP_MENU_CALLBACK.MANGOBOMB,
     GROUP_MENU_CALLBACK.BLACKJACK,
+    GROUP_MENU_CALLBACK.HOL,
     GROUP_MENU_CALLBACK.BUILDER,
     GROUP_MENU_CALLBACK.SHOP,
     GROUP_MENU_CALLBACK.DAILY_QUEST,
@@ -415,6 +417,9 @@ async function handleGroupMenuCallback(ctx, options = {}) {
   }
   if (data === GROUP_MENU_CALLBACK.BLACKJACK) {
     return handleBlackjack(ctx, options);
+  }
+  if (data === GROUP_MENU_CALLBACK.HOL) {
+    return handleHigherOrLower(ctx, options);
   }
   if (data === GROUP_MENU_CALLBACK.BUILDER) {
     return handleCommunityBuilder(ctx, options);

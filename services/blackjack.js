@@ -19,6 +19,7 @@ const {
   FINAL_STATE,
   GAME_TYPE,
   buildFinalGameText,
+  withGameCleanupFooter,
   logGameCleanup,
   logCleanupRenderFailed,
   emptyGameKeyboardExtra,
@@ -666,7 +667,7 @@ function createBlackjackService(options = {}) {
       chatId: game.chatId,
       threadId: game.threadId,
       messageId: game.messageId,
-      text: payload.text,
+      text: withGameCleanupFooter(payload.text),
       extra: payload.extra || emptyGameKeyboardExtra(),
       renderRevision: game.renderRevision,
       kind: payload.kind || "cancel",
@@ -711,7 +712,10 @@ function createBlackjackService(options = {}) {
       return Promise.resolve();
     }
     const revision = game.renderRevision;
-    const promise = renderRevision(game, text, extra, stage, revision);
+    const terminal =
+      stage === "lobby-close" || stage === "cancel" || stage === "finish";
+    const outText = terminal ? withGameCleanupFooter(text) : text;
+    const promise = renderRevision(game, outText, extra, stage, revision);
     trackRender(promise);
     return promise;
   }

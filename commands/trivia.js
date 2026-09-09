@@ -39,6 +39,7 @@ const {
   GAME_OVER_TOAST,
   GAME_TYPE,
   stripStaleCallbackButtons,
+  scheduleGameMessageCleanup,
 } = require("../utils/gameCleanup");
 const {
   GAMES_TOPIC_REQUIRED_MESSAGE,
@@ -215,6 +216,24 @@ async function presentTriviaView(ctx, text, extra) {
     }
   }
   return ctx.reply(text, withThread);
+}
+
+async function rejectStaleTriviaMessage(ctx, sessionId) {
+  await stripStaleCallbackButtons(ctx, { gameType: GAME_TYPE.TRIVIA });
+  const chatId = ctx && ctx.chat && ctx.chat.id;
+  const message =
+    ctx && ctx.callbackQuery && ctx.callbackQuery.message
+      ? ctx.callbackQuery.message
+      : null;
+  if (sessionId && chatId != null && message && message.message_id != null) {
+    scheduleGameMessageCleanup({
+      gameType: GAME_TYPE.TRIVIA,
+      sessionId,
+      chatId,
+      messageIds: [message.message_id],
+      telegram: ctx.telegram,
+    });
+  }
 }
 
 function chooserPayload(userId, options = {}) {
@@ -453,13 +472,13 @@ async function handleTriviaHubCallback(ctx, options = {}) {
     }
     if (!parsed.sessionId) {
       await answer(GAME_OVER_TOAST);
-      await stripStaleCallbackButtons(ctx, { gameType: GAME_TYPE.TRIVIA });
+      await rejectStaleTriviaMessage(ctx, parsed && parsed.sessionId);
       return;
     }
     const session = runtime.getSession(parsed.sessionId);
     if (!session) {
       await answer(GAME_OVER_TOAST);
-      await stripStaleCallbackButtons(ctx, { gameType: GAME_TYPE.TRIVIA });
+      await rejectStaleTriviaMessage(ctx, parsed && parsed.sessionId);
       return;
     }
     if (!session.hubMode || personalSessionOwnerMismatch(session, ctx.from && ctx.from.id)) {
@@ -468,7 +487,7 @@ async function handleTriviaHubCallback(ctx, options = {}) {
         return;
       }
       await answer(GAME_OVER_TOAST);
-      await stripStaleCallbackButtons(ctx, { gameType: GAME_TYPE.TRIVIA });
+      await rejectStaleTriviaMessage(ctx, parsed && parsed.sessionId);
       return;
     }
     const result = runtime.nextHubQuestion(parsed.sessionId, ctx.from.id);
@@ -482,7 +501,7 @@ async function handleTriviaHubCallback(ctx, options = {}) {
         return;
       }
       await answer(GAME_OVER_TOAST);
-      await stripStaleCallbackButtons(ctx, { gameType: GAME_TYPE.TRIVIA });
+      await rejectStaleTriviaMessage(ctx, parsed && parsed.sessionId);
       return;
     }
     await answer();
@@ -505,18 +524,18 @@ async function handleTriviaHubCallback(ctx, options = {}) {
   if (parsed.action === "change") {
     if (!parsed.sessionId) {
       await answer(GAME_OVER_TOAST);
-      await stripStaleCallbackButtons(ctx, { gameType: GAME_TYPE.TRIVIA });
+      await rejectStaleTriviaMessage(ctx, parsed && parsed.sessionId);
       return;
     }
     const session = runtime.getSession(parsed.sessionId);
     if (!session) {
       await answer(GAME_OVER_TOAST);
-      await stripStaleCallbackButtons(ctx, { gameType: GAME_TYPE.TRIVIA });
+      await rejectStaleTriviaMessage(ctx, parsed && parsed.sessionId);
       return;
     }
     if (!session.hubMode) {
       await answer(GAME_OVER_TOAST);
-      await stripStaleCallbackButtons(ctx, { gameType: GAME_TYPE.TRIVIA });
+      await rejectStaleTriviaMessage(ctx, parsed && parsed.sessionId);
       return;
     }
     if (personalSessionOwnerMismatch(session, ctx.from && ctx.from.id)) {
@@ -542,12 +561,12 @@ async function handleTriviaHubCallback(ctx, options = {}) {
       const session = runtime.getSession(parsed.sessionId);
       if (!session) {
         await answer(GAME_OVER_TOAST);
-        await stripStaleCallbackButtons(ctx, { gameType: GAME_TYPE.TRIVIA });
+        await rejectStaleTriviaMessage(ctx, parsed && parsed.sessionId);
         return;
       }
       if (!session.hubMode) {
         await answer(GAME_OVER_TOAST);
-        await stripStaleCallbackButtons(ctx, { gameType: GAME_TYPE.TRIVIA });
+        await rejectStaleTriviaMessage(ctx, parsed && parsed.sessionId);
         return;
       }
       if (personalSessionOwnerMismatch(session, ctx.from && ctx.from.id)) {
@@ -648,7 +667,7 @@ async function handleTriviaAnswer(ctx, options = {}) {
       result.reason === "invalid-session"
     ) {
       await answer(GAME_OVER_TOAST);
-      await stripStaleCallbackButtons(ctx, { gameType: GAME_TYPE.TRIVIA });
+      await rejectStaleTriviaMessage(ctx, parsed && parsed.sessionId);
     } else if (result.reason === "not-owner") {
       await answer(
         formatTriviaUnauthorizedToast(result.ownerDisplayName)

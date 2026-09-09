@@ -26,6 +26,7 @@ const {
   GAME_TYPE,
   stripStaleCallbackButtons,
   emptyGameKeyboardExtra,
+  scheduleGameMessageCleanup,
 } = require("../utils/gameCleanup");
 
 /**
@@ -223,6 +224,21 @@ async function handleChatFightReveal(ctx, options = {}) {
       gameType: GAME_TYPE.CHATFIGHT,
       text,
     });
+    const message =
+      ctx.callbackQuery && ctx.callbackQuery.message
+        ? ctx.callbackQuery.message
+        : null;
+    const chatId = ctx.chat && ctx.chat.id;
+    const fightId = snap && snap.id;
+    if (fightId && chatId != null && message && message.message_id != null) {
+      scheduleGameMessageCleanup({
+        gameType: GAME_TYPE.CHATFIGHT,
+        sessionId: fightId,
+        chatId,
+        messageIds: [message.message_id],
+        telegram: ctx.telegram,
+      });
+    }
     return;
   }
 
