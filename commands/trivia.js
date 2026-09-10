@@ -41,6 +41,7 @@ const {
   GAME_TYPE,
   stripStaleCallbackButtons,
   scheduleGameMessageCleanup,
+  withGameCleanupFooter,
 } = require("../utils/gameCleanup");
 const {
   GAMES_TOPIC_REQUIRED_MESSAGE,
@@ -352,21 +353,25 @@ async function presentTriviaView(ctx, text, extra) {
 }
 
 async function rejectStaleTriviaMessage(ctx, sessionId) {
-  await stripStaleCallbackButtons(ctx, { gameType: GAME_TYPE.TRIVIA });
   const chatId = ctx && ctx.chat && ctx.chat.id;
   const message =
     ctx && ctx.callbackQuery && ctx.callbackQuery.message
       ? ctx.callbackQuery.message
       : null;
+  let scheduled = false;
   if (sessionId && chatId != null && message && message.message_id != null) {
-    scheduleGameMessageCleanup({
+    scheduled = scheduleGameMessageCleanup({
       gameType: GAME_TYPE.TRIVIA,
       sessionId,
       chatId,
       messageIds: [message.message_id],
       telegram: ctx.telegram,
-    });
+    }).scheduled;
   }
+  await stripStaleCallbackButtons(ctx, {
+    gameType: GAME_TYPE.TRIVIA,
+    cleanupFooter: scheduled,
+  });
 }
 
 function chooserPayload(userId, options = {}) {
@@ -719,11 +724,6 @@ async function handleTriviaHubCallback(ctx, options = {}) {
       return;
     }
     await answer();
-    await editTriviaMessage(
-      ctx,
-      finished.rendered.text,
-      finished.rendered.extra
-    );
     const sessionForCleanup = finished.session
       ? {
           ...finished.session,
@@ -733,15 +733,20 @@ async function handleTriviaHubCallback(ctx, options = {}) {
               : callbackMessageId(ctx),
         }
       : finished.session;
+    let text = finished.rendered.text;
     if (sessionForCleanup && sessionForCleanup.messageId != null) {
-      scheduleGameMessageCleanup({
+      const scheduled = scheduleGameMessageCleanup({
         gameType: GAME_TYPE.TRIVIA,
         sessionId: sessionForCleanup.id,
         chatId: sessionForCleanup.chatId,
         messageIds: [sessionForCleanup.messageId],
         telegram: ctx.telegram,
       });
+      if (scheduled.scheduled) {
+        text = withGameCleanupFooter(text);
+      }
     }
+    await editTriviaMessage(ctx, text, finished.rendered.extra);
     return;
   }
 

@@ -1668,6 +1668,9 @@ async function main() {
     service.setMessageId(fresh.session.id, 6002);
     assert.strictEqual(queued.length, 1);
     queued[0]();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
     assert.deepStrictEqual(deleted, [{ chat: COMMUNITY_CHAT, mid: 5001 }]);
     assert.strictEqual(service.getSession(fresh.session.id).status, STATUS.WAITING);
     assert.strictEqual(service.getSession(fresh.session.id).messageId, 6002);

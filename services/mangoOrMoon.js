@@ -18,7 +18,7 @@ const {
   FINAL_STATE,
   GAME_ENDED_TOAST,
   emptyGameKeyboardExtra,
-  withGameCleanupFooter,
+  withCleanupFooterIfScheduled,
   logGameCleanup,
   scheduleGameMessageCleanup,
   clearGameMessageCleanup,
@@ -164,24 +164,24 @@ Result: ${SIDE_LABEL[outcome]}
 }
 
 function buildFinishedText(session) {
-  return withGameCleanupFooter(`🥭 ManGo or Moon 🌙
+  return `🥭 ManGo or Moon 🌙
 
 ❌ Finished.
-🔥 Final streak: ${session.streak}`);
+🔥 Final streak: ${session.streak}`;
 }
 
 function buildExpiredText(session) {
-  return withGameCleanupFooter(`🥭 ManGo or Moon cancelled
+  return `🥭 ManGo or Moon cancelled
 
 This game has ended.
 
-🔥 Final streak: ${session && session.streak != null ? session.streak : 0}`);
+🔥 Final streak: ${session && session.streak != null ? session.streak : 0}`;
 }
 
 function renderMessage(session) {
   if (!session) {
     return {
-      text: withGameCleanupFooter("🥭 ManGo or Moon 🌙\n\nThis game has ended."),
+      text: "🥭 ManGo or Moon 🌙\n\nThis game has ended.",
       extra: emptyGameKeyboardExtra(),
     };
   }
@@ -217,11 +217,12 @@ function renderMessage(session) {
       extra: resultKeyboard(session.id, session.round),
     };
   }
+  const body =
+    session.status === STATUS.FINISHED
+      ? buildFinishedText(session)
+      : buildExpiredText(session);
   return {
-    text:
-      session.status === STATUS.FINISHED
-        ? buildFinishedText(session)
-        : buildExpiredText(session),
+    text: withCleanupFooterIfScheduled(body, GAME_TYPE.MOM, session.id),
     extra: emptyGameKeyboardExtra(),
   };
 }
@@ -255,7 +256,7 @@ function createMangoOrMoonService(options = {}) {
     typeof options.cleanupDelayMs === "number" && options.cleanupDelayMs >= 0
       ? options.cleanupDelayMs
       : undefined;
-  const deleteMessageFn =
+  let deleteMessageFn =
     typeof options.deleteMessageFn === "function"
       ? options.deleteMessageFn
       : null;
@@ -344,14 +345,24 @@ function createMangoOrMoonService(options = {}) {
     }
   }
 
+  function setDeleteMessageHandler(fn) {
+    deleteMessageFn = typeof fn === "function" ? fn : null;
+  }
+
   function shouldDeleteMessage(sessionId, messageId, chatId) {
     return () => {
       const live = sessionsById.get(String(sessionId));
-      if (live && (live.status === STATUS.ACTIVE || sessionHasPlayAgain(live))) {
-        return false;
-      }
-      if (live && live.messageId != null && String(live.messageId) !== String(messageId)) {
-        return false;
+      if (live) {
+        const sameMessage =
+          messageId == null ||
+          live.messageId == null ||
+          String(live.messageId) === String(messageId);
+        if (
+          sameMessage &&
+          (live.status === STATUS.ACTIVE || sessionHasPlayAgain(live))
+        ) {
+          return false;
+        }
       }
       const owner = messageOwner.get(
         messageKey(chatId != null ? chatId : live && live.chatId, messageId)
@@ -734,6 +745,7 @@ function createMangoOrMoonService(options = {}) {
     expireSession,
     renderMessage,
     setRenderHandler,
+    setDeleteMessageHandler,
     isOpen,
     hasActiveUser,
     clearAllTimers,

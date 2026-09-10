@@ -31,13 +31,12 @@ const {
   GAME_TYPE,
   FINAL_STATE,
   GAME_MESSAGE_CLEANUP_DELAY_MS,
-  buildFinalGameText,
-  withGameCleanupFooter,
   logGameCleanup,
   logCleanupRenderFailed,
   emptyGameKeyboardExtra,
   scheduleGameMessageCleanup,
   clearGameMessageCleanup,
+  withCleanupFooterIfScheduled,
 } = require("../utils/gameCleanup");
 
 const TRIVIA_ROUND_QUESTIONS = 5;
@@ -235,7 +234,7 @@ function plainTriviaKeyboardExtra(extra) {
 }
 
 function buildHubFinishedText() {
-  return withGameCleanupFooter("🧠 Trivia\n\nThis game is finished.");
+  return "🧠 Trivia\n\nThis game is finished.";
 }
 
 function buildTriviaChooserKeyboard() {
@@ -761,23 +760,19 @@ function createTriviaService(options = {}) {
           return false;
         }
       }
-      const row = sessionsById.get(String(sessionId));
-      if (row && row.status === STATUS.ACTIVE) {
-        return false;
-      }
       return true;
     };
   }
 
   function scheduleTriviaMessageCleanup(target, { silent } = {}) {
     if (silent) {
-      return;
+      return { scheduled: false };
     }
     const row = target || lastSession;
     if (!row || row.chatId == null || row.messageId == null) {
-      return;
+      return { scheduled: false };
     }
-    scheduleGameMessageCleanup({
+    return scheduleGameMessageCleanup({
       gameType: GAME_TYPE.TRIVIA,
       sessionId: row.id,
       chatId: row.chatId,
@@ -1147,10 +1142,13 @@ function createTriviaService(options = {}) {
       claim,
     };
     session.lastXpSummary = xpSummary;
-    const text = withGameCleanupFooter(
-      buildFinalScoreboardText(session, xpSummary)
-    );
     logGameCleanup(GAME_TYPE.TRIVIA, FINAL_STATE.FINISHED);
+    scheduleTriviaMessageCleanup(session);
+    const text = withCleanupFooterIfScheduled(
+      buildFinalScoreboardText(session, xpSummary),
+      GAME_TYPE.TRIVIA,
+      session.id
+    );
 
     const payload = {
       session: snapshot(true, session),
@@ -1167,7 +1165,6 @@ function createTriviaService(options = {}) {
         safeEdit(text, emptyInlineKeyboardExtra(), session)
       ).catch(() => {});
     }
-    scheduleTriviaMessageCleanup(payload.session);
     return payload;
   }
 
@@ -1216,14 +1213,18 @@ function createTriviaService(options = {}) {
       lastSession = session;
       logGameCleanup(GAME_TYPE.TRIVIA, FINAL_STATE.CANCELLED);
       if (!options.silent) {
-        const text = buildFinalGameText(GAME_TYPE.TRIVIA, FINAL_STATE.CANCELLED);
+        scheduleTriviaMessageCleanup(session);
+        const text = withCleanupFooterIfScheduled(
+          "🧠 Trivia cancelled\n\nThis round was cancelled.",
+          GAME_TYPE.TRIVIA,
+          session.id
+        );
         Promise.resolve(safeEdit(text, emptyGameKeyboardExtra(), session)).catch(
           () => {
             logCleanupRenderFailed(GAME_TYPE.TRIVIA);
           }
         );
       }
-      scheduleTriviaMessageCleanup(session, { silent: Boolean(options.silent) });
     }
     return {
       ok: false,
@@ -1741,14 +1742,19 @@ function createTriviaService(options = {}) {
     clearSessionTimers(target);
     target.status = STATUS.FINISHED;
     target.abortReason = "finished";
+    logGameCleanup(GAME_TYPE.TRIVIA, FINAL_STATE.FINISHED);
+    scheduleTriviaMessageCleanup(target);
     const rendered = {
-      text: buildHubFinishedText(),
+      text: withCleanupFooterIfScheduled(
+        buildHubFinishedText(),
+        GAME_TYPE.TRIVIA,
+        target.id
+      ),
       extra: emptyGameKeyboardExtra(),
     };
     const snap = snapshot(true, target);
     removeSessionFromIndexes(target);
     lastSession = target;
-    logGameCleanup(GAME_TYPE.TRIVIA, FINAL_STATE.FINISHED);
     return {
       ok: true,
       session: snap,

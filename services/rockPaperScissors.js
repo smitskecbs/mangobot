@@ -333,13 +333,11 @@ function buildTerminalFinishText(session) {
     session.choices.p1 &&
     session.choices.p2
   ) {
-    return withGameCleanupFooter(
-      `${buildRevealText(session)}\n\nThis game is finished.`
-    );
+    return `${buildRevealText(session)}\n\nThis game is finished.`;
   }
-  return withGameCleanupFooter(`✊✋✌️ Rock Paper Scissors
+  return `✊✋✌️ Rock Paper Scissors
 
-This game is finished.`);
+This game is finished.`;
 }
 
 function publicTextHasSecret(text, session) {

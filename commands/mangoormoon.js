@@ -100,6 +100,11 @@ function wireMangoOrMoonRuntime(runtime, botOrTelegram) {
   if (!telegram || typeof telegram.editMessageText !== "function") {
     return;
   }
+  if (typeof telegram.deleteMessage === "function" && typeof runtime.setDeleteMessageHandler === "function") {
+    runtime.setDeleteMessageHandler((chatId, messageId) =>
+      telegram.deleteMessage(chatId, messageId)
+    );
+  }
   runtime.setRenderHandler((result) => {
     const session = result && result.session;
     const rendered = result && result.rendered;

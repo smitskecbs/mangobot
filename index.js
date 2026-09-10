@@ -14,7 +14,10 @@ const { installProcessGuards } = require("./utils/processGuards");
 const { noteRuntimeEvent } = require("./utils/runtimeHealth");
 const { noteRankUpIdentity } = require("./services/rankUpAnnounce");
 
+const { setGameCleanupTelegram } = require("./utils/gameCleanup");
+
 const bot = new Telegraf(process.env.BOT_TOKEN);
+setGameCleanupTelegram(bot.telegram);
 
 bot.use((ctx, next) => {
   noteRuntimeEvent("telegramUpdate");

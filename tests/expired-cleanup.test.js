@@ -66,6 +66,12 @@ function createFakeTimers() {
   };
 }
 
+async function flushMicrotasks() {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 async function runTest(name, fn) {
   resetEnv();
   clearAllExpiredMessageCleanups();
@@ -121,7 +127,7 @@ async function main() {
     assert.ok(edits[0].text.includes("Nobody solved it in time"));
     assert.deepStrictEqual(edits[0].extra.reply_markup.inline_keyboard, []);
     timers.advance(GAME_MESSAGE_CLEANUP_DELAY_MS);
-    await Promise.resolve();
+    await flushMicrotasks();
     assert.ok(deleted.some((d) => d.messageId === 77));
     assert.strictEqual(getPendingGameMessageCleanupCount(), 0);
     fight.reset();
@@ -152,7 +158,7 @@ async function main() {
     await Promise.resolve();
     assert.strictEqual(deleted.length, 0);
     timers.advance(GAME_MESSAGE_CLEANUP_DELAY_MS);
-    await Promise.resolve();
+    await flushMicrotasks();
     assert.ok(deleted.includes(88));
     fight.reset();
   });

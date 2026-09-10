@@ -280,6 +280,38 @@ async function main() {
     assert.strictEqual(startCount, 1, "no scheduler start after bot.stop");
   });
 
+  await runTest("shutdown clears in-memory game cleanup timers", async () => {
+    const {
+      scheduleGameMessageCleanup,
+      getPendingGameMessageCleanupCount,
+      GAME_TYPE,
+      setGameCleanupTelegram,
+    } = require("../utils/gameCleanup");
+    setGameCleanupTelegram(null);
+    const deleted = [];
+    scheduleGameMessageCleanup({
+      gameType: GAME_TYPE.RPS,
+      sessionId: "lifecycle-clean",
+      chatId: -1001,
+      messageIds: [77],
+      delayMs: 60_000,
+      deleteMessageFn: async (_c, messageId) => {
+        deleted.push(messageId);
+      },
+    });
+    assert.ok(getPendingGameMessageCleanupCount() >= 1);
+    const fake = createFakeBot();
+    const runtime = startBotRuntime({
+      bot: fake.bot,
+      startScheduler: () => ({ stop() {} }),
+      logFn: () => {},
+    });
+    runtime.shutdown("SIGTERM");
+    assert.strictEqual(getPendingGameMessageCleanupCount(), 0);
+    await sleep(20);
+    assert.deepStrictEqual(deleted, []);
+  });
+
   await runTest("launch reject before onLaunch: no scheduler, error path", async () => {
     let startCount = 0;
     const failures = [];

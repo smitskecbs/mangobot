@@ -16,12 +16,17 @@ const {
   GAME_TYPE,
   GAME_CLEANUP_FOOTER,
   GAME_MESSAGE_CLEANUP_DELAY_MS,
+  GAME_CLEANUP_MAX_ATTEMPTS,
+  GAME_CLEANUP_DEFAULT_RETRY_MS,
   scheduleGameMessageCleanup,
   addGameMessageIds,
   getScheduledGameCleanupIds,
+  getScheduledGameCleanupSnapshot,
   clearAllGameMessageCleanups,
   getPendingGameMessageCleanupCount,
   withGameCleanupFooter,
+  setGameCleanupTelegram,
+  hasGameCleanupFooter,
 } = require("../utils/gameCleanup");
 const { GAMES_TOPIC_REQUIRED_MESSAGE } = require("../utils/gameTopic");
 const { handlePvpCallback } = require("../events/pvp-callbacks");
@@ -144,8 +149,15 @@ async function answerCorrect(service, sessionId) {
   });
 }
 
+async function flushMicrotasks() {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 async function runTest(name, fn) {
   resetEnv();
+  setGameCleanupTelegram(null);
   clearAllGameMessageCleanups();
   try {
     await fn();
@@ -155,6 +167,7 @@ async function runTest(name, fn) {
     throw err;
   } finally {
     clearAllGameMessageCleanups();
+    setGameCleanupTelegram(null);
   }
 }
 
@@ -244,10 +257,10 @@ async function main() {
     assert.strictEqual(service.isTriviaOpen(), false);
     assert.strictEqual(deleted.length, 0);
     timers.advance(1_999);
-    await Promise.resolve();
+    await flushMicrotasks();
     assert.strictEqual(deleted.length, 0);
     timers.advance(1);
-    await Promise.resolve();
+    await flushMicrotasks();
     assert.ok(deleted.some((row) => row.messageId === 55));
     void started;
   });
@@ -272,7 +285,7 @@ async function main() {
       "102",
     ]);
     timers.advance(10);
-    await Promise.resolve();
+    await flushMicrotasks();
     assert.deepStrictEqual(
       deleted.map((row) => row.messageId).sort(),
       [101, 102]
@@ -299,7 +312,7 @@ async function main() {
       },
     });
     timers.advance(5);
-    await Promise.resolve();
+    await flushMicrotasks();
     assert.strictEqual(logged, true);
   });
 
@@ -314,7 +327,7 @@ async function main() {
     service.abortRound("cancelled");
     assert.strictEqual(service.isTriviaOpen(), false);
     timers.advance(10);
-    await Promise.resolve();
+    await flushMicrotasks();
     assert.strictEqual(service.isTriviaOpen(), false);
     const next = service.startTrivia({ chatId: COMMUNITY_CHAT });
     assert.strictEqual(next.ok, true);
@@ -349,7 +362,7 @@ async function main() {
     });
     addGameMessageIds(GAME_TYPE.TICTACTOE, "b", COMMUNITY_CHAT, [3]);
     timers.advance(10);
-    await Promise.resolve();
+    await flushMicrotasks();
     assert.deepStrictEqual(deleted, [1]);
     assert.deepStrictEqual(getScheduledGameCleanupIds(GAME_TYPE.TICTACTOE, "b").sort(), [
       "2",
@@ -524,7 +537,7 @@ async function main() {
       },
     });
     timers.advance(5);
-    await Promise.resolve();
+    await flushMicrotasks();
     assert.deepStrictEqual(
       deleted.map((row) => row.messageId),
       [gameMessageId]
@@ -581,10 +594,10 @@ async function main() {
     assert.strictEqual(service.isTriviaOpen(), false);
     assert.strictEqual(deleted.length, 0);
     timers.advance(59_999);
-    await Promise.resolve();
+    await flushMicrotasks();
     assert.strictEqual(deleted.length, 0);
     timers.advance(1);
-    await Promise.resolve();
+    await flushMicrotasks();
     assert.ok(deleted.some((d) => d.messageId === 77));
   });
 
@@ -602,6 +615,9 @@ async function main() {
       },
       answered: [],
       edits: [],
+      telegram: {
+        deleteMessage: async () => {},
+      },
       async answerCbQuery(text) {
         this.answered.push(text || "");
       },
@@ -654,7 +670,7 @@ async function main() {
     });
     reservation.tryReserve(USER_A, "rps", "new-session");
     timers.advance(10);
-    await Promise.resolve();
+    await flushMicrotasks();
     assert.deepStrictEqual(deleted, []);
     assert.strictEqual(reservation.has(USER_A), true);
   });
@@ -675,7 +691,7 @@ async function main() {
       },
     });
     timers.advance(5);
-    await Promise.resolve();
+    await flushMicrotasks();
     assert.deepStrictEqual(deleted, [501]);
     assert.ok(!deleted.includes(1));
     assert.ok(!deleted.includes(9999));
@@ -700,7 +716,7 @@ async function main() {
       },
     });
     timers.advance(1);
-    await Promise.resolve();
+    await flushMicrotasks();
     assert.strictEqual(logged, 1);
     assert.strictEqual(getPendingGameMessageCleanupCount(), 0);
   });
@@ -723,9 +739,9 @@ async function main() {
       logErrorFn: () => {},
     });
     timers.advance(1);
-    await Promise.resolve();
+    await flushMicrotasks();
     timers.advance(60_000);
-    await Promise.resolve();
+    await flushMicrotasks();
     assert.strictEqual(calls, 1);
     assert.strictEqual(getPendingGameMessageCleanupCount(), 0);
   });
@@ -758,11 +774,330 @@ async function main() {
       },
     });
     timers.advance(5);
-    await Promise.resolve();
+    await flushMicrotasks();
     assert.deepStrictEqual(deleted, [
       { game: "ttt", messageId: 10 },
       { game: "chk", messageId: 11 },
     ]);
+  });
+
+  await runTest("shared-1. terminal game schedules cleanup with snapshot", async () => {
+    const timers = createFakeTimers();
+    const scheduled = scheduleGameMessageCleanup({
+      gameType: GAME_TYPE.RPS,
+      sessionId: "sess-term",
+      chatId: COMMUNITY_CHAT,
+      messageIds: [42],
+      generation: "3",
+      delayMs: 60_000,
+      setTimeoutFn: timers.setTimeout,
+      clearTimeoutFn: timers.clearTimeout,
+      deleteMessageFn: async () => {},
+    });
+    assert.strictEqual(scheduled.scheduled, true);
+    assert.deepStrictEqual(getScheduledGameCleanupSnapshot(GAME_TYPE.RPS, "sess-term"), {
+      gameType: GAME_TYPE.RPS,
+      sessionId: "sess-term",
+      chatId: COMMUNITY_CHAT,
+      messageIds: [42],
+      generation: "3",
+    });
+  });
+
+  await runTest("shared-2. footer helper only when cleanup is scheduled", () => {
+    const skipped = scheduleGameMessageCleanup({
+      gameType: GAME_TYPE.HOL,
+      sessionId: "no-del",
+      chatId: COMMUNITY_CHAT,
+      messageIds: [1],
+    });
+    assert.strictEqual(skipped.scheduled, false);
+    assert.strictEqual(getPendingGameMessageCleanupCount(), 0);
+    const body = "done";
+    assert.strictEqual(hasGameCleanupFooter(body), false);
+    const withFooter = withGameCleanupFooter(body);
+    assert.ok(hasGameCleanupFooter(withFooter));
+  });
+
+  await runTest("shared-3-4. timer fires and deleteMessage uses snapshot ids", async () => {
+    const timers = createFakeTimers();
+    const deleted = [];
+    scheduleGameMessageCleanup({
+      gameType: GAME_TYPE.MOM,
+      sessionId: "moon-1",
+      chatId: COMMUNITY_CHAT,
+      messageIds: [88],
+      delayMs: GAME_MESSAGE_CLEANUP_DELAY_MS,
+      setTimeoutFn: timers.setTimeout,
+      clearTimeoutFn: timers.clearTimeout,
+      deleteMessageFn: async (chatId, messageId) => {
+        deleted.push({ chatId, messageId });
+      },
+    });
+    timers.advance(GAME_MESSAGE_CLEANUP_DELAY_MS - 1);
+    await flushMicrotasks();
+    assert.deepStrictEqual(deleted, []);
+    timers.advance(1);
+    await flushMicrotasks();
+    assert.deepStrictEqual(deleted, [{ chatId: COMMUNITY_CHAT, messageId: 88 }]);
+    assert.strictEqual(getPendingGameMessageCleanupCount(), 0);
+  });
+
+  await runTest("shared-5-6. destroyed session does not block delete", async () => {
+    const timers = createFakeTimers();
+    const deleted = [];
+    const sessions = new Map();
+    sessions.set("old", { status: "finished", messageId: 9 });
+    scheduleGameMessageCleanup({
+      gameType: GAME_TYPE.HOL,
+      sessionId: "old",
+      chatId: COMMUNITY_CHAT,
+      messageIds: [9],
+      delayMs: 5,
+      setTimeoutFn: timers.setTimeout,
+      clearTimeoutFn: timers.clearTimeout,
+      deleteMessageFn: async (_c, messageId) => {
+        deleted.push(messageId);
+      },
+      shouldDeleteFn: () => {
+        const live = sessions.get("old");
+        if (!live) {
+          return true;
+        }
+        if (live.status === "active" && String(live.messageId) === "9") {
+          return false;
+        }
+        return true;
+      },
+    });
+    sessions.delete("old");
+    timers.advance(5);
+    await flushMicrotasks();
+    assert.deepStrictEqual(deleted, [9]);
+    assert.strictEqual(getPendingGameMessageCleanupCount(), 0);
+  });
+
+  await runTest("shared-7-9. correct terminal deletes; reused/new message protected", async () => {
+    const timers = createFakeTimers();
+    const deleted = [];
+    const live = { status: "active", messageId: 900, sessionId: "new" };
+    scheduleGameMessageCleanup({
+      gameType: GAME_TYPE.RPS,
+      sessionId: "old-round",
+      chatId: COMMUNITY_CHAT,
+      messageIds: [900],
+      generation: "1",
+      delayMs: 8,
+      setTimeoutFn: timers.setTimeout,
+      clearTimeoutFn: timers.clearTimeout,
+      deleteMessageFn: async (_c, messageId) => {
+        deleted.push(messageId);
+      },
+      shouldDeleteFn: ({ messageIds }) => {
+        if (live.status === "active" && String(live.messageId) === String(messageIds[0])) {
+          return false;
+        }
+        return true;
+      },
+    });
+    timers.advance(8);
+    await flushMicrotasks();
+    assert.deepStrictEqual(deleted, []);
+    assert.strictEqual(getPendingGameMessageCleanupCount(), 0);
+
+    const deleted2 = [];
+    scheduleGameMessageCleanup({
+      gameType: GAME_TYPE.RPS,
+      sessionId: "old-round-2",
+      chatId: COMMUNITY_CHAT,
+      messageIds: [901],
+      delayMs: 8,
+      setTimeoutFn: timers.setTimeout,
+      clearTimeoutFn: timers.clearTimeout,
+      deleteMessageFn: async (_c, messageId) => {
+        deleted2.push(messageId);
+      },
+      shouldDeleteFn: ({ messageIds }) => {
+        if (String(live.messageId) === String(messageIds[0])) {
+          return false;
+        }
+        return true;
+      },
+    });
+    timers.advance(8);
+    await flushMicrotasks();
+    assert.deepStrictEqual(deleted2, [901]);
+  });
+
+  await runTest("shared-10-12. success and already-gone clear; permanent does not retry forever", async () => {
+    const timers = createFakeTimers();
+    scheduleGameMessageCleanup({
+      gameType: GAME_TYPE.TRIVIA,
+      sessionId: "ok-1",
+      chatId: COMMUNITY_CHAT,
+      messageIds: [1],
+      delayMs: 2,
+      setTimeoutFn: timers.setTimeout,
+      clearTimeoutFn: timers.clearTimeout,
+      deleteMessageFn: async () => {},
+    });
+    timers.advance(2);
+    await flushMicrotasks();
+    assert.strictEqual(getPendingGameMessageCleanupCount(), 0);
+
+    const gone = new Error("Bad Request: message to delete not found");
+    gone.description = "Bad Request: message to delete not found";
+    scheduleGameMessageCleanup({
+      gameType: GAME_TYPE.TRIVIA,
+      sessionId: "gone-1",
+      chatId: COMMUNITY_CHAT,
+      messageIds: [2],
+      delayMs: 2,
+      setTimeoutFn: timers.setTimeout,
+      clearTimeoutFn: timers.clearTimeout,
+      deleteMessageFn: async () => {
+        throw gone;
+      },
+    });
+    timers.advance(2);
+    await flushMicrotasks();
+    assert.strictEqual(getPendingGameMessageCleanupCount(), 0);
+
+    let calls = 0;
+    scheduleGameMessageCleanup({
+      gameType: GAME_TYPE.TRIVIA,
+      sessionId: "perm-1",
+      chatId: COMMUNITY_CHAT,
+      messageIds: [3],
+      delayMs: 2,
+      setTimeoutFn: timers.setTimeout,
+      clearTimeoutFn: timers.clearTimeout,
+      deleteMessageFn: async () => {
+        calls += 1;
+        throw new Error("Bad Request: chat not found");
+      },
+      logErrorFn: () => {},
+    });
+    timers.advance(2);
+    await flushMicrotasks();
+    timers.advance(GAME_CLEANUP_DEFAULT_RETRY_MS);
+    await flushMicrotasks();
+    timers.advance(GAME_CLEANUP_DEFAULT_RETRY_MS);
+    await flushMicrotasks();
+    assert.strictEqual(calls, 1);
+    assert.strictEqual(getPendingGameMessageCleanupCount(), 0);
+  });
+
+  await runTest("shared-13-14. transient retries are bounded; 429 retry_after honored", async () => {
+    const timers = createFakeTimers();
+    let calls = 0;
+    scheduleGameMessageCleanup({
+      gameType: GAME_TYPE.HOL,
+      sessionId: "net-1",
+      chatId: COMMUNITY_CHAT,
+      messageIds: [4],
+      delayMs: 2,
+      setTimeoutFn: timers.setTimeout,
+      clearTimeoutFn: timers.clearTimeout,
+      deleteMessageFn: async () => {
+        calls += 1;
+        throw new Error("ETIMEDOUT");
+      },
+      logErrorFn: () => {},
+    });
+    timers.advance(2);
+    await flushMicrotasks();
+    assert.strictEqual(calls, 1);
+    assert.strictEqual(getPendingGameMessageCleanupCount(), 1);
+    timers.advance(GAME_CLEANUP_DEFAULT_RETRY_MS);
+    await flushMicrotasks();
+    assert.strictEqual(calls, 2);
+    timers.advance(GAME_CLEANUP_DEFAULT_RETRY_MS);
+    await flushMicrotasks();
+    assert.strictEqual(calls, GAME_CLEANUP_MAX_ATTEMPTS);
+    assert.strictEqual(getPendingGameMessageCleanupCount(), 0);
+
+    let retryCalls = 0;
+    const tooMany = new Error("Too Many Requests: retry after 3");
+    tooMany.error_code = 429;
+    tooMany.parameters = { retry_after: 3 };
+    scheduleGameMessageCleanup({
+      gameType: GAME_TYPE.HOL,
+      sessionId: "429-1",
+      chatId: COMMUNITY_CHAT,
+      messageIds: [5],
+      delayMs: 2,
+      setTimeoutFn: timers.setTimeout,
+      clearTimeoutFn: timers.clearTimeout,
+      deleteMessageFn: async () => {
+        retryCalls += 1;
+        throw tooMany;
+      },
+      logErrorFn: () => {},
+    });
+    timers.advance(2);
+    await flushMicrotasks();
+    assert.strictEqual(retryCalls, 1);
+    timers.advance(2999);
+    await flushMicrotasks();
+    assert.strictEqual(retryCalls, 1);
+    timers.advance(1);
+    await flushMicrotasks();
+    assert.strictEqual(retryCalls, 2);
+  });
+
+  await runTest("shared-15. shutdown/clearAll clears local timers", async () => {
+    const timers = createFakeTimers();
+    const deleted = [];
+    scheduleGameMessageCleanup({
+      gameType: GAME_TYPE.TRIVIA,
+      sessionId: "shut-1",
+      chatId: COMMUNITY_CHAT,
+      messageIds: [6],
+      delayMs: 50,
+      setTimeoutFn: timers.setTimeout,
+      clearTimeoutFn: timers.clearTimeout,
+      deleteMessageFn: async (_c, messageId) => {
+        deleted.push(messageId);
+      },
+    });
+    assert.strictEqual(getPendingGameMessageCleanupCount(), 1);
+    clearAllGameMessageCleanups();
+    assert.strictEqual(getPendingGameMessageCleanupCount(), 0);
+    timers.advance(50);
+    await flushMicrotasks();
+    assert.deepStrictEqual(deleted, []);
+  });
+
+  await runTest("shared-16. stale cleanup cannot delete a replay/current game", async () => {
+    const timers = createFakeTimers();
+    const deleted = [];
+    const replay = { status: "active", messageId: 5001, round: 2 };
+    scheduleGameMessageCleanup({
+      gameType: GAME_TYPE.RPS,
+      sessionId: "rps-1",
+      chatId: COMMUNITY_CHAT,
+      messageIds: [5001],
+      generation: "1",
+      delayMs: 10,
+      setTimeoutFn: timers.setTimeout,
+      clearTimeoutFn: timers.clearTimeout,
+      deleteMessageFn: async (_c, messageId) => {
+        deleted.push(messageId);
+      },
+      shouldDeleteFn: ({ generation, messageIds }) => {
+        if (replay.status === "active" && String(replay.messageId) === String(messageIds[0])) {
+          return false;
+        }
+        if (String(replay.round) !== String(generation)) {
+          return false;
+        }
+        return true;
+      },
+    });
+    timers.advance(10);
+    await flushMicrotasks();
+    assert.deepStrictEqual(deleted, []);
   });
 
   restoreEnv();

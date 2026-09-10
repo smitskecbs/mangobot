@@ -34,6 +34,7 @@ const {
   scheduleGameMessageCleanup,
   clearGameMessageCleanup,
   handleStaleGameCallback,
+  withGameCleanupFooter,
 } = require("../utils/gameCleanup");
 
 function pvpCleanupGameType(runtime, session) {
@@ -131,17 +132,17 @@ function pvpShouldDeleteMessage(runtime, sessionId, messageId, generation) {
     if (!live) {
       return true;
     }
+    const sameMessage =
+      messageId == null ||
+      live.messageId == null ||
+      String(live.messageId) === String(messageId);
+    if (!sameMessage) {
+      return true;
+    }
     if (live.status === "waiting" || live.status === "active") {
       return false;
     }
     if (isRpsReplayableIntermission(live)) {
-      return false;
-    }
-    if (
-      messageId != null &&
-      live.messageId != null &&
-      String(live.messageId) !== String(messageId)
-    ) {
       return false;
     }
     if (
@@ -169,10 +170,10 @@ function sessionHasTurnGeneration(session) {
 
 function schedulePvpSessionCleanup(session, telegram, gameType, runtime) {
   if (!shouldSchedulePvpMessageCleanup(runtime, session)) {
-    return;
+    return false;
   }
-  if (session.messageId == null || session.chatId == null) {
-    return;
+  if (!session || session.messageId == null || session.chatId == null) {
+    return false;
   }
   const generation = pvpCleanupGeneration(session);
   log(
@@ -180,7 +181,7 @@ function schedulePvpSessionCleanup(session, telegram, gameType, runtime) {
       session.id || "-"
     } status=${session.status || "-"} endReason=${session.endReason || "-"}`
   );
-  scheduleGameMessageCleanup({
+  const scheduled = scheduleGameMessageCleanup({
     gameType,
     sessionId: session.id,
     chatId: session.chatId,
@@ -194,6 +195,17 @@ function schedulePvpSessionCleanup(session, telegram, gameType, runtime) {
       generation
     ),
   });
+  return scheduled.scheduled === true;
+}
+
+function withScheduledCleanupFooter(rendered, scheduled) {
+  if (!scheduled || !rendered || typeof rendered.text !== "string") {
+    return rendered;
+  }
+  return {
+    ...rendered,
+    text: withGameCleanupFooter(rendered.text),
+  };
 }
 
 function pvpGameType(parsed) {
@@ -783,7 +795,6 @@ async function handlePvpCallbackBody(ctx, options = {}) {
       return;
     }
     await cbAnswer(ctx);
-    await applyRenderedEdit(ctx, runtime, parsed, result.rendered);
     const sessionForCleanup = result.session
       ? {
           ...result.session,
@@ -793,11 +804,17 @@ async function handlePvpCallbackBody(ctx, options = {}) {
               : callbackMessageIdSafe(ctx),
         }
       : result.session;
-    schedulePvpSessionCleanup(
+    const scheduled = schedulePvpSessionCleanup(
       sessionForCleanup,
       ctx.telegram,
       pvpGameType(parsed),
       runtime
+    );
+    await applyRenderedEdit(
+      ctx,
+      runtime,
+      parsed,
+      withScheduledCleanupFooter(result.rendered, scheduled)
     );
     return;
   }

@@ -18,7 +18,7 @@ const {
   FINAL_STATE,
   GAME_ENDED_TOAST,
   emptyGameKeyboardExtra,
-  withGameCleanupFooter,
+  withCleanupFooterIfScheduled,
   logGameCleanup,
   scheduleGameMessageCleanup,
   clearGameMessageCleanup,
@@ -179,24 +179,24 @@ Next: ${next}
 }
 
 function buildFinishedText(session) {
-  return withGameCleanupFooter(`📈 Higher or Lower
+  return `📈 Higher or Lower
 
 ❌ Finished.
-🔥 Final streak: ${session.streak}`);
+🔥 Final streak: ${session.streak}`;
 }
 
 function buildExpiredText(session) {
-  return withGameCleanupFooter(`📈 Higher or Lower cancelled
+  return `📈 Higher or Lower cancelled
 
 This game has ended.
 
-🔥 Final streak: ${session && session.streak != null ? session.streak : 0}`);
+🔥 Final streak: ${session && session.streak != null ? session.streak : 0}`;
 }
 
 function renderMessage(session) {
   if (!session) {
     return {
-      text: withGameCleanupFooter("📈 Higher or Lower\n\nThis game has ended."),
+      text: "📈 Higher or Lower\n\nThis game has ended.",
       extra: emptyGameKeyboardExtra(),
     };
   }
@@ -232,11 +232,12 @@ function renderMessage(session) {
       extra: resultKeyboard(session.id, session.round),
     };
   }
+  const body =
+    session.status === STATUS.FINISHED
+      ? buildFinishedText(session)
+      : buildExpiredText(session);
   return {
-    text:
-      session.status === STATUS.FINISHED
-        ? buildFinishedText(session)
-        : buildExpiredText(session),
+    text: withCleanupFooterIfScheduled(body, GAME_TYPE.HOL, session.id),
     extra: emptyGameKeyboardExtra(),
   };
 }
@@ -270,7 +271,7 @@ function createHigherOrLowerService(options = {}) {
     typeof options.cleanupDelayMs === "number" && options.cleanupDelayMs >= 0
       ? options.cleanupDelayMs
       : undefined;
-  const deleteMessageFn =
+  let deleteMessageFn =
     typeof options.deleteMessageFn === "function"
       ? options.deleteMessageFn
       : null;
@@ -360,14 +361,24 @@ function createHigherOrLowerService(options = {}) {
     }
   }
 
+  function setDeleteMessageHandler(fn) {
+    deleteMessageFn = typeof fn === "function" ? fn : null;
+  }
+
   function shouldDeleteMessage(sessionId, messageId, chatId) {
     return () => {
       const live = sessionsById.get(String(sessionId));
-      if (live && (live.status === STATUS.ACTIVE || sessionHasPlayAgain(live))) {
-        return false;
-      }
-      if (live && live.messageId != null && String(live.messageId) !== String(messageId)) {
-        return false;
+      if (live) {
+        const sameMessage =
+          messageId == null ||
+          live.messageId == null ||
+          String(live.messageId) === String(messageId);
+        if (
+          sameMessage &&
+          (live.status === STATUS.ACTIVE || sessionHasPlayAgain(live))
+        ) {
+          return false;
+        }
       }
       const owner = messageOwner.get(
         messageKey(chatId != null ? chatId : live && live.chatId, messageId)
@@ -750,6 +761,7 @@ function createHigherOrLowerService(options = {}) {
     expireSession,
     renderMessage,
     setRenderHandler,
+    setDeleteMessageHandler,
     isOpen,
     hasActiveUser,
     clearAllTimers,
